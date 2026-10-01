@@ -36,7 +36,10 @@ if ($MigrationPath -like '*lili_supervision_policy.sql' -or $MigrationPath -like
         if ($projectionStart -lt 0) { throw 'Latest canonical projection definitions are missing.' }
         $projectionSql = $projectionSource.Substring($projectionStart)
     }
-    $sql = "begin;`n$projectionSql`n$baseSql`n$viewSql`n$policySql`n$sql`ncommit;"
+    $coachingSql = if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
+        Get-Content -Raw -LiteralPath 'supabase/coaching_lifecycle.sql'
+    } else { '' }
+    $sql = "begin;`n$projectionSql`n$baseSql`n$viewSql`n$policySql`n$sql`n$coachingSql`ncommit;"
 }
 if ([string]::IsNullOrWhiteSpace($sql)) {
     throw "Discipline migration is empty."
@@ -89,4 +92,8 @@ if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
     $deltaBody = @{ query = $deltaSql } | ConvertTo-Json -Compress
     $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $deltaBody
     Write-Host 'Discipline delta ACK, bounded commit cursor, no config polling, earlier-device correction, final summaries, legacy IDs and owner isolation verified; fixtures rolled back.'
+    $coachingTest = Get-Content -Raw -LiteralPath 'scripts/verify_coaching_lifecycle.sql'
+    $coachingBody = @{ query = $coachingTest } | ConvertTo-Json -Compress
+    $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $coachingBody
+    Write-Host 'Bilateral coaching explanation/review/makeup/closure, strict-only permissions, CAS, retries, union focus, incremental cursor and revocation verified; fixtures rolled back.'
 }

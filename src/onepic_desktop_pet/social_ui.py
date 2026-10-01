@@ -1,4 +1,4 @@
-"""勾选配置使用统一矢量绘制。
+"""正式回应卡与执行牌复用同一状态投影，勾选配置使用统一矢量绘制。
 搭子自习室界面、后台同步线程和双六毛本地串门窗口。
 
 首页搭子卡片通往只展示 TA 与双方关系的搭子详情，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的，等宽专注导航与独立免战日保持账号边界。
@@ -4427,9 +4427,15 @@ class SocialHubDialog(QDialog):
             self.rest_day_button.setText("🏳️ 今日高挂免战牌 · 暂停训导" if exempt else "🏳️ 高挂免战牌 · 今日休息")
         if exempt:
             self.focus_status.setText("🏳️ 高挂免战牌 · 今日休息")
+        self.coaching_panel.refresh()
+        if self.focus_status.isVisible():
+            engine.store.mark_coach_messages_read(datetime.now().astimezone().date())
         messages = engine.store.coach_messages_for_day(datetime.now().astimezone().date())
         pending = engine.store.due_explanations()
-        self.focus_coach_card.setVisible(bool(messages or pending))
+        formal = {str(row.get(key)) for row in engine.store.coaching_cases
+                  for key in ("source_event_id", "local_source_event_id")}
+        pending = [row for row in pending if str(row.get("id")) not in formal]
+        self.focus_coach_card.setVisible(bool(messages or pending) and not engine.store.coaching_cases)
         self.focus_coach_summary.setText(
             (f"待说明 {len(pending)} 项 · 可在纪律记录中处理。\n" if pending else "")
             + "\n".join(str(row.get("occurred_at", ""))[11:16] + " " + str(row.get("title", ""))
@@ -4475,7 +4481,17 @@ class SocialHubDialog(QDialog):
         self.focus_today.setObjectName("muted")
         focus_layout.addWidget(self.focus_status)
         focus_layout.addWidget(self.focus_clock)
-        focus_layout.addWidget(self.focus_today)
+        from .coaching_ui import CoachingPanel
+        from .buddy_identity import buddy_name
+        self.coaching_panel = CoachingPanel(self._focus_engine, self._focus_progress, self.study_rpc,
+            lambda identifier: buddy_name(next((row for row in self.data.get("buddies", [])
+                if _buddy_identifier(row) == identifier), {"user_id": identifier})),
+            lambda: self.open_focus_section(3), self)
+        layout.addWidget(self.coaching_panel)
+        today_row = QHBoxLayout()
+        today_row.addWidget(self.coaching_panel.badge)
+        today_row.addWidget(self.focus_today, 1)
+        focus_layout.addLayout(today_row)
         self.focus_goal_labels = {}
         self.focus_goal_bars = {}
         for key, title in (("today", "今日"), ("week", "本周")):

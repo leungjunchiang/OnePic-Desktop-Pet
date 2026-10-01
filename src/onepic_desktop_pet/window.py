@@ -1,4 +1,4 @@
-"""勾选配置统一绘制，训导首次同步静默，运行期即时消息单窗合并并完整清理。
+"""双向训导复用低频增量同步和专注事实；被动头顶卡、进度牌与启动静默。
 
 本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
@@ -8073,6 +8073,8 @@ class PetWindow(QWidget):
         try:
             engine = self._ensure_discipline_engine()
             self._sync_discipline_state()
+            self._advance_coaching_cases(engine)
+            self._refresh_desktop_coaching(engine)
             if not engine.enabled:
                 return
             today, week = self._discipline_progress_seconds()
@@ -8115,7 +8117,8 @@ class PetWindow(QWidget):
         self._discipline_config_read_pending = False
         self._discipline_sync_inflight = True
         thread = SocialBuddyRpcThread(
-            self.social_client, "lili_discipline_sync_delta", payload, self,
+            self.social_client, "lili_coaching_sync_delta",
+            {**payload, "p_after_case_revision": store.coaching_cursor}, self,
         )
         thread.sync_payload = payload
         self._discipline_sync_thread = thread
@@ -8139,8 +8142,9 @@ class PetWindow(QWidget):
         try:
             engine = self._ensure_discipline_engine()
             engine.store.merge_remote(result)
+            engine.store.merge_coaching(result)
             engine.store.acknowledge_sync(getattr(thread, "sync_payload", {}), result)
-            self._discipline_sync_has_more = bool(isinstance(result, dict) and result.get("has_more"))
+            self._discipline_sync_has_more = bool(isinstance(result, dict) and (result.get("has_more") or result.get("has_more_cases")))
             if self._discipline_sync_has_more:
                 self._discipline_sync_last_attempt_at = 0.0
             accepted = engine.apply_supervision(result.get("supervision") if isinstance(result, dict) else None)
@@ -8162,7 +8166,7 @@ class PetWindow(QWidget):
                     engine.store.seen_nudges.add(identifier)
                     from .buddy_identity import buddy_name
                     peer = self._buddy_display_record(str(nudge.get("supervisor_id") or ""))
-                    action = {"start": "提醒你开工", "rest": "提醒你休息有点久了", "finish": "提醒你准备下班", "progress": "提醒你看看今日进度", "cheer": "给你加油", "take_break": "提醒你休息一下", "return": "喊你回来专注", "rest_more": "让你再歇会儿", "explain": "提醒你处理待说明事项"}.get(nudge.get("kind"), "给你一个轻提醒")
+                    action = {"start": "提醒你开工", "rest": "提醒你休息有点久了", "finish": "提醒你准备下班", "progress": "提醒你看看今日进度", "cheer": "给你加油", "take_break": "提醒你休息一下", "return": "喊你回来专注", "rest_more": "让你再歇会儿", "explain": "提醒你处理待说明事项", "praise": "夸了夸你", "flower": "送你一朵小红花", "approve_finish": "批准你今天下班", "knock": "敲了敲你的桌子", "ask": "想问问你怎么回事"}.get(nudge.get("kind"), "给你一个轻提醒")
                     title = buddy_name(peer) + action
                     detail = str((nudge.get("message") or "") if "message" in nudge else
                                  "来自你允许的搭子；是否开工或下班由你决定。").strip()
@@ -8177,16 +8181,111 @@ class PetWindow(QWidget):
                     # IDs. Timestamp + first-response fence keeps them silent.
                     if (accepted and not seen and baseline is not None and created is not None
                             and baseline < created <= observed_at and not self._close_in_progress
-                            and not engine.store.is_exempt(as_beijing().date())):
+                            and detail and title and not engine.store.is_exempt(as_beijing().date())):
                         from .discipline import DisciplineNotice
-                        self._show_discipline_notice(DisciplineNotice("buddy_nudge", title, detail, "info", identifier))
+                        if nudge.get("kind") in {"cheer", "praise", "flower", "approve_finish", "knock", "ask", "rest_more", "return", "start", "finish", "progress", "take_break", "rest"}:
+                            if not detect_quiet_mode().blocked:
+                                self.show_speech(title, duration_ms=2600)
+                        else:
+                            self._show_discipline_notice(DisciplineNotice("buddy_nudge", title, detail, "info", identifier))
                 engine.store._save()
+            self._refresh_desktop_coaching(engine)
             if self._social_dialog is not None and self._social_dialog.isVisible():
                 self._social_dialog._refresh_focus_goals()
             if self._discipline_dialog is not None and self._discipline_dialog.isVisible():
                 self._discipline_dialog._render_summaries()
         except Exception:
             LOGGER.exception("discipline cloud state merge failed")
+
+    def _advance_coaching_cases(self, engine):
+        """只在达标时提交完成，先封存专注事实；服务端再次按区间并集验证。"""
+        from .coaching import remaining_seconds, action_id
+        if (self._close_in_progress or engine._remote_mode != "officer"
+                or time.monotonic() >= engine._remote_until):
+            return
+        active = getattr(self, "_coaching_completion_inflight", set())
+        self._coaching_completion_inflight = active
+        for row in engine.store.coaching_cases:
+            if row.get("state") != "active" or row.get("paused") or row["id"] in active:
+                continue
+            if remaining_seconds(engine, row) > 0:
+                continue
+            sealed = getattr(self, "_coaching_sealed_versions", set())
+            self._coaching_sealed_versions = sealed
+            version = (row["id"], row["revision"])
+            if self.work_timer.is_running and version not in sealed:
+                self._record_focus_segment(self.work_timer.session_seconds(), completed=False,
+                    session_id=self.work_timer.focus_session_id,
+                    started_at=self.work_timer.current_segment_started_at())
+                sealed.add(version)
+            self._social_focus_segment_flush_due = True
+            self._schedule_social_tick(immediate=True)
+            identifier = row["id"]; active.add(identifier)
+            account = engine.store.account_id
+            def done(payload, expected=account):
+                if expected == self._ensure_discipline_engine().store.account_id:
+                    self._ensure_discipline_engine().store.merge_coaching(payload)
+                    if self._social_dialog is not None and self._social_dialog.isVisible():
+                        self._social_dialog._refresh_focus_goals()
+                    self._refresh_desktop_coaching(self._ensure_discipline_engine())
+            self._discipline_rpc("lili_coaching_case_action", {
+                "p_owner_id": account, "p_case_id": identifier, "p_expected_revision": row["revision"],
+                "p_action": "complete", "p_action_id": action_id(identifier, row["revision"], "complete")},
+                done, lambda error: LOGGER.info("coaching completion pending: %s", str(error)[:180]),
+                finally_callback=lambda key=identifier: active.discard(key))
+
+    def _refresh_desktop_coaching(self, engine=None):
+        """一张头顶卡和一个进度牌；不激活六毛，不创建桌面 Toast。"""
+        from .coaching import projection, case_detail
+        from .coaching_ui import DesktopCoachingSurface
+        from .buddy_identity import buddy_name
+        engine = engine or self._ensure_discipline_engine()
+        current_states = {row["id"]: row.get("state") for row in engine.store.coaching_cases}
+        previous_states = getattr(self, "_desktop_case_states", None)
+        if previous_states is not None:
+            closed = [row for row in engine.store.coaching_cases if row.get("state") in {"completed", "forgiven"}
+                      and previous_states.get(row["id"]) not in {None, "completed", "forgiven"}]
+            if closed:
+                self._coaching_success_text = "✓ 已放过" if closed[-1]["state"] == "forgiven" else "✓ 事项已结案"
+                self._coaching_success_until = time.monotonic() + 1.8
+                QTimer.singleShot(1900, self, self._refresh_desktop_coaching)
+        self._desktop_case_states = current_states
+        surfaces = getattr(self, "_coaching_surfaces", {})
+        self._coaching_surfaces = surfaces
+        hidden = (self._close_in_progress or not self.isVisible() or getattr(self, "_manually_hidden", False)
+                  or getattr(self, "_fullscreen_hidden", False) or detect_quiet_mode().blocked
+                  or (self._social_dialog is not None and self._social_dialog.isVisible()))
+        view = projection(engine, self._discipline_progress_seconds()[0]) if not hidden else {"card": None, "badge": None}
+        if not hidden and time.monotonic() < getattr(self, "_coaching_success_until", 0):
+            view["badge"] = {"badge_text": self._coaching_success_text}
+        for key in ("card", "badge"):
+            row = view[key]
+            surface = surfaces.get(key)
+            if row is None:
+                if surface is not None: surface.hide()
+                continue
+            if surface is None:
+                surface = DesktopCoachingSurface(self, self._open_coaching_badge if key=="badge" else self._open_discipline_notice, compact=key=="badge")
+                surfaces[key] = surface
+            name = buddy_name(self._buddy_display_record(str(row.get("supervisor_id") or "")))
+            surface.label.setText(case_detail(row, name) if key=="card" else row["badge_text"])
+            if key == "card":
+                count = view.get("card_count", 1)
+                surface.open_button.setText("写说明 / 接受补时" if row.get("required_seconds") else "重新说明" if row.get("state")=="rejected" else "写说明")
+                if count>1: surface.label.setText(surface.label.text()+f"\n还有 {count-1} 项")
+            surface.adjustSize()
+            x = self.x() + (self.width()-surface.width())//2 if key=="card" else self.work_duration_bubble.x()-surface.width()-6
+            y = self.y()-surface.height()-8 if key=="card" else self.work_duration_bubble.y()
+            area = self._screen_geometry()
+            if area is not None:
+                x = min(max(x, area.left()), area.right()-surface.width()+1)
+                y = min(max(y, area.top()), area.bottom()-surface.height()+1)
+            surface.move(x,y); surface.passive_show()
+
+    def _open_coaching_badge(self):
+        self._open_discipline_notice()
+        self._social_dialog.coaching_panel.refresh()
+        self._social_dialog.coaching_panel._details()
 
     def _discipline_sync_failed(self, error, account_id: str, thread) -> None:
         message = str(error)
@@ -8267,6 +8366,13 @@ class PetWindow(QWidget):
         if self._discipline_toast is not None:
             self._discipline_toast.close()
         self._discipline_toast_notices.clear()
+        for surface in getattr(self, "_coaching_surfaces", {}).values():
+            surface.close(); surface.deleteLater()
+        self._coaching_surfaces = {}
+        self._coaching_completion_inflight = set()
+        self._coaching_sealed_versions = set()
+        self._desktop_case_states = None
+        self._coaching_success_until = 0
 
     def _register_reminder_toast(self, toast) -> None:
         self._buddy_reminder_toasts.append(toast)
@@ -11330,6 +11436,11 @@ class PetWindow(QWidget):
         if needs_position:
             self._position_work_duration_bubble()
         self._duration_bubble_pet_anchor = pet_anchor if visible else None
+        if getattr(self, "_coaching_surfaces", None) and (not should_show or needs_position):
+            if not should_show:
+                for surface in self._coaching_surfaces.values(): surface.hide()
+            else:
+                self._refresh_desktop_coaching()
         # A changing clock label can cross a width boundary (mm:ss ->
         # h:mm:ss, or add the paused suffix).  Refresh the local effect's
         # visible-pill path only when visibility/geometry actually changed;

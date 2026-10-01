@@ -1,4 +1,4 @@
-"""动态计划与纪律账本；原始会话推导开工，搭子事项本地留存且不重复上传。"""
+"""动态计划与纪律账本；正式训导按服务端版本合并，原始会话推导开工与补时。"""
 
 from __future__ import annotations
 
@@ -282,6 +282,8 @@ class DisciplineStore:
         self.synced_events = dict(raw.get("synced_events") or {})
         self.synced_settings_at = str(raw.get("synced_settings_at") or "")
         self.sync_cursor = max(0, int(raw.get("sync_cursor") or 0))
+        self.coaching_cases = [dict(row) for row in raw.get("coaching_cases", []) if isinstance(row, dict)]
+        self.coaching_cursor = max(0, int(raw.get("coaching_cursor") or 0))
 
     def _save(self) -> None:
         if self.persist:
@@ -290,6 +292,8 @@ class DisciplineStore:
                 "synced_events": self.synced_events,
                 "synced_settings_at": self.synced_settings_at,
                 "sync_cursor": self.sync_cursor,
+                "coaching_cases": self.coaching_cases,
+                "coaching_cursor": self.coaching_cursor,
                 "settings": asdict(self.settings),
                 "settings_updated_at": self.settings_updated_at,
                 "events": self.events,
@@ -309,11 +313,41 @@ class DisciplineStore:
         moment = local_work_time(at)
         self.coach_messages.append({"id": identifier, "title": title[:100],
                                     "detail": detail[:1200], "occurred_at": moment.isoformat(),
-                                    "event_date": moment.date().isoformat()})
+                                    "event_date": moment.date().isoformat(), "read": False})
         self.coach_messages = self.coach_messages[-500:]
 
     def coach_messages_for_day(self, day: date) -> list[dict[str, Any]]:
         return [dict(row) for row in self.coach_messages if row.get("event_date") == day.isoformat()]
+
+    def mark_coach_messages_read(self, day):
+        changed = False
+        for row in self.coach_messages:
+            if row.get("event_date") == day.isoformat() and not row.get("read"):
+                row["read"] = True; changed = True
+        if changed: self._save()
+
+    def merge_coaching(self, payload):
+        """只有服务端确认的版本能改变事项，旧设备与晚到响应不能回滚。"""
+        if not isinstance(payload, dict):
+            return
+        rows = payload.get("coaching_cases", [])
+        if isinstance(payload.get("case"), dict):
+            rows = [payload["case"]]
+        known = {str(row.get("id")): row for row in self.coaching_cases}
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict) or str(row.get("owner_id")) != self.account_id or not row.get("id"):
+                continue
+            previous = known.get(str(row["id"]))
+            if previous is None or int(row.get("revision") or 0) >= int(previous.get("revision") or 0):
+                known[str(row["id"])] = deepcopy(row)
+        self.coaching_cases = list(known.values())
+        for case in self.coaching_cases:
+            source = next((event for event in self.events if str(event.get("id")) == str(case.get("source_event_id"))
+                           or (case.get("source_rule_key") and event.get("metadata", {}).get("rule_key") == case["source_rule_key"])), None)
+            if source:
+                case["local_source_event_id"] = source["id"]
+        self.coaching_cursor = max(self.coaching_cursor, int(payload.get("next_case_revision") or 0))
+        self._save()
 
     def update_settings(self, settings: DisciplineSettings | dict[str, Any]) -> None:
         self.settings = DisciplineSettings.from_dict(
@@ -480,6 +514,8 @@ class DisciplineStore:
         )
 
     def explain(self, event_id: str, reason: str, note: str = "") -> bool:
+        if any(event_id in {str(row.get("source_event_id")), str(row.get("local_source_event_id"))} for row in self.coaching_cases):
+            return False  # Formal explanations go through the bilateral RPC, never the old local editor.
         target = next((row for row in self.events if row.get("id") == event_id), None)
         if target is None:
             return False
@@ -500,7 +536,9 @@ class DisciplineStore:
 
     def due_explanations(self) -> list[dict[str, Any]]:
         pending_ids = {str(item.get("event_id")) for item in self.pending_explanations}
-        return [dict(row) for row in self.events if str(row.get("id")) in pending_ids and not self.is_exempt(str(row.get("event_date")))]
+        formal_ids = {str(row.get(key)) for row in self.coaching_cases for key in ("source_event_id", "local_source_event_id")}
+        return [dict(row) for row in self.events if str(row.get("id")) in pending_ids
+                and str(row.get("id")) not in formal_ids and not self.is_exempt(str(row.get("event_date")))]
 
     def is_exempt(self, day: date | str) -> bool:
         key = day.isoformat() if isinstance(day, date) else day
@@ -980,7 +1018,11 @@ class DisciplineEngine:
             "weekly_remaining_seconds": progress.weekly_remaining_seconds,
             "remaining_workdays": progress.remaining_workdays,
             "caught_up_today_seconds": progress.caught_up_today_seconds,
-            "unexplained_count": 0 if self.store.is_exempt(day) else sum(1 for row in display_events if row.get("requires_explanation") and not row.get("explanation")),
+            "unexplained_count": 0 if self.store.is_exempt(day) else
+                sum(1 for row in display_events if row.get("requires_explanation") and not row.get("explanation")
+                    and not any(str(row.get("id")) in {str(case.get("source_event_id")), str(case.get("local_source_event_id"))} for case in self.store.coaching_cases))
+                + sum(1 for case in self.store.coaching_cases if case.get("event_date") == day.isoformat()
+                      and case.get("state") in {"pending", "rejected"} and not case.get("paused")),
             "exempt": self.store.is_exempt(day),
             "events": display_events,
             "coach_messages": self.store.coach_messages_for_day(day),

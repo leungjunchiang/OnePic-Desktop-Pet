@@ -1,4 +1,4 @@
-"""勾选配置统一绘制，静默恢复的搭子训导事项保留在应用内。
+"""双向训导结案汇总进入纪律记录，正式说明通过今日回应卡，勾选配置统一绘制。
 专注导航的计划、训导与记录复用统一按钮反馈；统计刷新不读取授权表单；记录只呈现紧凑纪律摘要和已结算事项，分析留在工作报告。"""
 
 from __future__ import annotations
@@ -527,13 +527,19 @@ class DisciplineWorkspace(QWidget):
             lines.append(f"<p><b>{escape(str(row.get('occurred_at', ''))[11:16])}　{title}</b><br>{escape(detail)}</p>")
         coach_lines = [f"<p><b>{escape(str(row.get('occurred_at', ''))[11:16])} {escape(str(row.get('title', '')))}</b><br>{escape(str(row.get('detail', '')))}</p>"
                        for row in today["coach_messages"][-20:]]
+        from .coaching import closed_case_lines
+        closed_lines = ["<p>" + escape(line) + "</p>" for line in closed_case_lines(self.store, now_day)]
         self.today_events.setText("<h3>今日事件</h3>" + ("".join(lines) or "今天没有需要特别记录的纪律事项。")
-                                 + ("<h3>搭子训导事项</h3>" + "".join(coach_lines) if coach_lines else ""))
+                                 + ("<h3>训导结案</h3>" + "".join(closed_lines) if closed_lines else "")
+                                 + ("<h3>搭子互动</h3>" + "".join(coach_lines) if coach_lines else ""))
         previous_pending = self.today_pending.currentData()
         self.today_pending.clear()
         if not exempt:
             for row in today["events"]:
-                if row.get("requires_explanation") and not row.get("explanation"):
+                if (row.get("requires_explanation") and not row.get("explanation")
+                        and not any(str(case.get(key)) == str(row.get("id"))
+                                    for case in self.store.coaching_cases
+                                    for key in ("source_event_id", "local_source_event_id"))):
                     title, _ = self._event_description(row)
                     self.today_pending.addItem(title + " · " + str(row.get("occurred_at", ""))[11:16], row.get("id"))
         if self.today_pending.findData(previous_pending) >= 0:
@@ -567,10 +573,13 @@ class DisciplineWorkspace(QWidget):
             return  # 历史仅进入时展开；不随今日每次刷新扫描历史。
         rows = list(discipline_events(self.store.events))
         session_days = {stamp.date().isoformat() for stamp in starts.starts if stamp.date() < now_day} if starts else set()
-        signature = (tuple(repr(row) for row in rows), tuple(sorted(self.store.rest_days)), starts)
+        signature = (tuple(repr(row) for row in rows), tuple(sorted(self.store.rest_days)), starts,
+                     tuple((row.get("id"), row.get("revision")) for row in self.store.coaching_cases))
         if signature == getattr(self, "_ledger_signature", None): return
         self._ledger_signature = signature
         settled_days = sorted(session_days | {str(row.get("event_date")) for row in rows if row.get("event_type") in {"daily_report", "finish_work", "rest_day"} or str(row.get("event_date")) < now_day.isoformat()}, reverse=True)
+        settled_days = sorted(set(settled_days) | {str(row.get("event_date")) for row in self.store.coaching_cases
+                                                 if row.get("state") in {"completed", "forgiven"}}, reverse=True)
         history_totals = {}
         owner = getattr(self.engine_provider, "__self__", None)
         owner = getattr(getattr(owner, "_discipline_engine_provider", None), "__self__", owner)
@@ -621,6 +630,8 @@ class DisciplineWorkspace(QWidget):
             if row.get("requires_explanation") and not row.get("explanation") and not self.store.is_exempt(day):
                 self.history_events.addItem(title + " · " + str(row.get("occurred_at", ""))[11:16], row.get("id"))
         baseline = "缺少历史计划基准；不按当前计划重新计算迟到。" if not summary.get("historical_plan_known", True) else "计划开工 " + summary["planned_start"]
+        from .coaching import closed_case_lines
+        lines.extend("<p>" + escape(line) + "</p>" for line in closed_case_lines(self.store, day))
         self.history_detail.setText(f"<h3>{day:%m/%d} 纪律记录</h3>" + escape(baseline) + "".join(lines))
         self.history_events.setVisible(self.history_events.count() > 0)
         self.explain_button.setEnabled(self.history_events.count() > 0)
@@ -629,6 +640,10 @@ class DisciplineWorkspace(QWidget):
         self._explain_event(str(self.history_events.currentData() or ""))
 
     def _explain_event(self, event_id):
+        if any(str(row.get(key)) == event_id for row in self.store.coaching_cases
+               for key in ("source_event_id", "local_source_event_id")):
+            self.history_detail.setText("这是一条搭子正式训导事项，请到专注 → 今日回应；说明会交给搭子审核。")
+            return
         if self.engine_provider is not None and self.engine_provider().store is not self.store:
             self.refresh()
             return

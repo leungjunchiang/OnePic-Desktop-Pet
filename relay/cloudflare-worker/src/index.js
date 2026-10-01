@@ -1,5 +1,5 @@
 const RPC_ALLOWLIST = new Set([
-  "lili_discipline_sync", "lili_buddy_study_overview", "lili_discipline_supervisor_report", "lili_mark_discipline_report_read", "lili_supervision_snapshot", "lili_set_supervision_policy", "lili_invite_supervisor", "lili_start_supervision", "lili_supervision_nudge", "lili_set_rest_day", "lili_pause_peer_supervision",
+  "lili_coaching_sync_delta", "lili_coaching_case_action", "lili_discipline_sync_delta", "lili_discipline_sync", "lili_buddy_study_overview", "lili_discipline_supervisor_report", "lili_mark_discipline_report_read", "lili_supervision_snapshot", "lili_set_supervision_policy", "lili_invite_supervisor", "lili_start_supervision", "lili_supervision_nudge", "lili_set_rest_day", "lili_pause_peer_supervision",
   "lili_add_buddy_by_code",
   "lili_lookup_buddy_by_code",
   "lili_buddy_requests",

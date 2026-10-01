@@ -3,7 +3,7 @@
 alter table public.lili_supervision_sessions add column if not exists paused_by_owner boolean not null default false;
 alter table public.lili_supervision_nudges drop constraint if exists lili_supervision_nudges_kind_check;
 alter table public.lili_supervision_nudges add constraint lili_supervision_nudges_kind_check
-  check(kind in ('start','rest','finish','progress','cheer','take_break','return','rest_more','explain'));
+  check(kind in ('start','rest','finish','progress','cheer','take_break','return','rest_more','explain','praise','flower','approve_finish','knock','ask'));
 create index if not exists lili_rest_day_lookup_idx on public.lili_discipline_events(user_id,event_date) where event_type='rest_day';
 
 create or replace function public.lili_is_rest_day(p_owner uuid,p_day date)
@@ -169,7 +169,7 @@ begin
   if state='resting' and (peer->>'view_rest')::boolean then
     rest_seconds:=greatest(0,extract(epoch from now()-updated)::int); end if;
   if not exempt and (peer->>'remind')::boolean then
-    if state='focused' then actions:=actions||'["cheer","take_break"]';
+    if state='focused' then actions:=actions||'["cheer","take_break","praise"]';
     elsif state='resting' and (peer->>'view_rest')::boolean then
       actions:=actions||'["return","rest_more"]';
       if rest_seconds>(plan->>'break_limit_minutes')::int*60 then actions:=actions||'["rest"]'; end if;
@@ -178,9 +178,11 @@ begin
     if (peer->>'view_plan')::boolean and (peer->>'view_lateness')::boolean and not started and state is distinct from 'focused'
       and plan->'workdays' ? (array['mon','tue','wed','thu','fri','sat','sun'])[extract(isodow from day)::int]
       and (now() at time zone 'Asia/Shanghai')>start_stamp+make_interval(mins=>(plan->>'late_grace_minutes')::int)
-      then actions:=actions||'["start"]'; end if;
+      then actions:=actions||'["start","knock"]'; end if;
     if target>0 and today<target and (now() at time zone 'Asia/Shanghai')>start_stamp+interval '3 hours' then actions:=actions||'["progress"]'; end if;
     if state in ('focused','resting') then actions:=actions||'["finish"]'; end if;
+    if target>0 and today>=target then actions:=actions||'["approve_finish","flower","praise"]'; end if;
+    if (peer->>'view_reports')::boolean then actions:=actions||'["ask"]'; end if;
     if (peer->>'view_reports')::boolean and exists(select 1 from public.lili_discipline_events e
       where e.user_id=p_buddy_id and e.requires_explanation and e.explanation is null
         and not public.lili_is_rest_day(p_buddy_id,e.event_date)) then actions:=actions||'["explain"]'; end if;
@@ -192,7 +194,8 @@ begin
     'active_mode',(select case when s.mode='officer' and (peer->>'officer')::boolean then 'officer' else 'normal' end
       from public.lili_supervision_sessions s where s.owner_id=p_buddy_id and s.supervisor_id=me and s.active and (peer->>'eligible')::boolean),
     'peer_active_mode',(select case when s.mode='officer' and (own->>'officer')::boolean then 'officer' else 'normal' end
-      from public.lili_supervision_sessions s where s.owner_id=me and s.supervisor_id=p_buddy_id and s.active and (own->>'eligible')::boolean));
+      from public.lili_supervision_sessions s where s.owner_id=me and s.supervisor_id=p_buddy_id and s.active and (own->>'eligible')::boolean))
+      ||public.lili_coaching_overview(p_buddy_id);
 end; $$;
 
 create or replace function public.lili_supervision_nudge(p_owner_id uuid,p_kind text)

@@ -1,4 +1,4 @@
-"""勾选配置使用统一矢量绘制。
+"""双向训导使用正式事项审核，日常互动独立，勾选配置使用统一矢量绘制。
 搭子详情仅展示 TA 的授权信息与双方监督关系，免战日暂停所有训导操作。"""
 
 from __future__ import annotations
@@ -6,13 +6,16 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
-    QTabWidget, QVBoxLayout, QWidget, QScrollArea, QMessageBox,
+    QTabWidget, QVBoxLayout, QWidget, QScrollArea, QMessageBox, QComboBox, QSpinBox, QLineEdit, QGridLayout, QFrame,
 )
 from .check_controls import AppCheckBox as QCheckBox
 
 from .buddy_identity import buddy_name, public_name
 from .discipline import DisciplineSettings, as_beijing
 from .work_timer import format_work_duration
+from .ui_feedback import ACTION_BUTTON_STYLE, begin_button_work, end_button_work, decorate_buttons
+from .coaching import case_detail, TERMINAL
+from uuid import uuid4
 
 
 class BuddyStudyDialog(QDialog):
@@ -31,6 +34,8 @@ class BuddyStudyDialog(QDialog):
         self._permissions_dirty = False
         self._overview = {}
         self._action_message = ""
+        self._action_busy = False
+        self.setStyleSheet(ACTION_BUTTON_STYLE)
         self.setWindowTitle(f"{buddy_name(buddy)} · 搭子详情")
         self.resize(570, 610)
         root = QVBoxLayout(self)
@@ -68,15 +73,48 @@ class BuddyStudyDialog(QDialog):
         self.start_officer.clicked.connect(lambda: self._start_supervision("officer"))
         self.stop_supervising = QPushButton("停止我对 TA 的监督")
         self.stop_supervising.clicked.connect(lambda: self._start_supervision("off"))
+        modes = QHBoxLayout()
         for button in (self.start_normal, self.start_officer, self.stop_supervising):
-            button.setEnabled(False); pages[3].addWidget(button)
+            button.setEnabled(False); modes.addWidget(button)
+        pages[3].addLayout(modes)
         self.nudges = {}
-        nudge_row = QHBoxLayout()
-        for kind, label in (("start", "催 TA 开工"), ("rest", "提醒休息太久"), ("progress", "提醒今日进度"), ("finish", "提醒 TA 下班"), ("cheer", "加油一下"), ("take_break", "提醒休息"), ("return", "该回来了"), ("rest_more", "再歇会儿")):
+        nudge_row = QGridLayout()
+        for index, (kind, label) in enumerate((("start", "催 TA 开工"), ("rest", "提醒休息太久"), ("progress", "提醒今日进度"), ("finish", "提醒 TA 下班"), ("cheer", "加油一下"), ("take_break", "提醒休息"), ("return", "该回来了"), ("rest_more", "再歇会儿"), ("knock", "👊 敲桌子"), ("ask", "问问怎么回事"), ("praise", "👏 夸一下"), ("flower", "🌸 发小红花"), ("approve_finish", "✅ 批准下班"))):
             button = QPushButton(label); button.setEnabled(False)
-            button.clicked.connect(lambda _checked=False, k=kind: self._action("lili_supervision_nudge", {"p_owner_id": self.buddy_id, "p_kind": k}))
-            self.nudges[kind] = button; pages[3].addWidget(button)
+            button.clicked.connect(lambda _checked=False, k=kind: self._nudge(k))
+            self.nudges[kind] = button; nudge_row.addWidget(button, index//3, index%3)
         pages[3].addLayout(nudge_row)
+        feed_row = QHBoxLayout()
+        self.feed = QPushButton("🎁 投喂")
+        from PySide6.QtWidgets import QMenu
+        from .social_ui import BUDDY_FEED_ITEMS
+        from .ui_feedback import readable_milk_tea_label
+        menu = QMenu(self.feed)
+        for kind, label in BUDDY_FEED_ITEMS:
+            action = menu.addAction(readable_milk_tea_label(label, self.font()))
+            action.triggered.connect(lambda _checked=False, event=kind: hub._send_food_interaction(self.buddy, event))
+        self.feed.setMenu(menu); feed_row.addWidget(self.feed)
+        join = QPushButton("一起专注"); join.clicked.connect(self._open_together); feed_row.addWidget(join)
+        pages[3].addLayout(feed_row)
+        self.case_box = QFrame(); case_layout = QVBoxLayout(self.case_box)
+        case_layout.addWidget(QLabel("正式训导事项 · 严格训导"))
+        self.case_selector = QComboBox(); self.case_selector.currentIndexChanged.connect(self._render_case)
+        case_layout.addWidget(self.case_selector)
+        self.case_summary = self._label(case_layout)
+        self.makeup_minutes = QSpinBox(); self.makeup_minutes.setRange(1, 1440); self.makeup_minutes.setValue(30)
+        self.makeup_minutes.setSuffix(" 分钟")
+        case_layout.addWidget(self.makeup_minutes)
+        self.review_note = QLineEdit(); self.review_note.setMaxLength(300); self.review_note.setPlaceholderText("可写一句话；退回时请说明需要补充什么")
+        case_layout.addWidget(self.review_note)
+        self.case_actions = {}
+        actions_layout = QGridLayout()
+        for index, (kind, title) in enumerate((("request_explanation", "要求说明"), ("request_makeup", "要求补时"),
+                ("forgive", "放过"), ("approve", "通过说明"), ("approve_makeup", "通过 + 补时"),
+                ("reject", "退回说明"), ("week_makeup", "本周补回"), ("tomorrow_makeup", "明天优先补"))):
+            button = QPushButton(title); button.clicked.connect(lambda _checked=False, k=kind: self._case_action(k))
+            self.case_actions[kind] = button; actions_layout.addWidget(button, index//3, index%3)
+        case_layout.addLayout(actions_layout)
+        self.case_box.hide(); pages[3].addWidget(self.case_box)
         self.progress_button = QPushButton("查看今日进度")
         self.progress_button.clicked.connect(lambda: self.tabs.setCurrentIndex(0))
         pages[3].addWidget(self.progress_button)
@@ -101,13 +139,14 @@ class BuddyStudyDialog(QDialog):
         self.message = QLabel(); self.message.setWordWrap(True)
         root.addWidget(self.message)
         self.tabs.currentChanged.connect(lambda _index: self.refresh())
-        self.timer = QTimer(self); self.timer.setInterval(10000)
+        self.timer = QTimer(self); self.timer.setInterval(60000)
         self.timer.timeout.connect(self.refresh)
         self.timer.start()
         self._render_public()
         self.relationship.setText("正在读取双方监督关系与授权范围…")
         self.peer_plan.setText("正在读取 TA 的计划授权…")
         self.records_hint.setText("纪律日报需要 TA 明确授权后才能查看。")
+        decorate_buttons(self)
     @staticmethod
     def _label(layout):
         label = QLabel(); label.setWordWrap(True)
@@ -138,6 +177,8 @@ class BuddyStudyDialog(QDialog):
                         self.progress_button.setVisible(False)
                         self.rest_hint.setText("")
                         self.explain_nudge.setVisible(False)
+                        self.case_box.hide()
+                        self.case_selector.clear()
                         for button in (self.start_normal, self.start_officer, self.stop_supervising, self.stop_peer, self.resume_peer, self.explain_nudge, *self.nudges.values()):
                             button.setEnabled(False)
                 self.message.setText(str(error)[:300])
@@ -150,7 +191,7 @@ class BuddyStudyDialog(QDialog):
             self.close()
             return
         self._render_public()
-        if self._request_pending:
+        if self._request_pending or self._action_busy:
             return
         self._request_pending = True
         self._rpc("lili_buddy_study_overview", {"p_buddy_id": self.buddy_id}, self._apply_overview)
@@ -186,6 +227,7 @@ class BuddyStudyDialog(QDialog):
         self._generation += 1
         self._request_pending = False
         self._overview = payload if isinstance(payload, dict) else {}
+        self._render_cases()
         permission = self._overview.get("peer_permission") or {}
         own_permission = self._overview.get("own_permission") or {}
         eligible = bool(permission.get("eligible"))
@@ -229,8 +271,7 @@ class BuddyStudyDialog(QDialog):
         else:
             self.peer_plan.setText("TA 暂未向你公开工作计划。\n" + self._progress_text())
         self._render_public()
-        self.explain_nudge.setVisible("explain" in actions)
-        self.explain_nudge.setEnabled("explain" in actions)
+        self.explain_nudge.setVisible(False)
         self.records.clear()
         if self._overview.get("can_read_reports"):
             self.records_hint.setText("TA 已授权分享纪律日报，仅显示允许查看的摘要。")
@@ -239,6 +280,67 @@ class BuddyStudyDialog(QDialog):
         else:
             self.records_hint.setText("TA 尚未授权分享纪律日报。授权关闭后，已有摘要会从本窗口清除。")
         self.message.setText(self._action_message)
+
+    def _render_cases(self):
+        current = (self.case_selector.currentData() or {}).get("id")
+        self.case_selector.blockSignals(True)
+        try:
+            self.case_selector.clear()
+            if not self._overview.get("exempt"):
+                for row in self._overview.get("coaching_cases", []):
+                    if row.get("state") not in TERMINAL and not row.get("paused"):
+                        self.case_selector.addItem(str(row.get("title") or "训导事项"), row)
+                for row in self._overview.get("coaching_candidates", []):
+                    self.case_selector.addItem(str(row.get("title") or "已结算事项") + " · 尚未处理", row)
+            for index in range(self.case_selector.count()):
+                if self.case_selector.itemData(index).get("id") == current:
+                    self.case_selector.setCurrentIndex(index); break
+        finally:
+            self.case_selector.blockSignals(False)
+        self._render_case()
+
+    def _render_case(self, *_args):
+        row = self.case_selector.currentData() or {}
+        permission = self._overview.get("peer_permission") or {}
+        allowed = bool(permission.get("officer") and self._overview.get("active_mode") == "officer")
+        self.case_box.setVisible(bool(row) and allowed)
+        state = row.get("state", "candidate")
+        if row:
+            self.case_summary.setText(case_detail(row, buddy_name(self.buddy)).replace("我的说明：", "TA的说明：")
+                                      if row.get("source_event_id") else str(row.get("title", "")))
+        choices = {"forgive"} if row else set()
+        if state in {"candidate", "pending", "rejected", "acknowledged"}:
+            choices |= {"request_explanation", "request_makeup"}
+            if row.get("kind") in {"focus_shortfall", "weekly_shortfall"}: choices |= {"week_makeup", "tomorrow_makeup"}
+        elif state == "explained": choices |= {"approve", "approve_makeup", "reject"}
+        for kind, button in self.case_actions.items():
+            button.setVisible(kind in choices and allowed)
+        if row.get("id") != getattr(self, "_review_draft_case", None):
+            self.review_note.clear()
+        self._review_draft_case = row.get("id")
+
+    def _case_action(self, kind):
+        row = self.case_selector.currentData() or {}
+        if not row or self._action_busy: return
+        button = self.case_actions[kind]
+        if not button.isVisible() or not button.isEnabled(): return
+        body = {"p_owner_id": self.buddy_id, "p_action": kind, "p_action_id": str(uuid4()),
+                "p_expected_revision": int(row.get("revision") or 0), "p_minutes": self.makeup_minutes.value(),
+                "p_text": self.review_note.text()}
+        if row.get("source_event_id"): body["p_case_id"] = row["id"]
+        else: body["p_source_event_id"] = row["id"]
+        self._action("lili_coaching_case_action", body, button)
+
+    def _nudge(self, kind):
+        if kind == "approve_finish" and int(self._overview.get("unhandled_case_count") or 0) > 0:
+            from PySide6.QtWidgets import QMessageBox
+            box = QMessageBox(self); box.setWindowTitle("批准下班")
+            box.setText(f"TA 还有 {self._overview['unhandled_case_count']} 项未处理训导事项。下班不会删除这些记录。")
+            proceed = box.addButton("仍然放行", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("先不放行", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is not proceed: return
+        self._action("lili_supervision_nudge", {"p_owner_id": self.buddy_id, "p_kind": kind}, self.nudges[kind])
 
     def _progress_text(self):
         from .social_ui import _buddy_focus_totals_text
@@ -281,14 +383,42 @@ class BuddyStudyDialog(QDialog):
             self._rpc("lili_mark_discipline_report_read", {"p_owner_id": self.buddy_id, "p_report_date": day},
                       lambda _payload: item.setText(item.text().replace("未阅", "已阅")))
 
-    def _action(self, name, body):
+    def _action(self, name, body, button=None):
+        if self._action_busy: return
+        button = button or self.sender()
+        if isinstance(button, QPushButton) and not begin_button_work(button, "正在处理…"): return
+        self._action_busy = True
         self._generation += 1
         self._request_pending = False
         self.message.setText("正在同步…")
+        generation = self._generation
+        account = self.account_id
+        def finish():
+            self._action_busy = False
+            if isinstance(button, QPushButton): end_button_work(button)
         def completed(payload):
-            self._action_message = str(payload.get("message") or "设置已更新。") if isinstance(payload, dict) else "设置已更新。"
+            if generation != self._generation or not self._active(): return
+            try:
+                self._action_message = str(payload.get("message") or "设置已更新。") if isinstance(payload, dict) else "设置已更新。"
+                self.message.setText(self._action_message)
+            finally: finish()
             self.refresh()
-        self._rpc(name, body, completed)
+            stamp = self._action_message
+            QTimer.singleShot(2200, self, lambda: self._clear_action_message(stamp))
+        def failed(error):
+            if generation != self._generation: return
+            try: self._action_message = str(error)[:300]; self.message.setText(self._action_message)
+            finally: finish()
+        def timeout():
+            if self._action_busy and generation == self._generation:
+                failed("处理超时，请刷新后重试。"); self._generation += 1
+        QTimer.singleShot(30000, self, timeout)
+        try: self.hub.study_rpc(name, body, completed, failed)
+        except Exception as error: failed(error)
+
+    def _clear_action_message(self, stamp):
+        if self._action_message == stamp:
+            self._action_message = ""; self.message.clear()
 
     def _start_supervision(self, mode):
         if mode == "officer" and self._overview.get("active_mode") != "officer":
@@ -322,4 +452,7 @@ class BuddyStudyDialog(QDialog):
     def hideEvent(self, event):
         self._generation += 1
         self._request_pending = False
+        self._action_busy = False
+        for button in self.findChildren(QPushButton):
+            if button.property("actionBusy"): end_button_work(button)
         super().hideEvent(event)
