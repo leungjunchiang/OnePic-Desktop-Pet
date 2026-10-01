@@ -122,9 +122,10 @@ begin
   source:=gen_random_uuid();
   result:=public.lili_coaching_sync_delta(null,null,jsonb_build_array(jsonb_build_object(
     'id',source,'event_type','long_break','event_date',day,'occurred_at',now(),
-    'requires_explanation',true,'metadata',jsonb_build_object('rule_key',source::text,'overtime_seconds',1080))),0,false,0);
+    'requires_explanation',true,'metadata',jsonb_build_object('rule_key',source::text,'overtime_seconds',1080,'duration_seconds',2880,'limit_minutes',30))),0,false,0);
   if not exists(select 1 from public.lili_coaching_cases where owner_id=owner and source_event_id=source
-    and state='pending') then raise exception 'New settled strict issue was not opened'; end if;
+    and state='pending' and title='长休超时 18 分钟' and detail='允许休息 30 分钟 · 实际休息 48 分钟')
+    then raise exception 'New settled strict issue or explanation details failed'; end if;
   perform public.lili_coaching_sync_delta(null,null,'[]',0,false,0);
   if (select count(*) from public.lili_coaching_cases where owner_id=owner and source_event_id=source)<>1
     then raise exception 'Idle hydration duplicated case'; end if;

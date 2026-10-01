@@ -107,7 +107,10 @@ begin
         title:='迟到 '||late||' 分钟'; detail:='计划 '||planned||' · 实际 '||actual;
       elsif e.event_type='long_break' then
         wanted:=greatest(0,coalesce((e.metadata->>'overtime_seconds')::int,0));
-        title:='长休超时 '||ceil(wanted/60.0)::int||' 分钟'; detail:='普通短休不记录纪律。';
+        title:='长休超时 '||ceil(wanted/60.0)::int||' 分钟';
+        detail:=case when e.metadata ? 'duration_seconds' and e.metadata ? 'limit_minutes'
+          then '允许休息 '||(e.metadata->>'limit_minutes')||' 分钟 · 实际休息 '||ceil((e.metadata->>'duration_seconds')::numeric/60)::int||' 分钟'
+          else '已结束的长休，超出计划 '||ceil(wanted/60.0)::int||' 分钟。' end;
         if wanted=0 then raise exception '没有已结算的长休超时'; end if;
       else
         wanted:=greatest(0,coalesce((e.metadata->>'gap_seconds')::int,(e.metadata->>'remaining_seconds')::int,0));
@@ -159,7 +162,7 @@ begin
       c.schedule:=case p_action when 'week_makeup' then 'week' when 'tomorrow_makeup' then 'tomorrow' else 'now' end;
     elsif p_action='approve' and c.state='explained' then c.state:='completed'; c.closed_at:=now();
     elsif p_action='approve_makeup' and c.state='explained' then
-      if p_minutes<1 then raise exception '補时至少一分钟'; end if;
+      if p_minutes<1 then raise exception '补时至少一分钟'; end if;
       c.required_seconds:=p_minutes*60; c.state:='active'; c.accepted_at:=now();
     elsif p_action='reject' and c.state='explained' then
       if length(btrim(coalesce(p_text,''))) not between 1 and 300 then raise exception '请说明需要补充什么'; end if;
@@ -249,6 +252,11 @@ begin
     and d.event_date=(now() at time zone 'Asia/Shanghai')::date
     and (result->'acknowledged_ids' ? d.id::text or (d.updated_at>=statement_timestamp() and d.metadata->>'actual_start_source'='first_real_start_after_0600'))
     and d.event_type in ('late_start','long_break','focus_shortfall','weekly_shortfall','early_finish')
+    and (case when d.event_type='late_start' then coalesce((d.metadata->>'minutes_late')::int,0)>0
+              and public.lili_actual_work_start_clock(me,d.event_date) is not null
+              and substring(d.metadata->>'planned_start' from 12 for 5) ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+              when d.event_type='long_break' then coalesce((d.metadata->>'overtime_seconds')::int,0)>0
+              else coalesce((d.metadata->>'gap_seconds')::int,(d.metadata->>'remaining_seconds')::int,(d.metadata->>'minutes_early')::int,0)>0 end)
     and not exists(select 1 from public.lili_coaching_cases c where c.owner_id=me and c.source_event_id=d.id) loop
     select s.supervisor_id into supervisor from public.lili_supervision_sessions s
       where s.owner_id=me and public.lili_can_handle_case(me,s.supervisor_id,e.event_type)
@@ -257,8 +265,12 @@ begin
       insert into public.lili_coaching_cases(owner_id,supervisor_id,source_event_id,source_rule_key,kind,event_date,title,detail,history)
         values(me,supervisor,e.id,e.dedupe_key,e.event_type,e.event_date,
           case e.event_type when 'late_start' then '迟到 '||coalesce(e.metadata->>'minutes_late','0')||' 分钟'
-            when 'long_break' then '长休超时' when 'early_finish' then '下班异常' else '已结算目标缺口' end,
-          coalesce(e.metadata->>'detail','需要说明这次计划偏差。'),
+            when 'long_break' then '长休超时 '||ceil((e.metadata->>'overtime_seconds')::numeric/60)::int||' 分钟'
+            when 'early_finish' then '下班异常' else '目标缺口 '||ceil(coalesce((e.metadata->>'gap_seconds')::numeric,(e.metadata->>'remaining_seconds')::numeric,0)/60)::int||' 分钟' end,
+          case when e.event_type='late_start' then '计划 '||substring(e.metadata->>'planned_start' from 12 for 5)||' · 实际 '||public.lili_actual_work_start_clock(me,e.event_date)
+            when e.event_type='long_break' and e.metadata ? 'duration_seconds' and e.metadata ? 'limit_minutes'
+              then '允许休息 '||(e.metadata->>'limit_minutes')||' 分钟 · 实际休息 '||ceil((e.metadata->>'duration_seconds')::numeric/60)::int||' 分钟'
+            else coalesce(e.metadata->>'detail','已结算的计划偏差；周目标保持不变。') end,
           jsonb_build_array(jsonb_build_object('action','auto_requested','actor_id',supervisor,'at',now(),'to','pending')))
         on conflict(owner_id,source_event_id) do nothing;
     end if;
