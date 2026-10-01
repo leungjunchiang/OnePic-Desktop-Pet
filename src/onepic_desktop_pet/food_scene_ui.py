@@ -1,7 +1,11 @@
-"""勾选配置使用统一矢量绘制。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+勾选配置使用统一矢量绘制。
 六毛补给站：食物是场景入口，仓库、商店和账本共用一个经济核心。"""
 
 from __future__ import annotations
+
+from .time_service import format_clock
 
 from typing import Any, Callable, Iterable
 
@@ -407,7 +411,7 @@ class FoodSceneDialog(QDialog):
         for event in self.ledger.ledger_events(self.ledger_filter.currentText()):
             amount = int(event.amount)
             sign = "+" if amount > 0 else ""
-            stamp = event.created_at[11:16] if len(event.created_at) >= 16 else ""
+            stamp = format_clock(event.created_at)
             category = CATEGORY_LABELS.get(event.category, event.category)
             self.ledger_list.addItem(f"{event.occurred_on} {stamp} · {category}\n{event.label}  {sign}{amount} 吉他拨片")
         if not self.ledger_list.count():

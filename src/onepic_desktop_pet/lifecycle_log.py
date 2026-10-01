@@ -1,4 +1,6 @@
-"""Low-overhead lifecycle tracing for native-exit investigations.
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+Low-overhead lifecycle tracing for native-exit investigations.
 
 The packaged application has no console, and a native Qt crash does not pass
 through Python's exception hooks.  This module therefore records a small,
@@ -8,6 +10,8 @@ for the desktop pet to stop.
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 import json
 import logging
@@ -64,7 +68,7 @@ def lifecycle_log(event: str, obj: object | None = None, **fields: Any) -> None:
 
     try:
         payload: dict[str, Any] = {
-            "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            "ts": now_beijing().isoformat(timespec="milliseconds"),
             "thread_id": getattr(threading, "get_native_id", threading.get_ident)(),
             "thread": threading.current_thread().name,
             "event": str(event),

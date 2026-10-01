@@ -1,4 +1,4 @@
-"""统一本地待办视图；主列表只渲染用户明确指定的事项时间。
+"""统一本地待办视图；绝对时间按北京日历转换，主列表保留用户明确指定的墙钟时间。
 
 Manual Todos remain the source of truth for tasks. Countdown and anniversary
 records are projected into this view while they are close enough to be useful;
@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Iterable
 import re
+from .time_service import parse_timestamp
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,8 @@ def display_todo_title(item: Any) -> str:
     """
 
     title = str(getattr(item, "title", "") or "").strip()
-    created = str(getattr(item, "created_at", "") or "")[:10]
+    created_stamp = parse_timestamp(getattr(item, "created_at", ""))
+    created = created_stamp.date().isoformat() if created_stamp else ""
     match = re.match(r"^(\d{4}-\d{2}-\d{2})\s*[·•]\s*", title)
     if match and created and match.group(1) == created:
         return title[match.end():].strip()
@@ -195,7 +197,8 @@ def collect_todo_view(
         result.append(
             TodoViewItem(
                 id=f"countdown:{item.id}", title=title,
-                date=str(item.target_datetime)[:10], time=None,
+                date=(parse_timestamp(item.target_datetime).date().isoformat()
+                      if parse_timestamp(item.target_datetime) else ""), time=None,
                 important=bool(getattr(item, "pinned", False)), completed=False,
                 created_at=str(getattr(item, "created_at", "") or ""),
                 work_seconds=0, source_type="countdown", source_id=str(item.id),

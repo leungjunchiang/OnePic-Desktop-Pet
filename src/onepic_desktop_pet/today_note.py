@@ -1,4 +1,4 @@
-"""勾选配置使用统一矢量绘制。
+"""勾选配置使用统一矢量绘制；倒计时编辑日期按北京时间读取。
 Today's note and the non-resident time-memory window."""
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 from .check_controls import AppCheckBox as QCheckBox, CheckListWidget as QListWidget
 
 from .time_memory import TimeMemory
-from .time_service import format_duration
+from .time_service import format_duration, parse_datetime
 
 
 PAPER_STYLE = """
@@ -681,7 +681,7 @@ class TimeMemoryWindow(QDialog):
         if not ok or not title.strip():
             return
         target, ok = QInputDialog.getText(
-            self, "编辑倒计时", "目标日期（YYYY-MM-DD）", text=countdown.target_datetime[:10]
+            self, "编辑倒计时", "目标日期（YYYY-MM-DD）", text=parse_datetime(countdown.target_datetime).date().isoformat()
         )
         if not ok or not target.strip():
             return

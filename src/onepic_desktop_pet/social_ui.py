@@ -1,4 +1,6 @@
-"""正式回应卡与执行牌复用同一状态投影，勾选配置使用统一矢量绘制。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+正式回应卡与执行牌复用同一状态投影，勾选配置使用统一矢量绘制。
 搭子自习室界面、后台同步线程和双六毛本地串门窗口。
 
 首页搭子卡片通往只展示 TA 与双方关系的搭子详情，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的，等宽专注导航与独立免战日保持账号边界。
@@ -13,6 +15,8 @@
 """
 
 from __future__ import annotations
+
+from .time_service import BEIJING_TIMEZONE, format_clock, now_beijing, parse_server_datetime, to_beijing
 
 import sys
 import time
@@ -284,25 +288,16 @@ def _unwrap_single_reaction_state(payload: object) -> dict[str, Any] | None:
 # intentionally fixed to China Standard Time instead of inheriting the
 # machine's local timezone, so users in different regions see the same room
 # timeline.  A fixed UTC+8 offset is sufficient for Beijing (no DST).
-BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 PRESENCE_RECOVERY_STATUS = "自习室连接暂时不稳定，搭子最近状态仍保留显示；正在自动恢复实时同步。"
 
 def _beijing_now() -> datetime:
-    return datetime.now(BEIJING_TIMEZONE)
+    return now_beijing()
 
 
 def _format_beijing_time(value: str) -> str:
     """Convert an ISO-8601 timestamp to the room's Beijing time (HH:MM)."""
 
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        # Server timestamps are timestamptz values.  Treat a legacy naive
-        # value as UTC rather than silently using the user's machine timezone.
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(BEIJING_TIMEZONE).strftime("%H:%M")
-    except (TypeError, ValueError, OverflowError):
-        return ""
+    return format_clock(parse_server_datetime(value))
 
 
 def _room_focus_summary_text(summary: dict[str, Any], member_count: int = 0, focus_count: int = 0) -> str:
@@ -557,7 +552,7 @@ def _presence_status(presence: dict[str, Any], now: datetime | None = None) -> s
         return "offline"
     if presence.get("presence_uncertain") or presence.get("presence_transport_stale"):
         return "unknown"
-    if presence.get("rest_day_date") == (now or datetime.now(BEIJING_TIMEZONE)).date().isoformat():
+    if presence.get("rest_day_date") == (to_beijing(now) if now else now_beijing()).date().isoformat():
         return "exempt"
     return "focus" if _presence_working(presence) else "rest"
 
@@ -823,22 +818,7 @@ def _compare_buddies(left: dict[str, Any], right: dict[str, Any]) -> int:
 
 def _focus_timestamp(value: object) -> datetime | None:
     """Parse a server focus timestamp and normalize it to Beijing time."""
-
-    if isinstance(value, datetime):
-        parsed = value
-    else:
-        text = str(value or "").strip()
-        if not text:
-            return None
-        try:
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except (TypeError, ValueError):
-            return None
-    if parsed.tzinfo is None:
-        # Keep the same compatibility rule as _format_beijing_time: a legacy
-        # server timestamp without an offset is interpreted as UTC.
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(BEIJING_TIMEZONE)
+    return parse_server_datetime(value)
 
 
 def _live_session_seconds(record: dict[str, Any]) -> int | None:
@@ -2562,7 +2542,8 @@ class BuddyCardWidget(QWidget):
         root.addWidget(confirmation)
         quick_status = str(buddy.get("quick_status") or "").strip()
         expires = str(buddy.get("quick_status_expires_at") or "")
-        if quick_status and (not expires or expires > datetime.now().astimezone().isoformat()):
+        expiry = parse_server_datetime(expires)
+        if quick_status and (not expires or (expiry is not None and expiry > now_beijing())):
             quick = QLabel(f"状态：{quick_status[:40]}")
             quick.setStyleSheet("color:#b36b2c;font-size:11px;font-weight:600;")
             root.addWidget(quick)
@@ -3049,10 +3030,8 @@ class BuddyVisitWindow(QWidget):
         self.elapsed = 0
         started = peer.get("visit_started_at")
         if started:
-            try:
-                self.elapsed = max(0, int((datetime.now().astimezone() - datetime.fromisoformat(str(started))).total_seconds()))
-            except ValueError:
-                self.elapsed = 0
+            stamp = parse_server_datetime(started)
+            self.elapsed = max(0, int((now_beijing() - stamp).total_seconds())) if stamp is not None else 0
         self._refresh_pets()
         self._tick()
         self.show()
@@ -4027,8 +4006,8 @@ class SocialHubDialog(QDialog):
                 try:
                     deadline = datetime.fromisoformat(due.replace("Z", "+00:00"))
                     if deadline.tzinfo is None:
-                        deadline = deadline.astimezone()
-                    remaining = max(0, int((deadline - datetime.now().astimezone()).total_seconds()))
+                        deadline = deadline.replace(tzinfo=BEIJING_TIMEZONE)
+                    remaining = max(0, int((deadline - now_beijing()).total_seconds()))
                     task_text += f" · 剩余 {format_work_duration(remaining)}"
                 except ValueError:
                     pass
@@ -4429,8 +4408,8 @@ class SocialHubDialog(QDialog):
             self.focus_status.setText("🏳️ 高挂免战牌 · 今日休息")
         self.coaching_panel.refresh()
         if self.focus_status.isVisible():
-            engine.store.mark_coach_messages_read(datetime.now().astimezone().date())
-        messages = engine.store.coach_messages_for_day(datetime.now().astimezone().date())
+            engine.store.mark_coach_messages_read(now_beijing().date())
+        messages = engine.store.coach_messages_for_day(now_beijing().date())
         pending = engine.store.due_explanations()
         formal = {str(row.get(key)) for row in engine.store.coaching_cases
                   for key in ("source_event_id", "local_source_event_id")}
@@ -4438,7 +4417,7 @@ class SocialHubDialog(QDialog):
         self.focus_coach_card.setVisible(bool(messages or pending) and not engine.store.coaching_cases)
         self.focus_coach_summary.setText(
             (f"待说明 {len(pending)} 项 · 可在纪律记录中处理。\n" if pending else "")
-            + "\n".join(str(row.get("occurred_at", ""))[11:16] + " " + str(row.get("title", ""))
+            + "\n".join(format_clock(row.get("occurred_at")) + " " + str(row.get("title", ""))
                         + "\n" + str(row.get("detail", "")) for row in messages[-5:]))
         self.set_focus_analytics(self._focus_analytics)
         if hasattr(self, "focus_workspace") and self.focus_workspace.isVisible():
@@ -5429,7 +5408,7 @@ class SocialHubDialog(QDialog):
             try:
                 due_dt = datetime.fromisoformat(due.replace("Z", "+00:00"))
                 if due_dt.tzinfo is None:
-                    due_dt = due_dt.astimezone()
+                    due_dt = due_dt.replace(tzinfo=BEIJING_TIMEZONE)
                 seconds = max(0, int((due_dt - _beijing_now()).total_seconds()))
                 remaining = f" · 倒计时 {format_work_duration(seconds)}"
             except ValueError:

@@ -1,6 +1,10 @@
-"""Local reminder records and a deliberately cheap due check."""
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+Local reminder records and a deliberately cheap due check."""
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -35,7 +39,7 @@ class Reminder:
 class ReminderManager:
     def __init__(self, path=None, *, now_provider: Callable[[], datetime] | None = None, persist: bool = True) -> None:
         self.path = path or local_data_path("reminders.json")
-        self._now = now_provider or (lambda: datetime.now().astimezone())
+        self._now = (lambda: now_beijing(now_provider))
         self.persist = bool(persist)
         raw = read_json(self.path, [])
         self._items = [Reminder.from_dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []

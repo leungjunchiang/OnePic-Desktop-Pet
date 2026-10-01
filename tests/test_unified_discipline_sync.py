@@ -32,12 +32,12 @@ def test_actual_start_uses_first_real_event_after_six_and_is_shared_with_summary
     assert len([row for row in store.events if row["event_type"] == "start_work"]) == 1
 
 
-def test_actual_start_uses_requested_local_timezone_and_not_midnight_segment():
+def test_actual_start_uses_beijing_even_when_legacy_caller_requests_host_timezone():
     zone = timezone(timedelta(hours=-7))
     day = at(12).date()
     rows = [{"event_type": "start_work", "occurred_at": "2026-09-30T12:59:00+00:00"},
             {"event_type": "start_work", "occurred_at": "2026-09-30T14:30:00+00:00"}]
-    assert get_actual_work_start(rows, day, tz=zone).strftime("%H:%M") == "07:30"
+    assert get_actual_work_start(rows, day, tz=zone).strftime("%H:%M") == "20:59"
 
 
 def test_legacy_two_am_event_does_not_prevent_real_final_lateness():

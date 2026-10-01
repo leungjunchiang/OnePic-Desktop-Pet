@@ -1,19 +1,50 @@
-"""One local-time implementation shared by todos, reminders and memories."""
+"""统一北京时间业务日历；旧本地无偏移时间按北京墙钟，服务端无偏移时间按 UTC。"""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
 
 DateProvider = Callable[[], datetime]
+# Reuse the existing equivalent fixed-offset zone. Modern business dates have no DST;
+# this also works on Windows installations without an IANA tzdata package.
+BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+def to_beijing(value: datetime) -> datetime:
+    """带偏移值保留同一时刻；旧无偏移本地数据明确按北京时间解释。"""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=BEIJING_TIMEZONE)
+    return value.astimezone(BEIJING_TIMEZONE)
+
+
+def now_beijing(provider: DateProvider | None = None) -> datetime:
+    return to_beijing(provider()) if provider else datetime.now(BEIJING_TIMEZONE)
+
+
+def parse_timestamp(value, *, naive_tz=BEIJING_TIMEZONE) -> datetime | None:
+    """解析绝对时间；来源必须明确约定历史 naive 值，坏值不伪造时间。"""
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=naive_tz)
+        return parsed.astimezone(BEIJING_TIMEZONE)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def parse_server_datetime(value) -> datetime | None:
+    return parse_timestamp(value, naive_tz=timezone.utc)
+
+
+def beijing_day_start(day: date) -> datetime:
+    return datetime.combine(day, datetime.min.time(), BEIJING_TIMEZONE)
 
 
 def now_local(provider: DateProvider | None = None) -> datetime:
-    """Return an aware local datetime; callers may inject a clock in tests."""
-
-    value = provider() if provider else datetime.now().astimezone()
-    return value if value.tzinfo is not None else value.astimezone()
+    """兼容旧调用名；所有业务页面使用北京时间，忽略电脑系统时区。"""
+    return now_beijing(provider)
 
 
 def today_key(provider: DateProvider | None = None) -> str:
@@ -32,32 +63,31 @@ def parse_date(value: str | date | datetime | None, provider: DateProvider | Non
     if text in {"day_after_tomorrow", "后天"}:
         return current + timedelta(days=2)
     if isinstance(value, datetime):
-        return value.date()
+        return to_beijing(value).date()
     if isinstance(value, date):
         return value
+    if "T" in str(value) or " " in str(value).strip():
+        stamp = parse_timestamp(value)
+        if stamp is not None:
+            return stamp.date()
     return date.fromisoformat(str(value).strip()[:10])
 
 
 def parse_datetime(value: str | datetime, provider: DateProvider | None = None) -> datetime:
-    if isinstance(value, datetime):
-        result = value
-    else:
-        text = str(value).strip()
-        result = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    if result.tzinfo is None:
-        local = now_local(provider)
-        result = result.replace(tzinfo=local.tzinfo)
-    return result.astimezone(now_local(provider).tzinfo)
+    result = parse_timestamp(value)
+    if result is None:
+        raise ValueError("无效时间")
+    return result
 
 
 def format_clock(value: datetime | str | None) -> str:
     if value is None:
         return ""
     try:
-        parsed = parse_datetime(value) if isinstance(value, str) else value
-        return parsed.astimezone().strftime("%H:%M")
+        parsed = parse_timestamp(value)
+        return parsed.strftime("%H:%M") if parsed is not None else ""
     except (TypeError, ValueError, OverflowError):
-        return str(value)[:5]
+        return ""
 
 
 def days_until(target: str | date | datetime, provider: DateProvider | None = None) -> int:
@@ -93,4 +123,3 @@ def format_duration(seconds: int) -> str:
     if minutes:
         return f"{minutes}分钟"
     return "不足1分钟" if safe else "0分钟"
-

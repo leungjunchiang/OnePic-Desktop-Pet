@@ -1,7 +1,11 @@
-"""双向训导结案汇总进入纪律记录，正式说明通过今日回应卡，勾选配置统一绘制。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+双向训导结案汇总进入纪律记录，正式说明通过今日回应卡，勾选配置统一绘制。
 专注导航的计划、训导与记录复用统一按钮反馈；统计刷新不读取授权表单；记录只呈现紧凑纪律摘要和已结算事项，分析留在工作报告。"""
 
 from __future__ import annotations
+
+from .time_service import format_clock
 
 from datetime import date, datetime, time, timedelta
 from copy import deepcopy
@@ -524,8 +528,8 @@ class DisciplineWorkspace(QWidget):
             title, detail = self._event_description(row)
             if row.get("event_type") == "start_work": detail = late_text
             if exempt and row.get("event_type") not in {"start_work", "rest_day", "cancel_rest_day"}: continue
-            lines.append(f"<p><b>{escape(str(row.get('occurred_at', ''))[11:16])}　{title}</b><br>{escape(detail)}</p>")
-        coach_lines = [f"<p><b>{escape(str(row.get('occurred_at', ''))[11:16])} {escape(str(row.get('title', '')))}</b><br>{escape(str(row.get('detail', '')))}</p>"
+            lines.append(f"<p><b>{escape(format_clock(row.get('occurred_at')))}　{title}</b><br>{escape(detail)}</p>")
+        coach_lines = [f"<p><b>{escape(format_clock(row.get('occurred_at')))} {escape(str(row.get('title', '')))}</b><br>{escape(str(row.get('detail', '')))}</p>"
                        for row in today["coach_messages"][-20:]]
         from .coaching import closed_case_lines
         closed_lines = ["<p>" + escape(line) + "</p>" for line in closed_case_lines(self.store, now_day)]
@@ -541,7 +545,7 @@ class DisciplineWorkspace(QWidget):
                                     for case in self.store.coaching_cases
                                     for key in ("source_event_id", "local_source_event_id"))):
                     title, _ = self._event_description(row)
-                    self.today_pending.addItem(title + " · " + str(row.get("occurred_at", ""))[11:16], row.get("id"))
+                    self.today_pending.addItem(title + " · " + format_clock(row.get("occurred_at")), row.get("id"))
         if self.today_pending.findData(previous_pending) >= 0:
             self.today_pending.setCurrentIndex(self.today_pending.findData(previous_pending))
         self.today_explanation_row.setVisible(self.today_pending.count() > 0)
@@ -626,9 +630,9 @@ class DisciplineWorkspace(QWidget):
         lines = []
         for row in rows:
             title, detail = self._event_description(row)
-            lines.append(f"<p>{escape(str(row.get('occurred_at', ''))[11:16])}　<b>{title}</b>　{escape(detail)}</p>")
+            lines.append(f"<p>{escape(format_clock(row.get('occurred_at')))}　<b>{title}</b>　{escape(detail)}</p>")
             if row.get("requires_explanation") and not row.get("explanation") and not self.store.is_exempt(day):
-                self.history_events.addItem(title + " · " + str(row.get("occurred_at", ""))[11:16], row.get("id"))
+                self.history_events.addItem(title + " · " + format_clock(row.get("occurred_at")), row.get("id"))
         baseline = "缺少历史计划基准；不按当前计划重新计算迟到。" if not summary.get("historical_plan_known", True) else "计划开工 " + summary["planned_start"]
         from .coaching import closed_case_lines
         lines.extend("<p>" + escape(line) + "</p>" for line in closed_case_lines(self.store, day))

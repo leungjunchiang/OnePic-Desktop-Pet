@@ -1,4 +1,6 @@
-"""双向训导复用低频增量同步和专注事实；被动头顶卡、进度牌与启动静默。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+双向训导复用低频增量同步和专注事实；被动头顶卡、进度牌与启动静默。
 
 本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
@@ -58,6 +60,8 @@ API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing, parse_server_datetime
 
 from copy import deepcopy
 
@@ -785,7 +789,7 @@ class PetWindow(QWidget):
         self._fullscreen_restore_visible: dict[QWidget, bool] = {}
         self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
         self._fullscreen_suppression_mode = "normal"
-        self._process_started_at = datetime.now().astimezone()
+        self._process_started_at = now_beijing()
         self._sleep_after_sit = False
         self._room_quick_status = ""
         self._room_quick_status_expires_at: datetime | None = None
@@ -3097,7 +3101,7 @@ class PetWindow(QWidget):
         classification = classify_idle(evidence)
         record: dict[str, object] = {
             "id": str(time.time_ns()),
-            "created_at": datetime.now().astimezone().isoformat(),
+            "created_at": now_beijing().isoformat(),
             "away_seconds": max(0, int(seconds)),
             "decision": classification.decision,
             "confidence": classification.confidence,
@@ -3115,7 +3119,7 @@ class PetWindow(QWidget):
         if not record:
             return
         record["corrected_to"] = decision
-        record["corrected_at"] = datetime.now().astimezone().isoformat()
+        record["corrected_at"] = now_beijing().isoformat()
         self._write_idle_history(record)
 
     def _save_idle_app_rule(self, app_key: str, decision: str) -> None:
@@ -3135,7 +3139,7 @@ class PetWindow(QWidget):
         if decision == "focus":
             self.focus_analytics.record_session(
                 seconds,
-                started_at=self._idle_pause_started_at or datetime.now().astimezone(),
+                started_at=self._idle_pause_started_at or now_beijing(),
                 completed=False,
                 away_count=1,
                 task=str((self.focus_analytics.current_task() or {}).get("title", "")),
@@ -3247,7 +3251,7 @@ class PetWindow(QWidget):
         seconds = max(1, int(self._idle_hint_record.get("away_seconds", 0)))
         self.focus_analytics.record_session(
             seconds,
-            started_at=datetime.now().astimezone() - timedelta(seconds=seconds),
+            started_at=now_beijing() - timedelta(seconds=seconds),
             completed=False,
             away_count=1,
             task=str((self.focus_analytics.current_task() or {}).get("title", "")),
@@ -5271,7 +5275,7 @@ class PetWindow(QWidget):
         if time.monotonic() < self._social_food_activity_until:
             self._schedule_work_activity()
             return
-        if night_limited_activity(datetime.now()) is not None:
+        if night_limited_activity(now_beijing()) is not None:
             self._night_limited_tick()
             self._schedule_work_activity()
             return
@@ -5300,7 +5304,7 @@ class PetWindow(QWidget):
         """结束临时动作；工作中继续轮换专注动作，否则恢复普通六毛。"""
 
         self._social_food_activity_until = 0.0
-        if night_limited_activity(datetime.now()) is not None:
+        if night_limited_activity(now_beijing()) is not None:
             self._night_limited_tick()
             return
         self._change_ambient_activity(
@@ -5403,7 +5407,7 @@ class PetWindow(QWidget):
             self._arm_alarm_poll_timer()
 
     def _arm_alarm_poll_timer(self) -> None:
-        now = datetime.now().astimezone()
+        now = now_beijing()
         delay_ms = max(1, 1000 - int(now.microsecond / 1000))
         self.alarm_poll_timer.start(delay_ms)
 
@@ -6828,7 +6832,7 @@ class PetWindow(QWidget):
         events = []
         event = self.economy.record_performance(
             f"任务绩效：{title[:90]}",
-            source_key=f"todo:{task_id}:{datetime.now().date().isoformat()}",
+            source_key=f"todo:{task_id}:{now_beijing().date().isoformat()}",
         )
         if event is not None:
             events.append(event.as_dict())
@@ -7981,7 +7985,7 @@ class PetWindow(QWidget):
             self.time_memory.select_task(task.id)
         due_at = None
         if int(minutes) > 0:
-            due_at = (datetime.now().astimezone() + timedelta(minutes=int(minutes))).isoformat()
+            due_at = (now_beijing() + timedelta(minutes=int(minutes))).isoformat()
         self.focus_analytics.set_current_task(title, due_at=due_at, target_seconds=max(0, int(minutes)) * 60)
         if self._social_dialog is not None:
             self._schedule_social_analytics_snapshot(delay_ms=0)
@@ -8152,7 +8156,7 @@ class PetWindow(QWidget):
                     and not result.get("_sync_offline") and result.get("data_source") != "local_cache"):
                 # Only a successful, explicit inbox response establishes the
                 # baseline. Empty is valid; errors/missing fields are not.
-                observed_at = datetime.now().astimezone()
+                observed_at = now_beijing()
                 baseline = self._discipline_notice_baseline_at
                 if baseline is None:
                     self._discipline_notice_baseline_at = observed_at
@@ -8483,7 +8487,7 @@ class PetWindow(QWidget):
         nickname = buddy_name(peer)
         public = public_name(peer)
         stamp = _parse_time(event.get("occurred_at"))
-        local_time = stamp.astimezone().strftime("%H:%M") if stamp is not None else ""
+        local_time = stamp.astimezone(BEIJING_TIMEZONE).strftime("%H:%M") if stamp is not None else ""
         title = (
             f"🟢 {nickname}开始专注了" if event_type == "start_work"
             else f"🌙 {nickname}下班了"
@@ -9417,10 +9421,8 @@ class PetWindow(QWidget):
                 or item.get("created_at")
             )
             try:
-                started = datetime.fromisoformat(str(started_text).replace("Z", "+00:00"))
-                if started.tzinfo is None:
-                    started = started.astimezone()
-                if started >= self._process_started_at:
+                started = parse_server_datetime(started_text)
+                if started is not None and started >= self._process_started_at:
                     fresh.append(dict(item))
             except (TypeError, ValueError, OverflowError):
                 # Missing/invalid timestamps are treated as stale on startup;
@@ -10461,7 +10463,7 @@ class PetWindow(QWidget):
         self._schedule_social_tick()
 
     def _active_room_quick_status(self) -> str:
-        if self._room_quick_status_expires_at is not None and datetime.now().astimezone() >= self._room_quick_status_expires_at:
+        if self._room_quick_status_expires_at is not None and now_beijing() >= self._room_quick_status_expires_at:
             self._room_quick_status = ""
             self._room_quick_status_expires_at = None
         return self._room_quick_status
@@ -10476,14 +10478,14 @@ class PetWindow(QWidget):
             self.start_work_timer()
         elif action == "再卷 30 分钟":
             self._room_quick_status = "再卷30分钟"
-            self._room_quick_status_expires_at = datetime.now().astimezone() + timedelta(minutes=30)
+            self._room_quick_status_expires_at = now_beijing() + timedelta(minutes=30)
             if not self.work_timer.is_running:
                 self.start_work_timer()
             elif self._social_dialog is not None:
                 self._social_dialog.set_room_quick_status(self._room_quick_status, self._room_quick_status_expires_at)
         elif action == "去喝水":
             self._room_quick_status = "去喝水"
-            self._room_quick_status_expires_at = datetime.now().astimezone() + timedelta(minutes=10)
+            self._room_quick_status_expires_at = now_beijing() + timedelta(minutes=10)
             self.pause_work_timer()
         else:
             return
@@ -11785,7 +11787,7 @@ class PetWindow(QWidget):
     def _night_limited_tick(self) -> None:
         """在本地 00:30–06:30 显示当天限定造型，06:30 到点恢复普通状态。"""
 
-        selected = night_limited_activity(datetime.now())
+        selected = night_limited_activity(now_beijing())
         if selected is None:
             previous = self._night_limited_activity
             self._night_limited_activity = ""
@@ -11834,7 +11836,7 @@ class PetWindow(QWidget):
         """按时段、专注长度与低概率彩蛋让六毛主动找用户。"""
 
         try:
-            if night_limited_activity(datetime.now()) is not None:
+            if night_limited_activity(now_beijing()) is not None:
                 self._night_limited_tick()
                 return
             busy = self.chat_manager.busy
@@ -11869,7 +11871,7 @@ class PetWindow(QWidget):
                     activity, text = "wild-king", "极低概率彩蛋：荒野国王路过你的桌面。"
                 elif random.random() < 0.55:
                     decision = self.companion_behavior.decide(
-                        now_hour=datetime.now().hour,
+                        now_hour=now_beijing().hour,
                         working=self.work_timer.is_running,
                         session_seconds=session_seconds,
                         today_seconds=today_seconds,
@@ -11878,7 +11880,7 @@ class PetWindow(QWidget):
                     )
                     activity = decision.activity
                     if activity == "idle":
-                        activity, text = time_of_day_activity(datetime.now(), self.work_timer.is_running)
+                        activity, text = time_of_day_activity(now_beijing(), self.work_timer.is_running)
                     elif activity == "night-reading":
                         text = "我陪你读一会儿，慢慢来。"
                     elif activity == "sleepy":
@@ -11897,7 +11899,7 @@ class PetWindow(QWidget):
                         activity = random.choice(("sleep", "milk-tea"))
                         text = "六毛发现你很久没动啦，先睡一会儿或喝口奶茶吧。"
                     elif random.random() < 0.62:
-                        activity = random.choice(self._login3_ambient_actions(datetime.now()))
+                        activity = random.choice(self._login3_ambient_actions(now_beijing()))
                         text = "三日连登六毛换个动作陪你待一会儿。"
                 # Automatic companion animations must not announce a rest
                 # state while the shared work timer is still running. A
@@ -11954,7 +11956,7 @@ class PetWindow(QWidget):
     def _hourly_tick(self) -> None:
         """周期检查整点报时，工作报告改为用户按需打开。"""
 
-        now = datetime.now()
+        now = now_beijing()
         self._maybe_announce_hour(now)
 
     def _maybe_announce_hour(self, now: datetime) -> bool:
@@ -11998,7 +12000,7 @@ class PetWindow(QWidget):
         else:
             state = random.choice((PetState.WAVE, PetState.HAPPY, PetState.SHY))
         self._show_emotion(state, 1800)
-        now = datetime.now()
+        now = now_beijing()
         if (
             not self._late_wakeup_shown
             and self.settings.lyric_inspiration_enabled

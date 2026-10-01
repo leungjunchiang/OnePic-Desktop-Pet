@@ -82,10 +82,10 @@ def test_presence_restore_and_future_rows_cannot_infer_start():
     assert get_actual_work_start([],at(20).date(),sessions=sessions,now=at(20)) is None
 
 
-def test_local_timezone_is_applied_to_raw_start_before_six_filter():
+def test_business_timezone_ignores_host_zone_before_six_filter():
     zone=timezone(timedelta(hours=-7));start=datetime(2026,9,30,15,52,tzinfo=timezone.utc)
     segment=FocusSegment("f","s",start,start+timedelta(minutes=10))
-    assert get_actual_work_start([],start.date(),tz=zone,sessions=[segment],now=start+timedelta(hours=1)).strftime("%H:%M")=="08:52"
+    assert get_actual_work_start([],start.date(),tz=zone,sessions=[segment],now=start+timedelta(hours=1)).strftime("%H:%M")=="23:52"
 
 
 def test_historical_start_without_plan_does_not_use_current_plan_or_write_back():

@@ -1,4 +1,6 @@
-"""
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+
 本模块提供 Lili 的本地工作计时与温和休息提醒，不创建窗口或访问网络。
 
 职责范围：
@@ -40,7 +42,7 @@ WORK_STATE_PAUSED_RESTART = "paused_restart"
 # Focus statistics use one calendar everywhere.  A fixed offset is deliberate:
 # Beijing has no daylight-saving transition, and the social backend uses the
 # same Asia/Shanghai boundary for its daily and weekly ledgers.
-BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+from .time_service import BEIJING_TIMEZONE
 
 _PAUSE_STATE_BY_REASON = {
     "manual": WORK_STATE_PAUSED_MANUAL,

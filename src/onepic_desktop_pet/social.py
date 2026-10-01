@@ -1,4 +1,6 @@
-"""Lili 搭子自习室的最小社交客户端与可替换网络后端。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+Lili 搭子自习室的最小社交客户端与可替换网络后端。
 
 只发送账号认证、昵称、六毛外观、实时工作状态、FocusSession 区间事实、房间与串门事件。
 Todo 使用独立的 Direct-only RPC 旁路，不进入通用路由回退，也不拥有认证生命周期。
@@ -11,6 +13,8 @@ FocusSession 区间派生。密码从不保存；
 """
 
 from __future__ import annotations
+
+from .time_service import BEIJING_TIMEZONE, now_beijing, parse_server_datetime
 
 from contextlib import contextmanager
 import json
@@ -68,7 +72,6 @@ SOCIAL_AUXILIARY_TTL_SECONDS = 300.0
 SOCIAL_DASHBOARD_BACKGROUND_TTL_SECONDS = 90.0
 SOCIAL_DASHBOARD_INTERACTION_TTL_SECONDS = 5.0
 SOCIAL_LEADERBOARD_TTL_SECONDS = 300.0
-BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 # The heartbeat is a liveness transport, not a time ledger.  Keep this allow
 # list deliberately small: final focus duration is derived from immutable
@@ -668,7 +671,7 @@ class ConnectionStateStore:
         self.realtime_state = realtime_state
         if server_timestamp:
             self.server_timestamp = server_timestamp
-        now = datetime.now().astimezone().isoformat()
+        now = now_beijing().isoformat()
         if self.state == "ONLINE":
             self.last_success_at = now
         elif self.state in {"OFFLINE", "RECONNECTING", "DEGRADED", "AUTH_ERROR"}:
@@ -1618,8 +1621,8 @@ class HttpSocialBackend:
                     except ValueError:
                         parsed = parsedate_to_datetime(server_time)
                     if parsed.tzinfo is None:
-                        parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
-                    self.last_server_timestamp = parsed.astimezone().isoformat()
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    self.last_server_timestamp = parsed.astimezone(BEIJING_TIMEZONE).isoformat()
                 raw = response.read()
                 return json.loads(raw.decode("utf-8")) if raw else None
         except urllib.error.HTTPError as exc:
@@ -2463,7 +2466,7 @@ class LegacyDirectSocialClient:
         """Emit structured diagnostics without logging credentials or payloads."""
 
         entry = {
-            "timestamp": datetime.now().astimezone().isoformat(),
+            "timestamp": now_beijing().isoformat(),
             "connection_state": self.connection.state,
             "request_type": request_type,
             "url": self.backend_endpoint,
@@ -2645,7 +2648,7 @@ class LegacyDirectSocialClient:
         data["_data_source"] = "local_cache"
         data["_sync_age_minutes"] = age_minutes
         try:
-            data["_server_timestamp"] = datetime.fromtimestamp(saved_at).astimezone().isoformat() if saved_at else ""
+            data["_server_timestamp"] = datetime.fromtimestamp(saved_at, BEIJING_TIMEZONE).isoformat() if saved_at else ""
         except (OSError, OverflowError, ValueError):
             data["_server_timestamp"] = ""
         data["_sync_error"] = self._last_error or "当前网络无法访问自习室服务"
@@ -3056,7 +3059,7 @@ class LegacyDirectSocialClient:
             result["is_stale"] = False
             result["data_source"] = "server"
             result["_data_source"] = "server"
-            result["_server_timestamp"] = datetime.now().astimezone().isoformat()
+            result["_server_timestamp"] = now_beijing().isoformat()
             self.connection.set(
                 "ONLINE",
                 data_source="server",
@@ -3102,7 +3105,7 @@ class LegacyDirectSocialClient:
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = nickname.strip()[:24]
         path = f"/rest/v1/lili_profiles?{query}"
-        body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": datetime.now().astimezone().isoformat()}
+        body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": now_beijing().isoformat()}
         if pet_name is not None:
             body["pet_name"] = str(pet_name or "").replace("\x00", "").strip()[:24] or None
         if owner_nickname is _PROFILE_FIELD_UNSET:
@@ -3165,7 +3168,7 @@ class LegacyDirectSocialClient:
             raise SocialError("请先登录。")
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = clean_owner_nickname(nickname)
-        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"owner_nickname": clean or None, "updated_at": datetime.now().astimezone().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
+        self._raw("PATCH", f"/rest/v1/lili_profiles?{query}", {"owner_nickname": clean or None, "updated_at": now_beijing().isoformat()}, authenticated=True, extra_headers={"Prefer": "return=minimal"})
 
     def send_interaction(self, *, target: str, kind: str, room_id: str | None = None) -> None:
         if self._http_backend is not None:
@@ -3259,13 +3262,11 @@ class DashboardCacheClientBase:
         value = self.connection.server_timestamp
         if not value:
             return 0.0
-        try:
-            return (datetime.fromisoformat(value.replace("Z", "+00:00")) - datetime.now().astimezone()).total_seconds()
-        except (TypeError, ValueError):
-            return 0.0
+        parsed = parse_server_datetime(value)
+        return (parsed - now_beijing()).total_seconds() if parsed is not None else 0.0
 
     def server_now(self) -> datetime:
-        return datetime.now().astimezone() + timedelta(seconds=self.server_clock_offset_seconds)
+        return now_beijing() + timedelta(seconds=self.server_clock_offset_seconds)
 
     def _dashboard_cache_path(self) -> Path:
         base = os.environ.get("LOCALAPPDATA")
@@ -3569,7 +3570,7 @@ class DashboardCacheClientBase:
             result = _normalise_never_seen_presence(
                 dict(self._require_backend().dashboard(room_id=room_id, allow_cache=allow_cache) or {})
             )
-            server_timestamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
+            server_timestamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or now_beijing().isoformat())
             result.update({"_connection_state": "ONLINE", "room_state": _dashboard_room_state(result, room_id), "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": server_timestamp})
             self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=server_timestamp)
             self._last_error = ""; self._remember_dashboard(room_id, result); return result
@@ -3745,7 +3746,7 @@ class BackendRouteManager:
         with self._state_lock:
             if self.current_route != route:
                 self.current_route = route
-                self.last_switch_at = datetime.now().astimezone().isoformat()
+                self.last_switch_at = now_beijing().isoformat()
                 changed = True
         if changed:
             self._save_state()
@@ -4295,7 +4296,7 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
         # production project. Do not probe a missing optional RPC on every
         # passive dashboard refresh: a 404 adds noise to Supabase telemetry
         # and is unrelated to the core buddy/presence snapshot.
-        stamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or datetime.now().astimezone().isoformat())
+        stamp = str(result.get("server_timestamp") or result.get("_server_timestamp") or now_beijing().isoformat())
         result.update({"_connection_state": "ONLINE", "room_state": _dashboard_room_state(result, room_id), "is_stale": False, "data_source": "server", "_data_source": "server", "_server_timestamp": stamp})
         self.connection.set("ONLINE", data_source="server", realtime_state="polling", server_timestamp=stamp)
         self._last_error = ""

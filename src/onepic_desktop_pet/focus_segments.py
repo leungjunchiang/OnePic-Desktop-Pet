@@ -1,4 +1,6 @@
-"""Interval facts and the single focus-time aggregation primitive.
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+Interval facts and the single focus-time aggregation primitive.
 
 The timer, study room and work report must not each maintain their own
 counter.  This module deliberately knows nothing about Qt, persistence or
@@ -22,7 +24,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Iterable
 
 
-BEIJING_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+from .time_service import BEIJING_TIMEZONE, parse_timestamp, to_beijing
 INTERRUPTION_GRACE_SECONDS = 10 * 60
 MAX_FOCUS_SEGMENT_SECONDS = 24 * 60 * 60
 FUTURE_FOCUS_GRACE_SECONDS = 2 * 60
@@ -57,9 +59,7 @@ def as_beijing(value: datetime) -> datetime:
     values.  We never use the host machine timezone as part of a metric.
     """
 
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=BEIJING_TIMEZONE)
-    return value.astimezone(BEIJING_TIMEZONE)
+    return to_beijing(value)
 
 
 def parse_focus_timestamp(value: Any) -> datetime | None:
@@ -72,16 +72,7 @@ def parse_focus_timestamp(value: Any) -> datetime | None:
     applying subtly different timezone rules.
     """
 
-    if isinstance(value, datetime):
-        return as_beijing(value)
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return as_beijing(parsed)
+    return parse_timestamp(value)
 
 
 @dataclass(frozen=True)

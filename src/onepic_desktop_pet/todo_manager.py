@@ -1,10 +1,14 @@
-"""本地持久待办及其事项日期语义；兼容旧字段但区分创建时间与事件时间。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+本地持久待办及其事项日期语义；兼容旧字段但区分创建时间与事件时间。
 
 本模块只负责本地 Todo 和变更通知；云端队列由旁路 ``todo_sync`` 模块
 单独持有，通知失败不能回滚或阻断任何本地待办操作。
 """
 
 from __future__ import annotations
+
+from .time_service import BEIJING_TIMEZONE, now_beijing, parse_timestamp
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -36,7 +40,7 @@ LOGGER = logging.getLogger(__name__)
 # measured in whichever timezone happens to be configured on a device (or a
 # CI runner).  Lili already uses the Beijing calendar for focus reporting;
 # retain that same stable calendar contract for cloud-synchronised Todos.
-TODO_SCHEDULE_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+TODO_SCHEDULE_TIMEZONE = BEIJING_TIMEZONE
 
 
 def normalize_reminder_mode(value: Any, *, legacy_reminder: bool = False) -> str:
@@ -92,10 +96,8 @@ def scheduled_datetime(
 ) -> datetime:
     """Parse a Todo schedule in the stable Lili calendar timezone.
 
-    The generic time helpers intentionally follow the host timezone for
-    ordinary local data. A Todo appointment is different: its date/time are
-    user-visible calendar fields shared across devices, so a naive value must
-    mean Asia/Shanghai rather than the timezone of a background worker.
+    All calendar fields use Asia/Shanghai. A naive appointment means Beijing
+    wall time; an explicit offset preserves the same instant across devices.
     """
 
     if isinstance(value, datetime):
@@ -139,10 +141,10 @@ def _recover_legacy_inline_event(
     if match is None:
         return title, date_value, time_value, due_value, remind_value
     try:
-        created_dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        created_dt = parse_datetime(created_at)
         year = created_dt.year
     except (TypeError, ValueError, OverflowError):
-        year = datetime.now().year
+        year = now_beijing().year
     try:
         event_dt = datetime(
             year,
@@ -154,7 +156,8 @@ def _recover_legacy_inline_event(
     except (TypeError, ValueError, OverflowError):
         return title, date_value, time_value, due_value, remind_value
 
-    stored_due_date = str(due_value or "")[:10]
+    due_stamp = parse_timestamp(due_value)
+    stored_due_date = due_stamp.date().isoformat() if due_stamp else ""
     if stored_due_date and stored_due_date != date_value:
         return title, date_value, time_value, due_value, remind_value
     recovered_date = event_dt.date().isoformat()
@@ -169,7 +172,8 @@ def _recover_legacy_inline_event(
     # with the recovered event.  A separately chosen reminder date remains
     # untouched.
     recovered_remind = remind_value
-    if reminder and remind_value and str(remind_value)[:10] == old_date:
+    remind_stamp = parse_timestamp(remind_value)
+    if reminder and remind_stamp and remind_stamp.date().isoformat() == old_date:
         recovered_remind = (
             event_dt - timedelta(minutes=reminder_minutes)
         ).isoformat()
@@ -255,7 +259,7 @@ class TodoItem:
             )
         except (TypeError, ValueError):
             reminder_minutes = 10
-        created_at = str(value.get("created_at") or datetime.now().astimezone().isoformat())
+        created_at = str(value.get("created_at") or now_beijing().isoformat())
         updated_at = str(value.get("updated_at") or created_at)
         reminder = bool(value.get("reminder", False))
         reminder_mode = normalize_reminder_mode(
@@ -310,7 +314,8 @@ class TodoItem:
                 pass
         raw_explicit = value.get("date_explicit")
         if raw_explicit is None:
-            created_day = created_at[:10]
+            created_stamp = parse_timestamp(created_at)
+            created_day = created_stamp.date().isoformat() if created_stamp else ""
             # Conservative legacy inference: a non-creation date, a time, or
             # a real due timestamp is evidence of an event schedule.  A date
             # equal to created_at with no time/due remains an old placeholder.
@@ -369,7 +374,7 @@ class TodoManager:
         change_listener: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self.path = path or local_data_path("todos.json")
-        self._now = now_provider or (lambda: datetime.now().astimezone())
+        self._now = (lambda: now_beijing(now_provider))
         self.persist = bool(persist)
         self._change_listeners: list[Callable[[str, dict[str, Any]], None]] = []
         self._change_notifications_suppressed = 0

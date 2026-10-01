@@ -1,4 +1,6 @@
-"""勾选配置使用统一矢量绘制。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+勾选配置使用统一矢量绘制。
 Non-modal UI for managing alarms and showing alarm-style recovery cards.
 
 闹钟卡片在 Windows 上只通过原生窗口层级 API 调整临时置顶，不在显示后
@@ -10,6 +12,8 @@ Windows 自定义音频通过 MCI 异步播放；只有确认播放已停止后�
 
 from __future__ import annotations
 
+from .time_service import format_clock, now_beijing, parse_datetime
+
 import ctypes
 import sys
 import threading
@@ -19,7 +23,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from PySide6.QtCore import QDateTime, QEvent, QTime, QUrl, Qt, QTimer, Signal
+from PySide6.QtCore import QDateTime, QTimeZone, QEvent, QTime, QUrl, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -1000,7 +1004,7 @@ class AlarmCard(QDialog):
 
     @staticmethod
     def _display_trigger(value: str) -> str:
-        return str(value or "")[:16].replace("T", " ").split(" ", 1)[1] if " " in str(value or "") else "⏰"
+        return format_clock(value) or "⏰"
 
     def _sound_name(self, sound_id: str) -> str:
         return self.sound_library.display_name(sound_id) if self.sound_library else (
@@ -1697,12 +1701,13 @@ class AlarmEditDialog(QDialog):
         self.title = QLineEdit(alarm.title if alarm else "叫我开工", self)
         self.trigger = QDateTimeEdit(self)
         self.trigger.setCalendarPopup(True)
+        self.trigger.setTimeZone(QTimeZone(8 * 3600))
         self.trigger.setDisplayFormat("yyyy-MM-dd HH:mm")
         if alarm:
-            trigger = QDateTime.fromString(alarm.trigger_at[:19], Qt.DateFormat.ISODate)
+            trigger = QDateTime.fromString(parse_datetime(alarm.trigger_at).isoformat(), Qt.DateFormat.ISODate)
             self.trigger.setDateTime(self._minute_aligned(trigger))
         else:
-            default = QDateTime.currentDateTime().addSecs(60)
+            default = QDateTime.fromSecsSinceEpoch(int(now_beijing().timestamp()) + 60, QTimeZone(8 * 3600))
             self.trigger.setDateTime(self._minute_aligned(default))
         self.repeat = QComboBox(self)
         self.repeat.addItem("一次性", REPEAT_ONCE)
@@ -1734,7 +1739,7 @@ class AlarmEditDialog(QDialog):
                 for check in self.weekday_checks:
                     check.setChecked(check.property("weekday_index") in selected_days)
         else:
-            self.weekday_checks[datetime.now().astimezone().weekday()].setChecked(True)
+            self.weekday_checks[now_beijing().weekday()].setChecked(True)
         self.enabled = QCheckBox("启用此闹钟", self)
         self.enabled.setChecked(bool(alarm.enabled) if alarm else True)
         self.sound = QCheckBox("到点播放提示音", self)
@@ -1885,7 +1890,7 @@ class AlarmCenterDialog(QDialog):
             )
 
             summary = QLabel(
-                f"{alarm.title} · {alarm.trigger_at[:16].replace('T', ' ')} · {repeat}",
+                f"{alarm.title} · {parse_datetime(alarm.trigger_at).strftime('%Y-%m-%d %H:%M')} · {repeat}",
                 row,
             )
             summary.setWordWrap(True)

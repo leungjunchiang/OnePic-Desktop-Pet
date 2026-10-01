@@ -1,6 +1,10 @@
-"""动态计划与纪律账本；正式训导按服务端版本合并，原始会话推导开工与补时。"""
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+动态计划与纪律账本；正式训导按服务端版本合并，原始会话推导开工与补时。"""
 
 from __future__ import annotations
+
+from .time_service import format_clock, now_beijing, parse_datetime, parse_timestamp, to_beijing
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
@@ -25,10 +29,7 @@ BREAK_ESCALATION_MINUTES = (20, 30, 45)
 def as_beijing(value: datetime | None = None) -> datetime:
     """将计划和账本时间统一到六毛使用的北京时间。"""
 
-    current = value or datetime.now(BEIJING_TIMEZONE)
-    if current.tzinfo is None:
-        return current.replace(tzinfo=BEIJING_TIMEZONE)
-    return current.astimezone(BEIJING_TIMEZONE)
+    return to_beijing(value) if value is not None else now_beijing()
 
 
 DISCIPLINE_EVENT_TYPES = frozenset({
@@ -47,8 +48,8 @@ class FocusStartIndex:
 
 
 def local_work_time(value: datetime | None = None) -> datetime:
-    """实际开工使用电脑本地时区，不改变自然日专注总计的日界线。"""
-    return (value or datetime.now().astimezone()).astimezone()
+    """实际开工和所有业务日期使用北京时间，与系统时区无关。"""
+    return as_beijing(value)
 
 
 def focus_start_index(sessions, *, tz=None, now=None):
@@ -61,12 +62,12 @@ def focus_start_index(sessions, *, tz=None, now=None):
             if isinstance(raw, dict) and (raw.get("source") in RESTORE_SOURCES or raw.get("synthetic") or raw.get("restored")):
                 continue
             segment = raw if isinstance(raw, FocusSegment) else segment_from_record(raw, index)
-            if segment is None or segment.validation_error(now or datetime.now().astimezone()):
+            if segment is None or segment.validation_error(now or as_beijing()):
                 continue
             # Cached presence intervals can show a live chart, but are not evidence of a new start.
             if str(segment.segment_id).startswith(("display-live-device:", "display-live-remote", "presence:", "remote-live:")):
                 continue
-            stamp = segment.start_at.astimezone(tz) if tz is not None else segment.start_at.astimezone()
+            stamp = as_beijing(segment.start_at)
             valid_facts.append(segment)
             key = (segment.device_id, segment.session_id or segment.segment_id)
             if key not in firsts or stamp < firsts[key]:
@@ -97,13 +98,19 @@ def get_actual_work_start(events, day: date, *, tz=None, sessions=None, now=None
         if metadata.get("source") in RESTORE_SOURCES or metadata.get("restored"):
             continue
         try:
-            stamp = datetime.fromisoformat(str(row.get("occurred_at", "")).replace("Z", "+00:00"))
-            stamp = stamp.astimezone(tz) if tz is not None else stamp.astimezone()
+            stamp = parse_datetime(str(row.get("occurred_at", "")))
+            stamp = as_beijing(stamp)
         except (ValueError, TypeError, OverflowError):
             continue
         if stamp.date() == day and stamp.hour >= 6:
             candidates.append(stamp)
     return min(candidates) if candidates else None
+
+
+def event_instant(row) -> float:
+    """UTC 与带偏移的本地账本按真实时刻排序，不能比较 ISO 文本。"""
+    stamp = parse_timestamp(row.get("occurred_at"))
+    return stamp.timestamp() if stamp else float("-inf")
 
 
 def discipline_events(events, day: date | None = None):
@@ -115,9 +122,9 @@ def discipline_events(events, day: date | None = None):
     for row in rows:
         if row.get("event_type") == "finish_work":
             key = row.get("event_date")
-            if key not in final_finishes or str(row.get("occurred_at")) > str(final_finishes[key].get("occurred_at")):
+            if key not in final_finishes or event_instant(row) > event_instant(final_finishes[key]):
                 final_finishes[key] = row
-    for row in sorted(rows, key=lambda r: str(r.get("occurred_at", ""))):
+    for row in sorted(rows, key=event_instant):
         if row.get("event_type") == "finish_work" and row is not final_finishes.get(row.get("event_date")):
             continue
         if row.get("event_type") == "start_work":
@@ -135,7 +142,7 @@ def _event_fingerprint(row) -> str:
     payload["explanation"] = payload.get("explanation") or ""
     try:
         from datetime import timezone
-        payload["occurred_at"] = datetime.fromisoformat(str(payload["occurred_at"]).replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
+        payload["occurred_at"] = parse_datetime(str(payload["occurred_at"])).astimezone(timezone.utc).isoformat()
     except (ValueError, TypeError):
         pass
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -250,11 +257,11 @@ class DisciplineSettings:
 
     def start_at(self, day: date) -> datetime:
         hour, minute = (int(part) for part in self.start_time.split(":"))
-        return datetime.combine(day, time(hour, minute)).astimezone()
+        return datetime.combine(day, time(hour, minute), BEIJING_TIMEZONE)
 
     def finish_at(self, day: date) -> datetime:
         hour, minute = (int(part) for part in self.finish_time.split(":"))
-        result = datetime.combine(day, time(hour, minute)).astimezone()
+        result = datetime.combine(day, time(hour, minute), BEIJING_TIMEZONE)
         start = self.start_at(day)
         return result + timedelta(days=1) if result <= start else result
 
@@ -317,12 +324,17 @@ class DisciplineStore:
         self.coach_messages = self.coach_messages[-500:]
 
     def coach_messages_for_day(self, day: date) -> list[dict[str, Any]]:
-        return [dict(row) for row in self.coach_messages if row.get("event_date") == day.isoformat()]
+        # Interaction messages belong to the instant's Beijing day, unlike
+        # explicit settlement/plan event_date fields in the discipline ledger.
+        return [dict(row) for row in self.coach_messages
+                if (parse_timestamp(row.get("occurred_at")).date().isoformat()
+                    if parse_timestamp(row.get("occurred_at")) else row.get("event_date")) == day.isoformat()]
 
     def mark_coach_messages_read(self, day):
         changed = False
+        identifiers = {row["id"] for row in self.coach_messages_for_day(day)}
         for row in self.coach_messages:
-            if row.get("event_date") == day.isoformat() and not row.get("read"):
+            if row.get("id") in identifiers and not row.get("read"):
                 row["read"] = True; changed = True
         if changed: self._save()
 
@@ -527,12 +539,12 @@ class DisciplineStore:
 
     def events_for_day(self, day: date) -> list[dict[str, Any]]:
         key = day.isoformat()
-        return [dict(row) for row in self.events if row.get("event_date") == key]
+        return sorted((dict(row) for row in self.events if row.get("event_date") == key), key=event_instant)
 
     def events_for_week(self, day: date) -> list[dict[str, Any]]:
         monday = day - timedelta(days=day.weekday())
         sunday = monday + timedelta(days=6)
-        return [dict(row) for row in self.events if monday.isoformat() <= str(row.get("event_date")) <= sunday.isoformat()]
+        return sorted((dict(row) for row in self.events if monday.isoformat() <= str(row.get("event_date")) <= sunday.isoformat()), key=event_instant)
 
     def due_explanations(self) -> list[dict[str, Any]]:
         pending_ids = {str(item.get("event_id")) for item in self.pending_explanations}
@@ -646,7 +658,7 @@ class DisciplineEngine:
         ]
         if not candidates:
             return 0
-        latest = max(candidates, key=lambda row: str(row.get("occurred_at") or ""))
+        latest = max(candidates, key=event_instant)
         metadata = latest.get("metadata") if isinstance(latest.get("metadata"), dict) else {}
         return max(0, int(metadata.get("remaining_seconds", 0) or 0))
 
@@ -948,7 +960,7 @@ class DisciplineEngine:
 
     def daily_summary(self, day: date, today_seconds: int, week_seconds: int, *, sessions=_SESSION_UNSET) -> dict[str, Any]:
         events = self.store.events_for_day(day)
-        progress = self.progress(today_seconds, week_seconds, datetime.combine(day, time(23,59)).astimezone())
+        progress = self.progress(today_seconds, week_seconds, datetime.combine(day, time(23,59), BEIJING_TIMEZONE))
         late = [row for row in events if row.get("event_type") == "late_start"]
         breaks = [row for row in events if row.get("event_type") == "long_break"]
         finishes = [row for row in events if row.get("event_type") == "early_finish"]
@@ -966,7 +978,7 @@ class DisciplineEngine:
                 try: time.fromisoformat(candidate)
                 except ValueError: continue
                 planned_clock = candidate; break
-        planned = datetime.combine(day, time.fromisoformat(planned_clock), actual_start.tzinfo if actual_start else None) if planned_clock else None
+        planned = datetime.combine(day, time.fromisoformat(planned_clock), BEIJING_TIMEZONE) if planned_clock else None
         late_minutes = max(0, int((actual_start - planned).total_seconds() // 60)) if actual_start and planned and not self.store.is_exempt(day) else 0 if self.store.is_exempt(day) or not historical else None
         display_events = list(discipline_events(events, day))
         if callable(self.focus_sessions_provider):
@@ -985,7 +997,7 @@ class DisciplineEngine:
         finish_event = next((row for row in reversed(events) if row.get("event_type") == "finish_work"), None)
         rest_seconds = 0
         break_start = None
-        for row in sorted(events, key=lambda item: str(item.get("occurred_at") or "")):
+        for row in sorted(events, key=event_instant):
             try:
                 stamp = as_beijing(datetime.fromisoformat(str(row.get("occurred_at"))))
             except (ValueError, TypeError):
@@ -1033,6 +1045,6 @@ class DisciplineEngine:
         if not row:
             return ""
         try:
-            return datetime.fromisoformat(str(row["occurred_at"])).astimezone().strftime("%H:%M")
+            return format_clock(row["occurred_at"])
         except (KeyError, TypeError, ValueError):
             return ""

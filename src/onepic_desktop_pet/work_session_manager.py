@@ -1,6 +1,10 @@
-"""Durable task-attributed focus sessions."""
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+Durable task-attributed focus sessions."""
 
 from __future__ import annotations
+
+from .time_service import now_beijing, parse_timestamp
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -23,9 +27,10 @@ class WorkSession:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "WorkSession":
+        start = parse_timestamp(value.get("started_at"))
         return cls(
             id=str(value.get("id") or uuid4().hex),
-            date=str(value.get("date") or str(value.get("started_at", ""))[:10]),
+            date=str(value.get("date") or (start.date().isoformat() if start else "")),
             started_at=str(value.get("started_at") or ""),
             ended_at=str(value.get("ended_at") or ""),
             seconds=max(0, int(value.get("seconds", 0) or 0)),
@@ -37,7 +42,7 @@ class WorkSession:
 class WorkSessionManager:
     def __init__(self, path=None, *, now_provider: Callable[[], datetime] | None = None, persist: bool = True) -> None:
         self.path = path or local_data_path("work_sessions.json")
-        self._now = now_provider or (lambda: datetime.now().astimezone())
+        self._now = (lambda: now_beijing(now_provider))
         self.persist = bool(persist)
         raw = read_json(self.path, [])
         self._sessions = [WorkSession.from_dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []

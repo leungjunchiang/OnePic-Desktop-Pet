@@ -1,6 +1,10 @@
-"""Curated, human-readable milestones rather than a raw application log."""
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+Curated, human-readable milestones rather than a raw application log."""
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -31,13 +35,13 @@ class TimelineEvent:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "TimelineEvent":
         kind = str(value.get("type") or "manual")
-        return cls(str(value.get("id") or uuid4().hex), str(value.get("date") or today_key())[:10], str(value.get("time") or "")[:5], kind if kind in ALLOWED_TYPES else "manual", str(value.get("title") or "未命名记录")[:240], str(value.get("description") or "")[:1000], str(value.get("source") or "manual")[:120], str(value.get("related_task_id") or "") or None, str(value.get("related_countdown_id") or "") or None, bool(value.get("important", False)), str(value.get("created_at") or datetime.now().astimezone().isoformat()))
+        return cls(str(value.get("id") or uuid4().hex), str(value.get("date") or today_key())[:10], str(value.get("time") or "")[:5], kind if kind in ALLOWED_TYPES else "manual", str(value.get("title") or "未命名记录")[:240], str(value.get("description") or "")[:1000], str(value.get("source") or "manual")[:120], str(value.get("related_task_id") or "") or None, str(value.get("related_countdown_id") or "") or None, bool(value.get("important", False)), str(value.get("created_at") or now_beijing().isoformat()))
 
 
 class TimelineManager:
     def __init__(self, path=None, *, now_provider: Callable[[], datetime] | None = None, persist: bool = True) -> None:
         self.path = path or local_data_path("timeline_events.json")
-        self._now = now_provider or (lambda: datetime.now().astimezone())
+        self._now = (lambda: now_beijing(now_provider))
         self.persist = bool(persist)
         raw = read_json(self.path, [])
         self._items = [TimelineEvent.from_dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []

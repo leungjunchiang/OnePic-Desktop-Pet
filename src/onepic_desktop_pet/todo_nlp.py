@@ -1,4 +1,6 @@
-"""High-confidence Chinese todo extraction for the chat fast path.
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+High-confidence Chinese todo extraction for the chat fast path.
 
 The model is still responsible for ambiguous natural language.  This module
 only handles explicit requests whose date/time can be understood without a
@@ -9,6 +11,8 @@ questions and date-only statements cannot mutate local storage.
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 import re
 from datetime import date, datetime
@@ -303,7 +307,7 @@ def parse_explicit_todo_request(
     permission = validate_todo_creation_intent(text)
     if not permission.allowed:
         return None
-    current = (now or (lambda: datetime.now().astimezone()))().date()
+    current = (now or (lambda: now_beijing()))().date()
     # No date in the user's request means an untimed sticky Todo, not a task
     # scheduled for the creation day.  TodoManager keeps its legacy date
     # compatibility field separately via ``date_explicit=False``.

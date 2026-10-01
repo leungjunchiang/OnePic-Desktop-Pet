@@ -1,4 +1,6 @@
-"""Isolated, incremental Todo synchronization for Lili.
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+Isolated, incremental Todo synchronization for Lili.
 
 Todo is intentionally a separate synchronization domain.  This module owns
 only the local Todo queue/cursor and the ``todos`` RPCs; it never calls the
@@ -15,6 +17,8 @@ UI semantics remain unchanged.
 """
 
 from __future__ import annotations
+
+from .time_service import format_clock, parse_server_datetime
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -109,7 +113,7 @@ def _iso_timestamp(value: Any, *, fallback: str) -> str:
 def _now_iso(clock: Callable[[], datetime] | None = None) -> str:
     """Return an aware ISO timestamp for queue/state bookkeeping."""
 
-    current = clock() if clock is not None else datetime.now().astimezone()
+    current = clock() if clock is not None else datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
     return current.isoformat()
@@ -750,9 +754,9 @@ class TodoSyncService:
         date_value = str(metadata.get("date") or "")[:10]
         time_value = str(metadata.get("time") or "")[:5] or None
         if not date_value and due_at:
-            date_value = due_at[:10]
+            date_value = parse_server_datetime(due_at).date().isoformat()
         if not time_value and due_at and len(due_at) >= 16:
-            time_value = due_at[11:16]
+            time_value = format_clock(parse_server_datetime(due_at))
         value = existing.to_dict() if existing is not None else {}
         priority = remote.get("priority")
         if priority is not None:

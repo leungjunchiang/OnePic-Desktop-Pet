@@ -1,4 +1,6 @@
-"""维护六毛的长期摘要与最近三十轮完整聊天。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+维护六毛的长期摘要与最近三十轮完整聊天。
 
 本模块只接收用户与六毛的聊天文本，不读取项目、文件、窗口标题或开发上下文。
 最近三十轮（最多六十条消息）保持原文；更早内容滚动压缩为有长度上限的摘要，
@@ -7,6 +9,8 @@
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing, parse_timestamp
 
 import json
 import uuid
@@ -23,6 +27,11 @@ MAX_SUMMARY_CHARS = 1800
 MAX_CHAT_HISTORY_SESSIONS = 20
 MAX_CHAT_HISTORY_MESSAGES = 120
 MAX_CHAT_HISTORY_TEXT_CHARS = 4000
+
+
+def _history_epoch(value) -> float:
+    stamp = parse_timestamp(value)
+    return stamp.timestamp() if stamp else float("-inf")
 
 
 @dataclass(frozen=True)
@@ -281,7 +290,7 @@ class ChatHistoryStore:
         """按最近更新时间返回当前会话和历史会话。"""
 
         values = [self._as_session(item) for item in self._sessions]
-        values.sort(key=lambda item: item.updated_at, reverse=True)
+        values.sort(key=lambda item: _history_epoch(item.updated_at), reverse=True)
         return tuple(values)
 
     def get(self, session_id: str) -> ChatHistorySession | None:
@@ -530,7 +539,7 @@ class ChatHistoryStore:
 
     def _trim_sessions(self) -> None:
         self._sessions.sort(
-            key=lambda item: str(item.get("updated_at") or ""),
+            key=lambda item: _history_epoch(item.get("updated_at")),
             reverse=True,
         )
         self._sessions = self._sessions[: self.max_sessions]
@@ -539,7 +548,7 @@ class ChatHistoryStore:
 
     @staticmethod
     def _now() -> str:
-        return datetime.now().isoformat(timespec="seconds")
+        return now_beijing().isoformat(timespec="seconds")
 
     @staticmethod
     def _title_from(content: str) -> str:

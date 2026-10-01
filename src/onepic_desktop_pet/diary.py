@@ -1,10 +1,14 @@
-"""维护只保存在本机的六毛每日陪伴统计与相册路径。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+维护只保存在本机的六毛每日陪伴统计与相册路径。
 
 统计只包含日期、计时秒数衍生指标、完成次数和互动次数，不保存任务名、聊天内容、窗口标题
 或用户输入。日期变化时自动开始新记录，历史工作卡以 PNG 保存到本机相册目录。
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 import json
 from collections.abc import Callable
@@ -39,7 +43,7 @@ class DailyCompanionStats:
         self._explicit_path = path is not None
         self._account_id = str(account_id or "").strip()
         self.path = path or diary_state_path(self._account_id)
-        self._now = now_provider or datetime.now
+        self._now = (lambda: now_beijing(now_provider))
         self._persist = bool(persist)
         self.date = self._now().date().isoformat()
         self.completed_tasks = 0

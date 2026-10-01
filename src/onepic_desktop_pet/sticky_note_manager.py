@@ -1,6 +1,10 @@
-"""A tiny durable text note, intentionally separate from the Todo list."""
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+A tiny durable text note, intentionally separate from the Todo list."""
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 from datetime import datetime
 from typing import Any, Callable
@@ -20,7 +24,7 @@ class StickyNoteManager:
         persist: bool = True,
     ) -> None:
         self.path = path or local_data_path("sticky_note.json")
-        self._now = now_provider or (lambda: datetime.now().astimezone())
+        self._now = (lambda: now_beijing(now_provider))
         self.persist = bool(persist)
         raw = read_json(self.path, {})
         self.text = str(raw.get("text") or "")[:4000] if isinstance(raw, dict) else ""

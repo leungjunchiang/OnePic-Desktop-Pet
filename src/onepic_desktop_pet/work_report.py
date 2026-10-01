@@ -1,4 +1,6 @@
-"""实际开工复用时间轴背后的原始 FocusSession 和本地 06:00 口径，专注分析仍从自然日区间派生。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+实际开工复用时间轴背后的原始 FocusSession 和北京时间 06:00 口径，专注分析仍从自然日区间派生。
 按需计算并展示六毛工作报告，不生成或保存报告图片。
 
 报告只读取当前登录账号的本地专注历史、当前计时器和最近一次自习室同步
@@ -38,6 +40,7 @@ from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore
 from .focus_segments import FocusSegment, parse_focus_timestamp
 from .work_timer import WorkTimerModel, format_work_duration
 from .lifecycle_log import lifecycle_log
+from .time_service import now_beijing, to_beijing
 
 
 class ReportTimerSnapshot:
@@ -467,9 +470,7 @@ def build_work_report(
 ) -> dict[str, Any]:
     """Build an account-scoped report snapshot without writing a file."""
 
-    moment = now or datetime.now(BEIJING_TIMEZONE)
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=BEIJING_TIMEZONE)
+    moment = to_beijing(now) if now is not None else now_beijing()
     summary = analytics.summary(moment)
     selected_key = str(selected_range[0]).strip().casefold() if selected_range else ""
     selected_key = selected_key if selected_key in REPORT_PERIODS else ""
@@ -878,7 +879,7 @@ def build_work_report(
         ),
     }
     from .discipline import get_actual_work_start
-    selected_day = selected_range[1] if selected_range and selected_key == "day" else moment.astimezone().date()
+    selected_day = selected_range[1] if selected_range and selected_key == "day" else moment.astimezone(BEIJING_TIMEZONE).date()
     facts = analytics.range_segments(datetime(1970, 1, 1, tzinfo=BEIJING_TIMEZONE),
         analytics.current_time()+timedelta(seconds=1), extra_segments=display_live_segments or None)
     actual_start = get_actual_work_start(work_events or [], selected_day, sessions=facts, now=analytics.current_time())

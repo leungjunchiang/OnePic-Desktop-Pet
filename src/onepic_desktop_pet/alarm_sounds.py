@@ -1,4 +1,6 @@
-"""Small, private library for user-imported alarm sounds.
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+Small, private library for user-imported alarm sounds.
 
 The library never scans the user's Music folder.  A sound enters Lili only
 after the user chooses one file in the native file picker, and the selected
@@ -6,6 +8,8 @@ file is copied into Lili's stable per-user data directory.
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -110,7 +114,7 @@ class AlarmSoundLibrary:
             display_name=(display_name or source_path.stem).strip()[:160] or "自定义音频",
             imported_path=str(target),
             original_filename=source_path.name[:240],
-            created_at=datetime.now().astimezone().isoformat(),
+            created_at=now_beijing().isoformat(),
         )
         self._items.append(sound)
         self._save()

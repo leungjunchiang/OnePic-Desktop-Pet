@@ -1,6 +1,10 @@
-"""六毛钱袋：钱袋总览、工资条、账本、小卖部、仓库和生活图鉴。"""
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+六毛钱袋：钱袋总览、工资条、账本、小卖部、仓库和生活图鉴。"""
 
 from __future__ import annotations
+
+from .time_service import format_clock
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -260,7 +264,7 @@ class EconomyDialog(QDialog):
         for event in self.ledger.ledger_events(self.ledger_filter.currentText()):
             amount = int(event.amount)
             sign = "+" if amount > 0 else ""
-            stamp = event.created_at[11:16] if len(event.created_at) >= 16 else ""
+            stamp = format_clock(event.created_at)
             category = CATEGORY_LABELS.get(event.category, event.category)
             self.events.addItem(
                 f"{event.occurred_on} {stamp}　{category}\n"

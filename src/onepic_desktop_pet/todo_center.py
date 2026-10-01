@@ -1,4 +1,6 @@
-"""勾选配置使用统一矢量绘制。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+勾选配置使用统一矢量绘制。
 Unified Todo Center for tasks, reminders, countdowns and anniversaries.
 
 The desktop CompactTodo remains intentionally small. This window reads the
@@ -7,6 +9,8 @@ second Todo record.
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 from dataclasses import dataclass
 from datetime import date
@@ -157,7 +161,7 @@ class _ItemEditor(QDialog):
         self.date.setCalendarPopup(True)
         self.date.setDisplayFormat("yyyy-MM-dd")
         self.date.setKeyboardTracking(False)
-        self.date.setDate(QDate.currentDate())
+        self.date.setDate(QDate.fromString(now_beijing().date().isoformat(), Qt.DateFormat.ISODate))
         self.no_date = QCheckBox("不设日期", self)
         self.no_date.toggled.connect(self.date.setDisabled)
         self.date_row = QWidget(self)

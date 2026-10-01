@@ -1,6 +1,10 @@
-"""Small yearly/one-off anniversary store."""
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+Small yearly/one-off anniversary store."""
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -28,7 +32,7 @@ class Anniversary:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Anniversary":
         repeat = str(value.get("repeat") or "none")
-        return cls(str(value.get("id") or uuid4().hex), str(value.get("title") or "未命名纪念日")[:240], str(value.get("date") or ""), repeat if repeat in {"none", "yearly"} else "none", str(value.get("category") or "personal")[:30], bool(value.get("show_on_desktop", False)), [str(item) for item in value.get("reminder_offsets", []) if item] if isinstance(value.get("reminder_offsets", []), list) else [], max(0, min(365, int(value.get("show_before_days", 7) or 0))), str(value.get("acknowledged_date") or "") or None, str(value.get("created_at") or datetime.now().astimezone().isoformat()), str(value.get("note") or "")[:500])
+        return cls(str(value.get("id") or uuid4().hex), str(value.get("title") or "未命名纪念日")[:240], str(value.get("date") or ""), repeat if repeat in {"none", "yearly"} else "none", str(value.get("category") or "personal")[:30], bool(value.get("show_on_desktop", False)), [str(item) for item in value.get("reminder_offsets", []) if item] if isinstance(value.get("reminder_offsets", []), list) else [], max(0, min(365, int(value.get("show_before_days", 7) or 0))), str(value.get("acknowledged_date") or "") or None, str(value.get("created_at") or now_beijing().isoformat()), str(value.get("note") or "")[:500])
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -37,7 +41,7 @@ class Anniversary:
 class AnniversaryManager:
     def __init__(self, path=None, *, now_provider: Callable[[], datetime] | None = None, persist: bool = True) -> None:
         self.path = path or local_data_path("anniversaries.json")
-        self._now = now_provider or (lambda: datetime.now().astimezone())
+        self._now = (lambda: now_beijing(now_provider))
         self.persist = bool(persist)
         raw = read_json(self.path, [])
         self._items = [Anniversary.from_dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []

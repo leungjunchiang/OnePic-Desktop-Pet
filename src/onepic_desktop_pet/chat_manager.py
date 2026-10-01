@@ -1,4 +1,6 @@
-"""
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+
 本模块统一管理六毛的 Agent 连接缓存、异步 AI 请求与本地离线对话降级。
 
 职责范围：
@@ -16,6 +18,8 @@ API 令牌仍由 CredentialStore 放入系统安全凭据库；本模块不会�
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 import os
 import random
@@ -259,7 +263,7 @@ class AgentManager(QObject):
         )
         if not selected:
             return False
-        now = datetime.now()
+        now = now_beijing()
         for provider in selected:
             cached = self.status(provider)
             if not force and cached.state == AgentConnectionState.CONNECTED:
@@ -325,7 +329,7 @@ class AgentManager(QObject):
         detail: str,
         checked_at: datetime | None = None,
     ) -> None:
-        status = AgentStatus(provider, state, detail, checked_at or datetime.now())
+        status = AgentStatus(provider, state, detail, checked_at or now_beijing())
         self._statuses[provider] = status
         self.status_changed.emit(provider, state.value, detail)
 
@@ -470,7 +474,7 @@ class OfflineDialogueManager:
         self.companion = companion
         self.work_status = work_status
         self.focus_stars = focus_stars or (lambda: 0)
-        self.now = now or datetime.now
+        self.now = (lambda: now_beijing(now))
         self.random = random_source or random.Random()
         self.local_context = local_context or (lambda: "")
         self.lyrics_path = lyrics_path or (lambda: "")

@@ -1,4 +1,6 @@
-"""六毛钱袋的本地优先经济核心。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+六毛钱袋的本地优先经济核心。
 
 这里保存的是六毛在荒野王国里的真实生活记录，而不是游戏属性：
 真实专注产生工资；消费只改变钱袋余额；库存、家当、状态、图鉴和称号
@@ -7,6 +9,8 @@
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 import copy
 import uuid
@@ -203,7 +207,7 @@ class EconomyLedger:
         self._explicit_path = path is not None
         self._account_id = str(account_id or "").strip()
         self.path = path or account_local_data_path("economy.json", self._account_id)
-        self._now = now_provider or (lambda: datetime.now().astimezone())
+        self._now = (lambda: now_beijing(now_provider))
         self._persist = bool(persist)
         self._state: dict[str, Any] = {
             "version": 3,

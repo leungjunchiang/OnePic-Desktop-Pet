@@ -1,4 +1,6 @@
-"""基于六毛提醒时钟的本地持久闹钟；关闭、错过与删除拥有独立生命周期。
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+基于六毛提醒时钟的本地持久闹钟；关闭、错过与删除拥有独立生命周期。
 
 An alarm is intentionally separate from a normal Todo reminder: it stays
 active until the user starts work, snoozes it, or closes it.  The manager is
@@ -7,6 +9,8 @@ ever activating the pet window.
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -122,7 +126,7 @@ class AlarmManager:
         persist: bool = True,
     ) -> None:
         self.path = path or local_data_path("alarms.json")
-        self._now = now_provider or (lambda: datetime.now().astimezone())
+        self._now = (lambda: now_beijing(now_provider))
         self.persist = bool(persist)
         # A process must not manufacture a new afternoon retry for a daily
         # alarm whose morning slot passed while the app was not running.  A

@@ -1,4 +1,6 @@
-"""Recovery of verifiable historical focus intervals.
+"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+
+Recovery of verifiable historical focus intervals.
 
 The scanner never interprets daily or lifetime counters as work.  It accepts
 only closed intervals with a stable local identity, then hands them to
@@ -10,6 +12,8 @@ fact permanently.
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 import json
 from collections import Counter
@@ -69,7 +73,7 @@ class FocusHistoryRecovery:
             platform_app_data_root() / "Lili" / "diagnostics"
         )
         self.state_path = self.account_dir / "focus_history_recovery.json"
-        self._now = now_provider or (lambda: datetime.now().astimezone())
+        self._now = (lambda: now_beijing(now_provider))
 
     def run(self, *, force: bool = False) -> FocusHistoryRecoveryReport:
         state = read_json(self.state_path, {})

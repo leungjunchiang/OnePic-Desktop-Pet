@@ -1,4 +1,5 @@
 """
+诊断记录时间使用带时区的北京时间，保留同一绝对时刻。
 本模块为 Lili 提供可选的 Codex、Claude Code、DeepSeek、Kimi 与兼容接口对话后端。
 
 职责范围：
@@ -23,6 +24,8 @@ non-incremental output falls back to the existing complete-response path.
 """
 
 from __future__ import annotations
+
+from .time_service import now_beijing
 
 import json
 import logging
@@ -1291,7 +1294,7 @@ def _write_codex_thread_id(
                     "provider": provider,
                     "transport": transport,
                     "cli_version": str(cli_version or "").strip()[:160],
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "created_at": now_beijing().isoformat(timespec="seconds"),
                 },
                 ensure_ascii=False,
             )
