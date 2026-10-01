@@ -8236,7 +8236,7 @@ class PetWindow(QWidget):
 
     def _refresh_desktop_coaching(self, engine=None):
         """一张头顶卡和一个进度牌；不激活六毛，不创建桌面 Toast。"""
-        from .coaching import projection, case_detail
+        from .coaching import projection, case_detail, completion_feedback
         from .coaching_ui import DesktopCoachingSurface
         from .buddy_identity import buddy_name
         engine = engine or self._ensure_discipline_engine()
@@ -8246,7 +8246,8 @@ class PetWindow(QWidget):
             closed = [row for row in engine.store.coaching_cases if row.get("state") in {"completed", "forgiven"}
                       and previous_states.get(row["id"]) not in {None, "completed", "forgiven"}]
             if closed:
-                self._coaching_success_text = "✓ 已放过" if closed[-1]["state"] == "forgiven" else "✓ 事项已结案"
+                name = buddy_name(self._buddy_display_record(str(closed[-1].get("supervisor_id") or "")))
+                self._coaching_success_text = completion_feedback(closed[-1], name)
                 self._coaching_success_until = time.monotonic() + 1.8
                 QTimer.singleShot(1900, self, self._refresh_desktop_coaching)
         self._desktop_case_states = current_states
@@ -8255,7 +8256,17 @@ class PetWindow(QWidget):
         hidden = (self._close_in_progress or not self.isVisible() or getattr(self, "_manually_hidden", False)
                   or getattr(self, "_fullscreen_hidden", False) or detect_quiet_mode().blocked
                   or (self._social_dialog is not None and self._social_dialog.isVisible()))
-        view = projection(engine, self._discipline_progress_seconds()[0]) if not hidden else {"card": None, "badge": None}
+        today_seconds = self._discipline_progress_seconds()[0]
+        view = projection(engine, today_seconds) if not hidden else {"card": None, "badge": None}
+        observed = getattr(self, "_desktop_debt_observed", None)
+        badge_id = str((view["badge"] or {}).get("id") or "")
+        if badge_id.startswith("observe-debt:"):
+            self._desktop_debt_observed = badge_id
+        elif not hidden and observed and today_seconds >= 3600:
+            self._desktop_debt_observed = None
+            self._coaching_success_text = "✓ 今天表现还行"
+            self._coaching_success_until = time.monotonic() + 1.8
+            QTimer.singleShot(1900, self, self._refresh_desktop_coaching)
         if not hidden and time.monotonic() < getattr(self, "_coaching_success_until", 0):
             view["badge"] = {"badge_text": self._coaching_success_text}
         for key in ("card", "badge"):
@@ -8269,6 +8280,8 @@ class PetWindow(QWidget):
                 surfaces[key] = surface
             name = buddy_name(self._buddy_display_record(str(row.get("supervisor_id") or "")))
             surface.label.setText(case_detail(row, name) if key=="card" else row["badge_text"])
+            if key == "badge" and view.get("badge_count", 1)>1:
+                surface.label.setText(surface.label.text()+f" · +{view['badge_count']-1}")
             if key == "card":
                 count = view.get("card_count", 1)
                 surface.open_button.setText("写说明 / 接受补时" if row.get("required_seconds") else "重新说明" if row.get("state")=="rejected" else "写说明")
@@ -8372,6 +8385,7 @@ class PetWindow(QWidget):
         self._coaching_completion_inflight = set()
         self._coaching_sealed_versions = set()
         self._desktop_case_states = None
+        self._desktop_debt_observed = None
         self._coaching_success_until = 0
 
     def _register_reminder_toast(self, toast) -> None:

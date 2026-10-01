@@ -58,6 +58,15 @@ def case_detail(case, name="搭子"):
     return "\n".join(part for part in parts if part)
 
 
+def completion_feedback(case, name="搭子"):
+    """区分接受说明、真正完成补时和放过；更正事实不能算处罚完成。"""
+    if case.get("state") == "forgiven":
+        return "✓ " + name + " 放过了这件事"
+    if int(case.get("required_seconds") or 0) > 0:
+        return "✓ 补时完成"
+    return "✓ " + name + " 接受了你的说明"
+
+
 def projection(engine, today_seconds=0, now=None):
     """只选一张待回应卡和一个执行牌；观察期不生成云端事件。"""
     moment = local_work_time(now or (engine.now_provider() if callable(engine.now_provider) else None))
@@ -106,6 +115,9 @@ def projection(engine, today_seconds=0, now=None):
             if str(row.get("id")) in owned:
                 continue
             if row.get("event_type") in {"long_break", "late_start"}:
+                value_key = "overtime_seconds" if row["event_type"] == "long_break" else "minutes_late"
+                if int(row.get("metadata", {}).get(value_key) or 0) <= 0:
+                    continue
                 badges.append({"id": "observe:" + str(row.get("id")), "priority": 2 if row["event_type"] == "long_break" else 3,
                                "badge_text": "👀 今天有长休 · 再认真一会" if row["event_type"] == "long_break" else "⚠ 今天迟到了 · 再认真一会",
                                "detail": str(row.get("metadata", {}).get("detail") or "普通提醒，无需提交说明。")})
@@ -113,7 +125,7 @@ def projection(engine, today_seconds=0, now=None):
         yesterday = moment.date() - timedelta(days=1)
         debt = next((row for row in reversed(engine.store.events_for_day(yesterday))
                      if row.get("event_type") == "focus_shortfall" and int(row.get("metadata", {}).get("gap_seconds") or 0) > 0), None)
-        if debt and today_seconds < 3600:
+        if debt and str(debt.get("id")) not in owned and today_seconds < 3600:
             badges.append({"id": "observe-debt:" + yesterday.isoformat(), "priority": 4,
                            "badge_text": "😼 昨天欠账 · 再干 " + format_work_duration(3600 - today_seconds),
                            "detail": "这是今日 60 分钟观察期；昨日实际缺口仍按本周剩余目标分配。"})
@@ -134,6 +146,10 @@ def closed_case_lines(store, day):
         if row.get("required_seconds") and row["state"] == "completed":
             text += " · 补时 " + format_work_duration(int(row["required_seconds"])) + " 完成"
         if row.get("closed_at"):
-            text += " · " + str(row["closed_at"])[11:16]
+            try:
+                closed = datetime.fromisoformat(str(row["closed_at"]).replace("Z", "+00:00"))
+                text += " · " + local_work_time(closed).strftime("%H:%M")
+            except (ValueError, TypeError):
+                pass
         lines.append(text)
     return lines

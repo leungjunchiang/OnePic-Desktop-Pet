@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QDialog
 
-from .coaching import projection, case_detail, closed_case_lines, TERMINAL
+from .coaching import projection, case_detail, completion_feedback, TERMINAL
 from .resources import resource_path
 from .ui_feedback import ACTION_BUTTON_STYLE, begin_button_work, end_button_work, decorate_buttons
 from .work_timer import format_work_duration
@@ -75,7 +75,7 @@ class CoachingPanel(QFrame):
         if self._known is not None:
             for row in engine.store.coaching_cases:
                 if row.get("state") in TERMINAL and self._known.get(row.get("id")) not in TERMINAL | {None}:
-                    self.flash("✓ " + (self._name(row) + " 放过了这件事" if row["state"] == "forgiven" else "事项已结案"))
+                    self.flash(completion_feedback(row, self._name(row)))
         self._known = known
         today, _week = self.progress_provider()
         view = projection(engine, today)
@@ -158,6 +158,7 @@ class CoachingPanel(QFrame):
         except Exception as error: failed(error)
 
     def _show_pending(self):
+        if self._busy: return
         engine = self.engine_provider()
         dialog = QDialog(self); dialog.setWindowTitle("待回应的训导事项"); layout = QVBoxLayout(dialog)
         for row in engine.store.coaching_cases:

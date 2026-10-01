@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QPushButton
-from onepic_desktop_pet.coaching import projection, remaining_seconds, closed_case_lines
+from onepic_desktop_pet.coaching import projection, remaining_seconds, closed_case_lines, completion_feedback
 from onepic_desktop_pet.coaching_ui import CoachingPanel, DesktopCoachingSurface
 from onepic_desktop_pet.discipline import DisciplineEngine, DisciplineStore, BEIJING_TIMEZONE
 from onepic_desktop_pet.focus_segments import FocusSegment
@@ -109,6 +109,29 @@ def test_yesterday_observation_is_60_minutes_not_the_real_gap():
     assert projection(value, 3600)["badge"] is None
     assert value.store.events[0]["metadata"]["gap_seconds"] == 7200
     assert not value.store.coaching_cases
+
+
+def test_formal_yesterday_debt_never_duplicates_the_observation_badge():
+    value = engine()
+    value.store.events = [{"id": "event-1", "event_type": "focus_shortfall",
+                           "event_date": (NOW-timedelta(days=1)).date().isoformat(),
+                           "metadata": {"gap_seconds": 7200}}]
+    value.store.coaching_cases = [case(kind="focus_shortfall")]
+    assert projection(value)["card"] is not None
+    assert projection(value)["badge"] is None
+
+
+def test_corrected_lateness_does_not_leave_an_observation():
+    value = engine()
+    value.store.events = [{"id": "event-1", "event_type": "late_start",
+                           "event_date": NOW.date().isoformat(), "metadata": {"minutes_late": 0}}]
+    assert projection(value)["badge"] is None
+
+
+def test_completion_feedback_distinguishes_approval_makeup_and_forgiveness():
+    assert completion_feedback(case("completed")) == "✓ 补时完成"
+    assert completion_feedback(case("completed", required_seconds=0), "论文搭子") == "✓ 论文搭子 接受了你的说明"
+    assert "放过" in completion_feedback(case("forgiven"))
 
 def make_panel(qt, value, callbacks):
     def rpc(name, body, done, fail): callbacks.append((name, body, done, fail))
