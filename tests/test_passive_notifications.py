@@ -78,11 +78,15 @@ def test_windows_style_prepared_before_first_show(pet, monkeypatch):
     from onepic_desktop_pet.coaching_ui import DesktopCoachingSurface
     surface = DesktopCoachingSurface(window, lambda: None)
     events = []
-    monkeypatch.setattr('onepic_desktop_pet.window.sys.platform', 'win32')
+    # 只替换被测组件的平台依赖，不能修改进程共享 sys.platform，
+    # 否则 macOS Qt 事件处理会误入 Windows 的 ctypes 分支。
     monkeypatch.setattr(window, '_apply_native_window_policy_for_widget', lambda widget, **kw: events.append(('prepare', widget.isVisible())))
     original = surface.show
     monkeypatch.setattr(surface, 'show', lambda: (events.append(('show', surface.isVisible())), original()))
-    window._show_nonactivating(surface)
+    # 窗口销毁前恢复平台，macOS focus bridge 仍走自己的清理路径。
+    with monkeypatch.context() as platform_patch:
+        platform_patch.setattr('onepic_desktop_pet.window.sys', SimpleNamespace(platform='win32'))
+        window._show_nonactivating(surface)
     assert events == [('prepare', False), ('show', False)]
     surface.close(); surface.deleteLater()
 
