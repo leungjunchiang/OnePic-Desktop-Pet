@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""本地有界诊断；可选网络返回字节统计不记录凭据、查询参数或消息正文。
 
 Low-overhead lifecycle tracing for native-exit investigations.
 
@@ -15,6 +15,8 @@ from .time_service import now_beijing
 
 import json
 import logging
+import os
+import time
 import threading
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -88,6 +90,23 @@ def lifecycle_log_path() -> Path | None:
     """Return the active log path, if lifecycle logging was configured."""
 
     return _CONFIGURED_PATH
+
+
+def network_response_log(method: str, path: str, size: int, started: float) -> None:
+    """按需开启；统计实际响应字节和耗时，不上传日志、不额外请求。"""
+    if os.environ.get("LILI_NETWORK_DIAGNOSTICS") != "1":
+        return
+    route = path.split("?", 1)[0]
+    if route.startswith("/rest/v1/rpc/"):
+        route = "rpc:" + route.rsplit("/", 1)[-1]
+    elif route.startswith("/auth/"):
+        route = "auth"
+    elif route.startswith("/rest/v1/"):
+        route = "table:" + route.split("/")[3]
+    else:
+        route = "/" + route.strip("/").split("/", 1)[0]
+    lifecycle_log("network.response", method=method, route=route,
+                  response_bytes=max(0, int(size)), elapsed_ms=round((time.monotonic()-started)*1000, 1))
 
 
 def _object_state(obj: object) -> dict[str, Any]:

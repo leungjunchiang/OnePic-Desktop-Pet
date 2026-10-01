@@ -1,4 +1,4 @@
-"""普通成功反馈复用页内标签，不创建系统对话框。
+"""本地闹钟独立调度与 occurrence 去重；普通成功反馈复用页内标签。
 
 北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
 
@@ -5505,13 +5505,13 @@ class PetWindow(QWidget):
             self.show_speech(f"提醒：{reminder.title}", 5600)
 
     def _check_local_alarms(self, quiet=None) -> None:
-        """Present due alarms as a focused, one-time foreground card."""
+        """本地认领一次 occurrence，以不抢焦点的卡片展示。"""
 
         # A card can be temporarily hidden/minimized while still waiting for
         # the user's action.  Treat the object itself as the lock, otherwise
         # the one-second timer can create a second card during that window.
         if self._alarm_card is not None:
-            lifecycle_log("alarm.scheduler.card_already_owned", self._alarm_card)
+            # 本地持有即跳过，不为每秒 tick 同步写一条磁盘日志。
             return
 
         quiet = quiet or self._quiet_mode_for_work_tick()

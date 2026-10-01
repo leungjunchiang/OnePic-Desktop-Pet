@@ -1,4 +1,4 @@
-"""Qt behavior tests for the one-time foreground alarm card."""
+"""无焦点闹钟卡、共享试听链、重复回调与本地编辑草稿回归。"""
 
 from __future__ import annotations
 
@@ -311,6 +311,10 @@ def test_windows_custom_audio_preview_falls_back_when_mci_cannot_decode(
 
     assert selector._preview_fallback_active is True
     assert selector._preview_fallback_player.play_count == 1
+    backend_instances[0].on_error(277)
+    _app().processEvents()
+    assert selector._preview_fallback_player.play_count == 1
+    assert len(selector._preview_fallback_player.sources) == 1
     selector._preview_stop_timer.timeout.emit()
     assert selector._preview_fallback_active is False
     assert selector._preview_fallback_output.volume == 0.0
@@ -398,6 +402,11 @@ def test_windows_alarm_audio_falls_back_to_qt_when_mci_cannot_decode(
     assert card._using_system_sound is False
     assert card._qt_fallback_active is True
     assert card._qt_fallback_player.play_count == 1
+    backend_instances[0].on_error("mci open failed: 277")
+    _app().processEvents()
+    card._qt_fallback_status_changed(FakeMediaPlayer.MediaStatus.EndOfMedia)
+    assert card._qt_fallback_player.play_count == 1
+    assert len(card._qt_fallback_player.sources) == 1
 
     card.close_from_app()
     _app().processEvents()
@@ -419,3 +428,15 @@ def test_away_recovery_card_has_no_drop_shadow() -> None:
     card = AwayRecoveryCard("idle_10m", 600)
     assert card.graphicsEffect() is None
     card.close_from_app()
+
+
+def test_alarm_editor_only_enables_save_for_actual_changes(tmp_path):
+    _app()
+    alarm=Alarm(id="dirty",title="test",trigger_at="2026-10-01T11:30:00")
+    dialog=AlarmEditDialog([],alarm=alarm,sound_library=AlarmSoundLibrary(tmp_path))
+    assert not dialog.dirty and not dialog.save_button.isEnabled()
+    dialog.title.setText("changed")
+    assert dialog.dirty and dialog.save_button.isEnabled()
+    dialog.title.setText("test")
+    assert not dialog.dirty and not dialog.save_button.isEnabled()
+    dialog.close()

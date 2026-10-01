@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""本地闹钟事实去重：未改设置不写盘，非时间修改不重放已关闭的 occurrence。
 
 基于六毛提醒时钟的本地持久闹钟；关闭、错过与删除拥有独立生命周期。
 
@@ -247,6 +247,7 @@ class AlarmManager:
         item = self.get(alarm_id)
         if item is None:
             raise KeyError(alarm_id)
+        before = asdict(item)
         if "title" in changes:
             item.title = str(changes["title"] or "六毛闹钟").strip()[:240]
         if "trigger_at" in changes:
@@ -269,7 +270,7 @@ class AlarmManager:
             item.allow_during_dnd = bool(changes["allow_during_dnd"])
         if "source_todo_id" in changes:
             item.source_todo_id = str(changes["source_todo_id"] or "") or None
-        if "enabled" in changes:
+        if "enabled" in changes and item.enabled != bool(changes["enabled"]):
             item.enabled = bool(changes["enabled"])
             if item.enabled:
                 item.disabled_at = None
@@ -277,9 +278,14 @@ class AlarmManager:
             else:
                 item.disabled_at = now_local(self._now).isoformat()
                 item.disabled_reason = "user"
+        if asdict(item) == before:
+            return item
+        schedule_changed = any(getattr(item, key) != before[key]
+                               for key in ("trigger_at", "repeat_rule", "enabled"))
         item.active = False
-        item.snooze_until = None
-        item.last_triggered_slot = None
+        if schedule_changed:
+            item.snooze_until = None
+            item.last_triggered_slot = None
         item.schedule_generation = self._next_generation(item)
         self._save()
         return item
@@ -425,7 +431,7 @@ class AlarmManager:
         as a separate reminder.
         """
 
-        current = now_local(now or self._now)
+        current = parse_datetime(now, self._now) if now is not None else now_local(self._now)
         changed = False
 
         # Repair state written by an older build (or by a process that was
@@ -503,6 +509,8 @@ class AlarmManager:
             _slot, item = due[0]
             item.active = True
             item.last_triggered_slot = _slot.isoformat()
+            from .lifecycle_log import lifecycle_log
+            lifecycle_log("alarm.occurrence.claimed", occurrence_id=f"{item.id}:{item.last_triggered_slot}")
             item.snooze_until = None
             claimed.append(item)
             changed = True

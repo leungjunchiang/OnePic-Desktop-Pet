@@ -1,4 +1,4 @@
-"""闹钟与专注恢复卡被动显示、不抢焦点；保留显式设置的响铃和任务栏入口。
+"""本地闹钟与试听共用播放状态机，原生循环避免重复加载；被动显示不抢焦点。
 
 勾选配置使用统一矢量绘制。
 Non-modal UI for managing alarms and showing alarm-style recovery cards.
@@ -12,6 +12,9 @@ Windows 自定义音频通过 MCI 异步播放；只有确认播放已停止后�
 
 from __future__ import annotations
 
+from .alarm_audio_service import AlarmAudioService, QtThreadAudio, create_qt_alarm_audio
+from pathlib import Path
+
 from .time_service import format_clock, now_beijing, parse_datetime
 
 import ctypes
@@ -23,7 +26,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from PySide6.QtCore import QDateTime, QTimeZone, QEvent, QTime, QUrl, Qt, QTimer, Signal
+from PySide6.QtCore import QDateTime, QTimeZone, QEvent, QTime, QUrl, Qt, QTimer, Signal, QObject
 from PySide6.QtGui import QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -123,19 +126,19 @@ class AlarmSoundSelector(QWidget):
         # backend below; the selector uses the same safe route first.  Some
         # Windows installations cannot decode MP3 through MCI (error 277),
         # so keep a Qt player as a *failure-only* fallback.  It is never
-        # stopped synchronously; the timeout merely mutes it.
+        # stopped synchronously; the shared thread bridge stops it asynchronously.
         use_qt_preview = sys.platform != "win32"
         self._preview_output = QAudioOutput(self) if use_qt_preview and QAudioOutput is not None else None
         self._preview_player = QMediaPlayer(self) if use_qt_preview and QMediaPlayer is not None else None
         use_windows_qt_fallback = (
             sys.platform == "win32" and QAudioOutput is not None and QMediaPlayer is not None
         )
-        self._preview_fallback_output = (
-            QAudioOutput(self) if use_windows_qt_fallback else None
-        )
-        self._preview_fallback_player = (
-            QMediaPlayer(self) if use_windows_qt_fallback else None
-        )
+        if use_windows_qt_fallback and issubclass(QMediaPlayer, QObject):
+            # 首次试听时才创建线程；打开配置页不占用音频设备。
+            self._preview_fallback_player = self._preview_fallback_output = None
+        else:
+            self._preview_fallback_output = QAudioOutput(self) if use_windows_qt_fallback else None
+            self._preview_fallback_player = QMediaPlayer(self) if use_windows_qt_fallback else None
         self._preview_fallback_active = False
         self._preview_generation = 0
         self._windows_preview_audio: _WindowsAlarmAudio | None = None
@@ -154,7 +157,7 @@ class AlarmSoundSelector(QWidget):
                 )
             )
             self._preview_player.errorOccurred.connect(
-                lambda *args: self._qt_preview_error(self._preview_player, *args)
+                lambda *args, player=self._preview_player: self._qt_preview_error(player, *args)
             )
         if self._preview_fallback_player is not None and self._preview_fallback_output is not None:
             self._preview_fallback_player.setAudioOutput(self._preview_fallback_output)
@@ -168,7 +171,7 @@ class AlarmSoundSelector(QWidget):
                 )
             )
             self._preview_fallback_player.errorOccurred.connect(
-                lambda *args: self._qt_preview_error(self._preview_fallback_player, *args)
+                lambda *args, player=self._preview_fallback_player: self._qt_preview_error(player, *args)
             )
         self._preview_mci_error.connect(
             self._on_preview_mci_error,
@@ -177,6 +180,8 @@ class AlarmSoundSelector(QWidget):
         self.refresh(selected_id)
 
     def _qt_preview_error(self, player, *args: object) -> None:
+        if player is not self._preview_player and player is not self._preview_fallback_player:
+            return
         lifecycle_log(
             "media.preview.error",
             player,
@@ -194,8 +199,22 @@ class AlarmSoundSelector(QWidget):
         self._preview_fallback_active = False
         if self._preview_fallback_output is not None:
             self._preview_fallback_output.setVolume(0.0)
+        player = self._preview_fallback_player
+        if isinstance(player, QtThreadAudio):
+            self._preview_fallback_player = self._preview_fallback_output = None
+            self._qt_stop_job = player
+            player.stop()
 
     def _play_qt_preview(self, path: str, sound_id: str, *, fallback: bool) -> bool:
+        if fallback and self._preview_fallback_player is None and QMediaPlayer is not None:
+            if sys.platform == "win32" and issubclass(QMediaPlayer, QObject):
+                self._preview_fallback_player, self._preview_fallback_output = create_qt_alarm_audio()
+            else:
+                self._preview_fallback_player = QMediaPlayer(self)
+                self._preview_fallback_output = QAudioOutput(self)
+            self._preview_fallback_player.setAudioOutput(self._preview_fallback_output)
+            self._preview_fallback_player.errorOccurred.connect(
+                lambda *args, player=self._preview_fallback_player: self._qt_preview_error(player, *args))
         player = self._preview_fallback_player if fallback else self._preview_player
         output = self._preview_fallback_output if fallback else self._preview_output
         if player is None:
@@ -203,6 +222,8 @@ class AlarmSoundSelector(QWidget):
         if output is not None:
             output.setVolume(0.7)
         player.setSource(QUrl.fromLocalFile(str(path)))
+        if hasattr(player, "setLoops"):
+            player.setLoops(-1)
         lifecycle_log(
             "media.preview.qt_fallback.play" if fallback else "media.preview.play",
             player,
@@ -276,6 +297,11 @@ class AlarmSoundSelector(QWidget):
 
     def preview(self) -> None:
         self.stop_preview()
+        service = AlarmAudioService.shared()
+        service.play(self, f"preview:{id(self)}:{self._preview_generation}",
+                     self._play_preview_audio, self._stop_preview_backend, priority=0)
+
+    def _play_preview_audio(self) -> None:
         sound_id = self.current_sound_id()
         path = self.library.resolve_path(sound_id)
         if path is None:
@@ -333,6 +359,8 @@ class AlarmSoundSelector(QWidget):
     ) -> None:
         if generation != self._preview_generation:
             return
+        if self._preview_fallback_active:
+            return
         self._windows_preview_audio = None
         lifecycle_log(
             "media.preview.mci.fallback",
@@ -345,8 +373,15 @@ class AlarmSoundSelector(QWidget):
             QApplication.beep()
 
     def stop_preview(self) -> None:
+        if not AlarmAudioService.shared().stop(self):
+            self._stop_preview_backend()
+
+    def _stop_preview_backend(self) -> None:
         self._preview_generation += 1
         self._preview_stop_timer.stop()
+        for player in (self._preview_player, self._preview_fallback_player):
+            if player is not None and hasattr(player, "setLoops"):
+                player.setLoops(1)
         backend = self._windows_preview_audio
         self._windows_preview_audio = None
         if backend is not None:
@@ -358,7 +393,7 @@ class AlarmSoundSelector(QWidget):
             # WinMM, so a button click, dialog close, or automatic timeout
             # cannot block the Qt event loop.
             backend.request_stop()
-        if self._preview_fallback_active:
+        if self._preview_fallback_active or isinstance(self._preview_fallback_player, QtThreadAudio):
             self._mute_qt_fallback_preview()
         if backend is not None:
             return
@@ -390,6 +425,7 @@ class _WindowsAlarmAudio:
     # later alarm could open a second alias for the same looping file.
     _instances: set["_WindowsAlarmAudio"] = set()
     _instances_lock = threading.Lock()
+    _decode_failures: set[tuple] = set()
 
     def __init__(
         self,
@@ -400,6 +436,11 @@ class _WindowsAlarmAudio:
         on_error,
     ) -> None:
         self.path = str(path)
+        try:
+            stat = Path(self.path).stat()
+            self._file_key = (self.path, stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            self._file_key = (self.path, None, None)
         self.volume = max(0, min(100, int(volume or 0)))
         self.alias = f"lili_alarm_{uuid4().hex[:12]}"
         self._on_finished = on_finished
@@ -430,13 +471,15 @@ class _WindowsAlarmAudio:
             self._mci = mci
         except (AttributeError, OSError):
             self._mci = None
-        if self._mci is not None:
+        if self.available:
             with self._instances_lock:
                 self._instances.add(self)
 
     @property
     def available(self) -> bool:
-        return self._mci is not None
+        # waveaudio 不支持 play repeat（实测259）；直接走原Qt原生loop。
+        return (self._mci is not None and not self.path.lower().endswith(".wav")
+                and self._file_key not in self._decode_failures)
 
     @property
     def closed(self) -> bool:
@@ -513,6 +556,10 @@ class _WindowsAlarmAudio:
                     f'open "{safe_path}" type {device_type} alias {self.alias}'
                 )
                 if result:
+                    if result == 277:
+                        if len(self._decode_failures) >= 256:
+                            self._decode_failures.clear()
+                        self._decode_failures.add(self._file_key)
                     error = f"mci open failed: {result}"
                     with self._lock:
                         closed_before_return = not self._opened
@@ -789,6 +836,7 @@ class AlarmCard(QDialog):
         self._using_system_sound = True
         if self._media_player is not None and self._audio_output is not None:
             self._media_player.setAudioOutput(self._audio_output)
+            self._media_player.setLoops(-1)
             self._audio_output.setVolume(max(0, min(100, int(alarm.volume or 0))) / 100)
             self._media_player.mediaStatusChanged.connect(self._media_status_changed)
             self._media_player.playbackStateChanged.connect(
@@ -988,15 +1036,11 @@ class AlarmCard(QDialog):
                     0x0001 | 0x0002 | 0x0010,  # NOMOVE | NOSIZE | NOACTIVATE
                 )
             except (AttributeError, OSError, TypeError, ValueError):
-                # The regular raise/activate path above still presents the
-                # card if the platform API is unavailable or the handle is
-                # not ready yet.  Do not fall back to setWindowFlag here.
+                # 普通 show 已呈现卡片；平台 API 不可用时仍不激活窗口。
                 pass
             return
 
-        # On other platforms, show()/raise_()/activateWindow() already give
-        # the card a foreground presentation.  Do not mutate Qt window flags
-        # after showing it; this keeps the lifecycle safe across backends.
+        # 其他平台保留被动 show，不在显示后修改窗口标志或激活窗口。
 
     @staticmethod
     def _display_trigger(value: str) -> str:
@@ -1052,8 +1096,11 @@ class AlarmCard(QDialog):
         if QAudioOutput is None or QMediaPlayer is None:
             return False
         try:
-            output = QAudioOutput(self)
-            player = QMediaPlayer(self)
+            if sys.platform == "win32" and issubclass(QMediaPlayer, QObject):
+                player, output = create_qt_alarm_audio()
+            else:
+                output = QAudioOutput(self)
+                player = QMediaPlayer(self)
             player.setAudioOutput(output)
             player.mediaStatusChanged.connect(self._qt_fallback_status_changed)
             player.errorOccurred.connect(self._qt_fallback_error)
@@ -1072,11 +1119,16 @@ class AlarmCard(QDialog):
     def _configure_qt_fallback(self, path: str) -> bool:
         if not self._ensure_qt_fallback():
             return False
+        if getattr(self, "_qt_fallback_source", None) == path:
+            return True
         try:
             self._qt_fallback_output.setVolume(
                 max(0, min(100, int(self.alarm.volume or 0))) / 100
             )
             self._qt_fallback_player.setSource(QUrl.fromLocalFile(str(path)))
+            self._qt_fallback_source = path
+            if hasattr(self._qt_fallback_player, "setLoops"):
+                self._qt_fallback_player.setLoops(-1)
         except Exception as exc:  # pragma: no cover - depends on native Qt backend
             lifecycle_log(
                 "media.alarm.qt_fallback.configure_error",
@@ -1088,6 +1140,8 @@ class AlarmCard(QDialog):
         return True
 
     def _play_qt_fallback(self, path: str | None = None) -> bool:
+        if self._qt_fallback_active:
+            return True
         fallback_path = str(path or self._custom_audio_path or "")
         if not fallback_path or not self._configure_qt_fallback(fallback_path):
             return False
@@ -1130,7 +1184,8 @@ class AlarmCard(QDialog):
             and self._state != AlarmPopupState.DISMISSED
             and self._custom_audio
         ):
-            self._qt_fallback_player.play()
+            # 原生 loop 不需要 EndOfMedia 再次 play。
+            return
 
     def _qt_fallback_error(self, *args: object) -> None:
         self._qt_fallback_active = False
@@ -1149,6 +1204,13 @@ class AlarmCard(QDialog):
         self._fallback_to_system()
 
     def _start_alarm_audio(self) -> None:
+        if self._audio_closing or self._state == AlarmPopupState.DISMISSED or self._audio_started:
+            return
+        occurrence = f"alarm:{self.alarm.id}:{self.alarm.last_triggered_slot or self.alarm.trigger_at}"
+        AlarmAudioService.shared().play(self, occurrence,
+            self._start_owned_alarm_audio, self._stop_owned_sound)
+
+    def _start_owned_alarm_audio(self) -> None:
         """Start audio only after the first foreground presentation."""
 
         if self._audio_closing or self._state == AlarmPopupState.DISMISSED or self._audio_started:
@@ -1226,7 +1288,8 @@ class AlarmCard(QDialog):
                     owner="AlarmCard",
                     alarm_id=str(self.alarm.id),
                 )
-                self._media_player.play()
+                # Qt 原生 loop 在解码线程续播，不等待 GUI EndOfMedia 回调。
+                return
 
     def _media_error(self, *args: object) -> None:
         lifecycle_log(
@@ -1306,7 +1369,7 @@ class AlarmCard(QDialog):
         self._qt_fallback_active = False
         if self._qt_fallback_output is not None:
             self._qt_fallback_output.setVolume(0)
-        if self._media_player is not None:
+        if self._media_player is not None or self._qt_fallback_player is not None:
             # Error handling runs from a QMediaPlayer callback.  Queue the
             # stop as well so an error/status signal cannot re-enter native
             # multimedia cleanup synchronously.
@@ -1392,9 +1455,7 @@ class AlarmCard(QDialog):
                 reason="async_winmm_stop",
             )
             self._windows_audio.request_stop()
-            # Defensive process-wide cleanup also covers a card whose Qt
-            # wrapper was retired while its native MCI alias remained open.
-            _WindowsAlarmAudio.request_stop_all()
+            # 只停止当前所有者；全局 stop_all 仅用于应用退出。
             # ``_media_stop_completed`` means that the stop request has been
             # dispatched, not that the daemon MCI call has returned.  The
             # latter is represented by ``_media_drained`` and the queued
@@ -1444,6 +1505,27 @@ class AlarmCard(QDialog):
     def _queue_media_stop(self, reason: str) -> None:
         """Queue a single media stop and return to the caller immediately."""
 
+        if getattr(self, "_qt_stop_job", None) is not None:
+            if self._qt_stop_job.closed:
+                self._media_drained = True
+                self._emit_audio_cleanup_finished()
+            return
+        qt_player = self._qt_fallback_player or self._media_player
+        if isinstance(qt_player, QtThreadAudio):
+            output = self._qt_fallback_output or self._audio_output
+            if output is not None:
+                output.setVolume(0)
+            self._qt_fallback_active = False
+            self._qt_fallback_player = self._media_player = None
+            self._qt_fallback_output = self._audio_output = None
+            self._media_stop_pending = False
+            self._media_stop_completed = True
+            self._media_drained = False
+            self._qt_stop_job = qt_player
+            qt_player.finished.connect(self._qt_stop_complete)
+            qt_player.stop()
+            return
+
         if self._qt_fallback_player is not None:
             # Qt 6.11's Windows backend can block in stop().  Muting and
             # disabling the loop is sufficient for a closing card, and keeps
@@ -1490,7 +1572,15 @@ class AlarmCard(QDialog):
         self._media_stop_pending = True
         self._media_stop_timer.start(0)
 
+    def _qt_stop_complete(self) -> None:
+        self._media_drained = True
+        self._emit_audio_cleanup_finished()
+
     def _stop_sound(self) -> None:
+        if not AlarmAudioService.shared().stop(self):
+            self._stop_owned_sound()
+
+    def _stop_owned_sound(self) -> None:
         """Stop all alarm audio without synchronously blocking a UI action."""
 
         self._audio_closing = True
@@ -1504,6 +1594,9 @@ class AlarmCard(QDialog):
             # operation allowed during an alarm button path.  It returns
             # immediately and prevents a draining song from being audible.
             self._audio_output.setVolume(0)
+        for player in (self._media_player, self._qt_fallback_player):
+            if player is not None and hasattr(player, "setLoops"):
+                player.setLoops(1)
         if self._qt_fallback_output is not None:
             self._qt_fallback_output.setVolume(0)
         self._queue_media_stop("popup_close")
@@ -1784,6 +1877,21 @@ class AlarmEditDialog(QDialog):
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
         self._toggle_weekdays()
+        self._initial_values = self.values()
+        self.finished.connect(self.sound_selector.stop_preview)
+        self.save_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.save_button.setText("保存设置")
+        self.dirty = alarm is None
+        for signal in (self.title.textChanged, self.trigger.dateTimeChanged,
+                       self.repeat.currentIndexChanged, self.linked_todo.currentIndexChanged,
+                       self.sound_selector.changed, self.volume.valueChanged, self.snooze.valueChanged,
+                       *(check.toggled for check in [self.enabled, self.sound, self.allow_dnd, *self.weekday_checks])):
+            signal.connect(self._update_dirty)
+        self._update_dirty()
+
+    def _update_dirty(self, *_args) -> None:
+        self.dirty = self.alarm is None or self.values() != self._initial_values
+        self.save_button.setEnabled(self.dirty)
 
     def _toggle_weekdays(self) -> None:
         self.weekdays.setEnabled(self.repeat.currentData() == "weekly")
@@ -1931,6 +2039,8 @@ class AlarmCenterDialog(QDialog):
             list(self.todos), alarm=alarm, parent=self, sound_library=self.sound_library
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if not dialog.dirty:
             return
         self.alarms.update(alarm.id, **dialog.values())
         self.refresh()

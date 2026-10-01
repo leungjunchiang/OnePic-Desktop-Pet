@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""远端返回量可选本地诊断；闹钟与铃声不进入心跳或社交请求。
 
 Lili 搭子自习室的最小社交客户端与可替换网络后端。
 
@@ -15,6 +15,7 @@ FocusSession 区间派生。密码从不保存；
 from __future__ import annotations
 
 from .time_service import BEIJING_TIMEZONE, now_beijing, parse_server_datetime
+from .lifecycle_log import network_response_log
 
 from contextlib import contextmanager
 import json
@@ -1597,6 +1598,7 @@ class HttpSocialBackend:
         _retry_auth: bool = True,
     ) -> Any:
         payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+        response_started = time.monotonic()
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.client_key:
             headers["apikey" if self.transport == "direct" else "X-Client-Key"] = self.client_key
@@ -1624,6 +1626,7 @@ class HttpSocialBackend:
                         parsed = parsed.replace(tzinfo=timezone.utc)
                     self.last_server_timestamp = parsed.astimezone(BEIJING_TIMEZONE).isoformat()
                 raw = response.read()
+                network_response_log(method, path, len(raw), response_started)
                 return json.loads(raw.decode("utf-8")) if raw else None
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
@@ -1716,12 +1719,14 @@ class HttpSocialBackend:
             headers=headers,
             method="POST",
         )
+        response_started = time.monotonic()
         try:
             with _verified_urlopen(
                 request,
                 timeout=_social_request_timeout(),
             ) as response:
                 raw = response.read()
+                network_response_log("POST", path, len(raw), response_started)
                 return json.loads(raw.decode("utf-8")) if raw else None
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
@@ -2792,12 +2797,14 @@ class LegacyDirectSocialClient:
         if extra_headers:
             headers.update(extra_headers)
         request = urllib.request.Request(f"{self.url}{path}", data=payload, headers=headers, method=method)
+        response_started = time.monotonic()
         try:
             with _verified_urlopen(
                 request,
                 timeout=_social_request_timeout() if timeout is None else timeout,
             ) as response:
                 raw = response.read()
+                network_response_log(method, path, len(raw), response_started)
                 return json.loads(raw.decode("utf-8")) if raw else None
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
