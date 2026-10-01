@@ -3401,6 +3401,7 @@ class PetWindow(QWidget):
         self._last_movement_at = now
         if (
             self.paused
+            or self._fullscreen_hidden
             or self.dragging
             or self._turn_paused
             or self.state is not PetState.WALK

@@ -96,6 +96,24 @@ def test_poll_debounces_both_transitions_and_preserves_position(pet, monkeypatch
     assert window.isVisible() and window.pos() == anchor
 
 
+def test_hidden_walking_pet_keeps_its_restore_position(pet, monkeypatch):
+    from onepic_desktop_pet.behavior import PetState
+    app, window = pet
+    window.move(100, 100)
+    window.state = PetState.WALK
+    window.direction = 1
+    anchor = window.pos()
+    monkeypatch.setattr(window, "_foreground_display_mode", lambda: "fullscreen")
+    window._sync_fullscreen_visibility()
+    window._last_movement_at -= 1.0
+    window._movement_tick()
+    assert window.pos() == anchor
+    monkeypatch.setattr(window, "_foreground_display_mode", lambda: "normal")
+    window._sync_fullscreen_visibility()
+    window._finish_fullscreen_restore()
+    assert window.isVisible() and window.pos() == anchor
+
+
 def test_fullscreen_blocks_watchdog_refresh_coaching_and_new_notifications(pet, monkeypatch):
     app, window = pet
     badge = QLabel("补时中", window, window.speech_bubble.windowFlags())
