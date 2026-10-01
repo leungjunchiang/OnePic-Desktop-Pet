@@ -762,11 +762,16 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
 
 def test_local_effect_uses_visible_duration_pill_and_clears_when_hidden() -> None:
     app, window = _create_window()
+    # The owner/watchdog derives visibility from the real session. An idle
+    # model with a hand-shown focus label is contradictory, and a slow Intel
+    # CI event loop legitimately hides that fake label during processEvents.
+    window.focus_session.start()
     bubble = window.work_duration_bubble
     bubble.set_session("focus", 6 * 60 * 60 + 10, True)
     bubble.move(100, 100)
     bubble.show()
     app.processEvents()
+    window._update_work_duration_bubble()
 
     exclusions = window._local_burst_exclusions()
     assert len(exclusions) == 1
@@ -777,7 +782,8 @@ def test_local_effect_uses_visible_duration_pill_and_clears_when_hidden() -> Non
     assert hard_bounds.width() == pytest.approx(pill.width() + 8.0)
     assert hard_bounds.height() == pytest.approx(pill.height() + 8.0)
 
-    bubble.hide()
+    window.focus_session.finish()
+    window._update_work_duration_bubble()
     app.processEvents()
     assert window._local_burst_exclusions() == ()
     window.close()
