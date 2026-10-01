@@ -1,4 +1,4 @@
-"""动态计划与纪律账本；实际开工复用原始 FocusSession，历史计划快照独立于当前配置。"""
+"""动态计划与纪律账本；原始会话推导开工，搭子事项本地留存且不重复上传。"""
 
 from __future__ import annotations
 
@@ -276,6 +276,8 @@ class DisciplineStore:
             dict(row) for row in raw.get("pending_explanations", []) if isinstance(row, dict)
         ]
         self.seen_nudges = set(str(i) for i in raw.get("seen_nudges", []))
+        self.coach_messages = [dict(row) for row in raw.get("coach_messages", [])
+                               if isinstance(row, dict)][-500:]
         self.rest_days = set(str(i) for i in raw.get("rest_days", []))
         self.synced_events = dict(raw.get("synced_events") or {})
         self.synced_settings_at = str(raw.get("synced_settings_at") or "")
@@ -294,8 +296,24 @@ class DisciplineStore:
                 "fired_rules": sorted(self.fired_rules)[-5_000:],
                 "pending_explanations": self.pending_explanations[-500:],
                 "seen_nudges": sorted(self.seen_nudges)[-500:],
+                "coach_messages": self.coach_messages[-500:],
                 "rest_days": sorted(self.rest_days),
             })
+
+    def remember_coach_message(self, identifier: str, title: str, detail: str, at: datetime) -> None:
+        """保留已读取的搭子事项供今日页查看，不混入纪律上传队列。"""
+        if not identifier or not title.strip() or not detail.strip():
+            return
+        if any(row.get("id") == identifier for row in self.coach_messages):
+            return
+        moment = local_work_time(at)
+        self.coach_messages.append({"id": identifier, "title": title[:100],
+                                    "detail": detail[:1200], "occurred_at": moment.isoformat(),
+                                    "event_date": moment.date().isoformat()})
+        self.coach_messages = self.coach_messages[-500:]
+
+    def coach_messages_for_day(self, day: date) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.coach_messages if row.get("event_date") == day.isoformat()]
 
     def update_settings(self, settings: DisciplineSettings | dict[str, Any]) -> None:
         self.settings = DisciplineSettings.from_dict(
@@ -965,6 +983,7 @@ class DisciplineEngine:
             "unexplained_count": 0 if self.store.is_exempt(day) else sum(1 for row in display_events if row.get("requires_explanation") and not row.get("explanation")),
             "exempt": self.store.is_exempt(day),
             "events": display_events,
+            "coach_messages": self.store.coach_messages_for_day(day),
         }
 
     @staticmethod

@@ -1,4 +1,4 @@
-"""勾选配置使用统一矢量绘制。
+"""勾选配置统一绘制，静默恢复的搭子训导事项保留在应用内。
 专注导航的计划、训导与记录复用统一按钮反馈；统计刷新不读取授权表单；记录只呈现紧凑纪律摘要和已结算事项，分析留在工作报告。"""
 
 from __future__ import annotations
@@ -525,7 +525,10 @@ class DisciplineWorkspace(QWidget):
             if row.get("event_type") == "start_work": detail = late_text
             if exempt and row.get("event_type") not in {"start_work", "rest_day", "cancel_rest_day"}: continue
             lines.append(f"<p><b>{escape(str(row.get('occurred_at', ''))[11:16])}　{title}</b><br>{escape(detail)}</p>")
-        self.today_events.setText("<h3>今日事件</h3>" + ("".join(lines) or "今天没有需要特别记录的纪律事项。"))
+        coach_lines = [f"<p><b>{escape(str(row.get('occurred_at', ''))[11:16])} {escape(str(row.get('title', '')))}</b><br>{escape(str(row.get('detail', '')))}</p>"
+                       for row in today["coach_messages"][-20:]]
+        self.today_events.setText("<h3>今日事件</h3>" + ("".join(lines) or "今天没有需要特别记录的纪律事项。")
+                                 + ("<h3>搭子训导事项</h3>" + "".join(coach_lines) if coach_lines else ""))
         previous_pending = self.today_pending.currentData()
         self.today_pending.clear()
         if not exempt:

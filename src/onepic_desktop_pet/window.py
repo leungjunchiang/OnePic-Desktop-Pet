@@ -1,4 +1,4 @@
-"""勾选配置使用统一矢量绘制。
+"""勾选配置统一绘制，训导首次同步静默，运行期即时消息单窗合并并完整清理。
 
 本模块实现桌面宠物的透明窗口、连续动画、鼠标交互、快捷控制和情境陪伴。
 
@@ -657,6 +657,11 @@ class PetWindow(QWidget):
         self._discipline_sync_has_more = False
         self._discipline_sync_last_attempt_at = 0.0
         self._discipline_sync_unavailable = False
+        self._discipline_notice_baseline_at: datetime | None = None
+        self._discipline_pending_notices: dict = {}
+        self._discipline_toast_notices: dict = {}
+        self._discipline_toast: BuddyReminderToast | None = None
+        self._discipline_notified_ids: set[str] = set()
         # Read-only account-wide display projection.  This is deliberately
         # separate from ``_shared_focus_period_seconds`` so reports, weekly
         # statistics, sync payloads and rewards retain their existing source.
@@ -1180,6 +1185,10 @@ class PetWindow(QWidget):
         self.discipline_tick_timer.setInterval(60_000)
         self.discipline_tick_timer.timeout.connect(self._discipline_tick)
         self.discipline_tick_timer.start()
+        self._discipline_notice_timer = QTimer(self)
+        self._discipline_notice_timer.setSingleShot(True)
+        self._discipline_notice_timer.setInterval(350)
+        self._discipline_notice_timer.timeout.connect(self._flush_discipline_notices)
 
         # Keep the one-second clock strictly presentation-only.  Persistence,
         # reminders and reward bookkeeping are maintenance work and must not
@@ -2618,6 +2627,8 @@ class PetWindow(QWidget):
 
         lifecycle_log("pet_window.close_event.begin", self)
         self._close_in_progress = True
+        self.discipline_tick_timer.stop()
+        self._clear_reminder_toasts()
         # Pause/seal first, then ask workers to stop. Do not hide the pet,
         # bubbles, status item, or Dock integration until every Qt worker has
         # actually drained; an ignored close event must leave a coherent,
@@ -8003,6 +8014,7 @@ class PetWindow(QWidget):
 
         account_id = str(self._active_focus_account_id or "").strip()
         if self._discipline_store is None or self._discipline_account_id != account_id:
+            self._reset_discipline_notifications()
             self._discipline_store = DisciplineStore(
                 account_id, persist=os.environ.get("ONEPIC_USE_DEMO_ASSETS") != "1",
             )
@@ -8081,7 +8093,8 @@ class PetWindow(QWidget):
         if include_config:
             self._discipline_config_read_pending = True
         if (
-            self._discipline_sync_unavailable
+            self._close_in_progress
+            or self._discipline_sync_unavailable
             or self._discipline_sync_inflight
             or not bool(getattr(self.social_client, "signed_in", False))
         ):
@@ -8121,7 +8134,7 @@ class PetWindow(QWidget):
         thread.start()
 
     def _discipline_sync_completed(self, result, account_id: str, thread) -> None:
-        if account_id != str(self._active_focus_account_id or ""):
+        if self._close_in_progress or account_id != str(self._active_focus_account_id or ""):
             return
         try:
             engine = self._ensure_discipline_engine()
@@ -8131,20 +8144,45 @@ class PetWindow(QWidget):
             if self._discipline_sync_has_more:
                 self._discipline_sync_last_attempt_at = 0.0
             accepted = engine.apply_supervision(result.get("supervision") if isinstance(result, dict) else None)
-            if accepted and isinstance(result, dict):
-                for nudge in result.get("nudges", []):
-                    identifier = str(nudge.get("id") or "")
-                    if not identifier or identifier in engine.store.seen_nudges:
+            if (isinstance(result, dict) and isinstance(result.get("nudges"), list)
+                    and not result.get("_sync_offline") and result.get("data_source") != "local_cache"):
+                # Only a successful, explicit inbox response establishes the
+                # baseline. Empty is valid; errors/missing fields are not.
+                observed_at = datetime.now().astimezone()
+                baseline = self._discipline_notice_baseline_at
+                if baseline is None:
+                    self._discipline_notice_baseline_at = observed_at
+                for nudge in result["nudges"]:
+                    if not isinstance(nudge, dict):
                         continue
+                    identifier = str(nudge.get("id") or "")
+                    if not identifier:
+                        continue
+                    seen = identifier in engine.store.seen_nudges
                     engine.store.seen_nudges.add(identifier)
-                    if not detect_quiet_mode().blocked and not engine.store.is_exempt(as_beijing().date()):
-                        from .buddy_identity import buddy_name
-                        peer = self._buddy_display_record(str(nudge.get("supervisor_id") or ""))
-                        title = {"start": "提醒你开工", "rest": "提醒你休息有点久了", "finish": "提醒你准备下班", "progress": "提醒你看看今日进度", "cheer": "给你加油", "take_break": "提醒你休息一下", "return": "喊你回来专注", "rest_more": "让你再歇会儿", "explain": "提醒你处理待说明事项"}.get(nudge.get("kind"), "给你一个轻提醒")
+                    from .buddy_identity import buddy_name
+                    peer = self._buddy_display_record(str(nudge.get("supervisor_id") or ""))
+                    action = {"start": "提醒你开工", "rest": "提醒你休息有点久了", "finish": "提醒你准备下班", "progress": "提醒你看看今日进度", "cheer": "给你加油", "take_break": "提醒你休息一下", "return": "喊你回来专注", "rest_more": "让你再歇会儿", "explain": "提醒你处理待说明事项"}.get(nudge.get("kind"), "给你一个轻提醒")
+                    title = buddy_name(peer) + action
+                    detail = str((nudge.get("message") or "") if "message" in nudge else
+                                 "来自你允许的搭子；是否开工或下班由你决定。").strip()
+                    try:
+                        created = datetime.fromisoformat(str(nudge.get("created_at") or "").replace("Z", "+00:00"))
+                        if created.tzinfo is None:
+                            raise ValueError("untrusted timestamp")
+                    except (ValueError, TypeError, OverflowError):
+                        created = None
+                    engine.store.remember_coach_message(identifier, title, detail, created or observed_at)
+                    # Reconnect/hydration can deliver previously unseen old
+                    # IDs. Timestamp + first-response fence keeps them silent.
+                    if (accepted and not seen and baseline is not None and created is not None
+                            and baseline < created <= observed_at and not self._close_in_progress
+                            and not engine.store.is_exempt(as_beijing().date())):
                         from .discipline import DisciplineNotice
-                        self._show_discipline_notice(DisciplineNotice("buddy_nudge", buddy_name(peer) + title,
-                            "来自你允许的搭子；是否开工或下班由你决定。", "info", identifier))
+                        self._show_discipline_notice(DisciplineNotice("buddy_nudge", title, detail, "info", identifier))
                 engine.store._save()
+            if self._social_dialog is not None and self._social_dialog.isVisible():
+                self._social_dialog._refresh_focus_goals()
             if self._discipline_dialog is not None and self._discipline_dialog.isVisible():
                 self._discipline_dialog._render_summaries()
         except Exception:
@@ -8170,20 +8208,82 @@ class PetWindow(QWidget):
             QTimer.singleShot(0, self, self._sync_discipline_state)
 
     def _show_discipline_notice(self, notice) -> None:
-        """Show a low-focus toast; the toast itself never activates the app."""
+        """本地持续纪律只留在应用内；新搭子即时事项去重后合并显示。"""
 
-        if detect_quiet_mode().blocked:
+        if (self._close_in_progress or notice.event_type != "buddy_nudge"
+                or self._discipline_notice_baseline_at is None):
             return
-        toast = BuddyReminderToast(
-            notice.title, notice.detail,
-            mini_title=f"📋 {notice.title[:18]}",
-        )
-        toast.open_requested.connect(self.show_discipline_dialog)
-        self._buddy_reminder_toasts = [item for item in self._buddy_reminder_toasts if item.isVisible()]
-        if len(self._buddy_reminder_toasts) >= 4:
-            self._buddy_reminder_toasts.pop(0).close()
-        toast.show_passive(stack_index=len(self._buddy_reminder_toasts))
+        identifier = str(notice.event_id or "").strip()
+        if not identifier or identifier in self._discipline_notified_ids:
+            return
+        self._discipline_notified_ids.add(identifier)
+        if (not str(notice.title or "").strip() or not str(notice.detail or "").strip()
+                or detect_quiet_mode().blocked):
+            return
+        self._discipline_pending_notices[identifier] = notice
+        if not self._discipline_notice_timer.isActive():
+            self._discipline_notice_timer.start()
+
+    def _flush_discipline_notices(self) -> None:
+        """短时间多个事项复用一个通知；正文保留，不堆叠独立浮窗。"""
+        self._discipline_notice_timer.stop()
+        pending = self._discipline_pending_notices
+        self._discipline_pending_notices = {}
+        if (not pending or self._close_in_progress or detect_quiet_mode().blocked
+                or self._ensure_discipline_engine().store.is_exempt(as_beijing().date())):
+            return
+        self._discipline_toast_notices.update(pending)
+        # The full local inbox retains all messages; the transient surface
+        # displays only the most recent 20 to keep its geometry bounded.
+        self._discipline_toast_notices = dict(list(self._discipline_toast_notices.items())[-20:])
+        notices = list(self._discipline_toast_notices.values())
+        count = len(notices)
+        title = f"📋 训导主任 · {count} 条新事项"
+        detail = "\n".join(str(item.title) + "：" + str(item.detail) for item in notices[-3:])
+        if count > 3:
+            detail += "\n其余事项可在专注 → 今日查看。"
+        mini = f"📋 {count} 条训导事项"
+        toast = self._discipline_toast
+        if toast is None:
+            toast = BuddyReminderToast(title, detail, mini_title=mini, parent=self)
+            self._discipline_toast = toast
+            toast.open_requested.connect(self._open_discipline_notice)
+            self._register_reminder_toast(toast)
+        else:
+            toast.set_content(title, detail, mini_title=mini)
+        toast.show_passive()
+
+    def _open_discipline_notice(self) -> None:
+        self.open_social_hub()
+        self._social_dialog.open_focus_section(0)
+
+    def _reset_discipline_notifications(self) -> None:
+        timer = getattr(self, "_discipline_notice_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._discipline_pending_notices.clear()
+        self._discipline_notice_baseline_at = None
+        self._discipline_notified_ids.clear()
+        if self._discipline_toast is not None:
+            self._discipline_toast.close()
+        self._discipline_toast_notices.clear()
+
+    def _register_reminder_toast(self, toast) -> None:
         self._buddy_reminder_toasts.append(toast)
+        toast.dismissed.connect(lambda current=toast: self._reminder_toast_closed(current))
+
+    def _reminder_toast_closed(self, toast) -> None:
+        self._buddy_reminder_toasts = [item for item in self._buddy_reminder_toasts if item is not toast]
+        if self._discipline_toast is toast:
+            self._discipline_toast = None
+            self._discipline_toast_notices.clear()
+        toast.deleteLater()
+
+    def _clear_reminder_toasts(self) -> None:
+        self._reset_discipline_notifications()
+        for toast in list(self._buddy_reminder_toasts):
+            toast.close()
+        self._buddy_reminder_toasts.clear()
 
     def show_discipline_dialog(self, *_args) -> None:
         """从用户主动入口跳转到专注中的训导主任页面。"""
@@ -8272,13 +8372,13 @@ class PetWindow(QWidget):
         age_seconds = max(0, (datetime.now(timezone.utc) - stamp).total_seconds()) if stamp else 0
         remaining_ms = max(1, int((NOTIFICATION_LIFETIME_SECONDS - age_seconds) * 1000))
         mini_title = f"{'🟢' if event_type == 'start_work' else '🌙'} {nickname}"
-        toast = BuddyReminderToast(title, detail, mini_title=mini_title, remaining_ms=remaining_ms)
+        toast = BuddyReminderToast(title, detail, mini_title=mini_title, remaining_ms=remaining_ms, parent=self)
         toast.open_requested.connect(self.open_social_hub)
         self._buddy_reminder_toasts = [item for item in self._buddy_reminder_toasts if item.isVisible()]
         if len(self._buddy_reminder_toasts) >= 4:
             self._buddy_reminder_toasts.pop(0).close()
         stack_index = len(self._buddy_reminder_toasts)
-        self._buddy_reminder_toasts.append(toast)
+        self._register_reminder_toast(toast)
         toast.show_passive(stack_index=stack_index)
 
     def _social_dialog_finished(self) -> None:
@@ -9901,9 +10001,7 @@ class PetWindow(QWidget):
         """切换账号时同步切换本地专注数据，防止跨账号复用计时文件。"""
 
         account_id = self._current_social_user_id() if signed_in else ""
-        for toast in self._buddy_reminder_toasts:
-            toast.close()
-        self._buddy_reminder_toasts.clear()
+        self._clear_reminder_toasts()
         self._buddy_reminder_store = None
         self._switch_focus_account(account_id)
         self._set_login_reward_account(account_id)

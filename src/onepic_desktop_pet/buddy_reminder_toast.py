@@ -1,12 +1,12 @@
-"""显示不激活窗口的搭子提醒：短时完整提示、迷你胶囊及自动消失。"""
+"""显示不激活窗口的搭子提醒；正文校验、单窗内容更新与关闭生命周期统一处理。"""
 
 from __future__ import annotations
 
 import sys
 import time
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QCursor, QMouseEvent
+from PySide6.QtCore import Qt, QTimer, Signal, QRectF
+from PySide6.QtGui import QCursor, QMouseEvent, QPainter, QColor, QPen
 from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton
 
 
@@ -34,12 +34,14 @@ class BuddyReminderToast(QFrame):
     """A top-level, click-through-to-action notification that never takes focus."""
 
     open_requested = Signal()
+    dismissed = Signal()
 
     def __init__(
         self, title: str, detail: str, *, mini_title: str = "",
         remaining_ms: int = TOTAL_DURATION_MS,
+        parent=None,
     ) -> None:
-        super().__init__(None)
+        super().__init__(parent)
         self.clock = ReminderToastClock(remaining_ms=remaining_ms)
         self._mini_title = str(mini_title or title)[:42]
         self.setObjectName("buddyReminderToast")
@@ -50,6 +52,7 @@ class BuddyReminderToast(QFrame):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setStyleSheet(
             "QFrame#buddyReminderToast{background:#173229;color:white;border:1px solid #4d8067;"
@@ -59,8 +62,13 @@ class BuddyReminderToast(QFrame):
         row = QHBoxLayout(self)
         row.setContentsMargins(14, 10, 10, 10)
         self.title_label = QLabel(str(title)[:100])
+        self.title_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.title_label.setWordWrap(True)
         self.title_label.setStyleSheet("font-size:14px;font-weight:650;")
-        self.detail_label = QLabel(str(detail)[:120])
+        self._detail = str(detail).strip()[:1200]
+        self.detail_label = QLabel(self._detail)
+        self.detail_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.detail_label.setWordWrap(True)
         self.detail_label.setStyleSheet("font-size:11px;color:#cee6d4;")
         from PySide6.QtWidgets import QVBoxLayout
         text_column = QVBoxLayout()
@@ -80,6 +88,29 @@ class BuddyReminderToast(QFrame):
         self._timer.setInterval(250)
         self._timer.timeout.connect(self._tick)
 
+    def paintEvent(self, event) -> None:
+        """透明顶层 QFrame 不依赖系统样式填充，确保文字后有完整可读底板。"""
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#4d8067"), 1))
+        painter.setBrush(QColor("#173229"))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5), 13, 13)
+
+    def set_content(self, title: str, detail: str, *, mini_title: str) -> None:
+        """合并到已有窗口，重新展示完整正文，不创建第二个通知窗口。"""
+        self._detail = str(detail).strip()[:1200]
+        self._mini_title = str(mini_title)[:42]
+        self.title_label.setText(str(title)[:100])
+        self.title_label.setWordWrap(True)
+        self.detail_label.setText(self._detail)
+        self.detail_label.setVisible(bool(self._detail))
+        self.setFixedWidth(310)
+        self.setWindowOpacity(1.0)
+        self.clock.elapsed_ms = 0
+        self._last_tick = time.monotonic()
+        self.adjustSize()
+
     def _set_windows_no_activate(self) -> None:
         if sys.platform != "win32":
             return
@@ -98,6 +129,9 @@ class BuddyReminderToast(QFrame):
     def show_passive(self, *, stack_index: int = 0) -> None:
         """Place and show the toast without changing the foreground HWND."""
 
+        if not self._detail or not self.title_label.text().strip():
+            return
+        self.adjustSize()
         self._set_windows_no_activate()
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if screen is not None:
@@ -129,9 +163,13 @@ class BuddyReminderToast(QFrame):
             self.close()
         elif stage == "mini" and self.detail_label.isVisible():
             self.detail_label.hide()
-            self.title_label.setText(self._mini_title)
-            self.setFixedWidth(150)
+            self.title_label.setWordWrap(False)
+            width = max(150, min(230, self.title_label.fontMetrics().horizontalAdvance(self._mini_title) + 72))
+            self.setFixedWidth(width)
+            self.title_label.setText(self.title_label.fontMetrics().elidedText(
+                self._mini_title, Qt.TextElideMode.ElideRight, width - 64))
             self.setWindowOpacity(0.86)
+            self.adjustSize()
 
     def enterEvent(self, event) -> None:
         self.clock.hovered = True
@@ -155,3 +193,4 @@ class BuddyReminderToast(QFrame):
     def closeEvent(self, event) -> None:
         self._timer.stop()
         super().closeEvent(event)
+        self.dismissed.emit()

@@ -2,7 +2,7 @@
 搭子自习室界面、后台同步线程和双六毛本地串门窗口。
 
 首页搭子卡片通往只展示 TA 与双方关系的搭子详情，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的，等宽专注导航与独立免战日保持账号边界。
-本人一次开放训导范围，搭子直接监督；私有备注是本人视角的首要身份，公开昵称辅助识别。
+本人一次开放训导范围，搭子直接监督；今日页静默展示恢复的训导事项，备注优先识别身份。
 搭子卡片直接展示串门、加油、嘲讽；投喂按配置聚合，持久提醒状态在身份区显示标签。
 卡片按实际视口宽度计算内容高度，在线 TTL 到期统一显示离线；
 按钮统一提供 hover、按下与忙碌反馈；互动 HTTP 请求使用既有 worker，配置读取不随统计刷新。
@@ -3627,10 +3627,17 @@ class SocialHubDialog(QDialog):
         old_page = self.tabs.widget(index)
         page = factory()
         decorate_buttons(page)
-        self.tabs.removeTab(index)
-        self.tabs.insertTab(index, page, label)
-        if was_current:
-            self.tabs.setCurrentIndex(index)
+        # Replacing a visible placeholder temporarily changes numeric tab
+        # indices. Do not recursively build a different page from that
+        # transient currentChanged signal (and later delete the live page).
+        previous_block = self.tabs.blockSignals(True)
+        try:
+            self.tabs.removeTab(index)
+            self.tabs.insertTab(index, page, label)
+            if was_current:
+                self.tabs.setCurrentIndex(index)
+        finally:
+            self.tabs.blockSignals(previous_block)
         self._lazy_page_built.add(index)
         if old_page is not None:
             old_page.deleteLater()
@@ -4420,6 +4427,13 @@ class SocialHubDialog(QDialog):
             self.rest_day_button.setText("🏳️ 今日高挂免战牌 · 暂停训导" if exempt else "🏳️ 高挂免战牌 · 今日休息")
         if exempt:
             self.focus_status.setText("🏳️ 高挂免战牌 · 今日休息")
+        messages = engine.store.coach_messages_for_day(datetime.now().astimezone().date())
+        pending = engine.store.due_explanations()
+        self.focus_coach_card.setVisible(bool(messages or pending))
+        self.focus_coach_summary.setText(
+            (f"待说明 {len(pending)} 项 · 可在纪律记录中处理。\n" if pending else "")
+            + "\n".join(str(row.get("occurred_at", ""))[11:16] + " " + str(row.get("title", ""))
+                        + "\n" + str(row.get("detail", "")) for row in messages[-5:]))
         self.set_focus_analytics(self._focus_analytics)
         if hasattr(self, "focus_workspace") and self.focus_workspace.isVisible():
             self.focus_workspace.refresh()
@@ -4512,6 +4526,18 @@ class SocialHubDialog(QDialog):
         task_row.setColumnStretch(0, 1); task_row.setColumnStretch(1, 1)
         focus_layout.addLayout(task_row)
         layout.addWidget(focus_card)
+
+        self.focus_coach_card, coach_layout = self._card(
+            "📋 训导事项", "启动时静默恢复；桌面提醒关闭后，事项仍保留在这里。")
+        self.focus_coach_summary = QLabel()
+        self.focus_coach_summary.setTextFormat(Qt.TextFormat.PlainText)
+        self.focus_coach_summary.setWordWrap(True)
+        coach_layout.addWidget(self.focus_coach_summary)
+        coach_records = QPushButton("查看纪律记录")
+        coach_records.clicked.connect(lambda: self.open_focus_section(3))
+        coach_layout.addWidget(coach_records)
+        self.focus_coach_card.hide()
+        layout.addWidget(self.focus_coach_card)
 
         room_card, room_layout = self._card(
             "共同专注房间",
