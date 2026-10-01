@@ -1,4 +1,6 @@
-"""本地闹钟与试听共用播放状态机，原生循环避免重复加载；被动显示不抢焦点。
+"""闹钟音频与被动展示分离；全屏响铃不创建 HWND、用户返回后才展开控制。
+
+本地闹钟与试听共用播放状态机，原生循环避免重复加载；被动显示不抢焦点。
 
 勾选配置使用统一矢量绘制。
 Non-modal UI for managing alarms and showing alarm-style recovery cards.
@@ -973,6 +975,7 @@ class AlarmCard(QDialog):
         self._state = AlarmPopupState.UNSEEN
         from .buddy_reminder_toast import BuddyReminderToast
         BuddyReminderToast._set_windows_no_activate(self, tool_window=False)
+        self._ui_deferred = False
         self.show()
         self._queue_temporary_topmost(True)
         # Start immediately after the first foreground presentation.  The
@@ -980,6 +983,14 @@ class AlarmCard(QDialog):
         # not block the Qt event loop or require an artificial delay.
         self._start_alarm_audio()
         lifecycle_log("alarm.popup.show.complete", self, alarm_id=str(self.alarm.id))
+
+    def start_alarm_suppressed(self) -> None:
+        """仍启动原有 occurrence 音频；隐藏 QDialog 不调用 winId/show/topmost。"""
+        self._ui_deferred = True
+        self._state = AlarmPopupState.UNSEEN
+        self._start_alarm_audio()
+        lifecycle_log("alarm.popup.suppressed", self, alarm_id=str(self.alarm.id),
+                      creator="AlarmCard.start_alarm_suppressed", reason="fullscreen_game_or_dnd")
 
     def _acknowledge_alarm(self) -> None:
         """Release temporary topmost as soon as the user touches the card."""

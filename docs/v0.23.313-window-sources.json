@@ -1,0 +1,1447 @@
+{
+  "method": "Static source sites; Qt child widgets are excluded unless window flags are configured. Class and explicit policy sites may describe the same runtime window.",
+  "source_sites": [
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 261,
+      "function": "AlarmSoundSelector._import",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QFileDialog.getOpenFileName"
+    },
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 273,
+      "function": "AlarmSoundSelector._import",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 286,
+      "function": "AlarmSoundSelector._delete",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 707,
+      "function": "AlarmCard.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 770,
+      "function": "AlarmCard.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 1671,
+      "function": "AwayRecoveryCard.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 1694,
+      "function": "AwayRecoveryCard.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 1787,
+      "function": "AlarmEditDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 1941,
+      "function": "AlarmCenterDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/app.py",
+      "line": 745,
+      "function": "DesktopPetApplication._program_update_checked",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/app.py",
+      "line": 784,
+      "function": "DesktopPetApplication._program_update_checked",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/app.py",
+      "line": 804,
+      "function": "DesktopPetApplication._program_update_check_failed",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/app.py",
+      "line": 836,
+      "function": "DesktopPetApplication._show_program_download_progress",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QProgressDialog"
+    },
+    {
+      "file": "src/onepic_desktop_pet/app.py",
+      "line": 862,
+      "function": "DesktopPetApplication._show_program_download_progress",
+      "kind": "window_flags",
+      "receiver": "progress"
+    },
+    {
+      "file": "src/onepic_desktop_pet/app.py",
+      "line": 980,
+      "function": "DesktopPetApplication._program_update_download_failed",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/buddy_reminder_toast.py",
+      "line": 50,
+      "function": "BuddyReminderToast.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/buddy_study_ui.py",
+      "line": 21,
+      "function": "BuddyStudyDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/buddy_study_ui.py",
+      "line": 93,
+      "function": "BuddyStudyDialog.__init__",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/buddy_study_ui.py",
+      "line": 351,
+      "function": "BuddyStudyDialog._nudge",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox"
+    },
+    {
+      "file": "src/onepic_desktop_pet/buddy_study_ui.py",
+      "line": 439,
+      "function": "BuddyStudyDialog._start_supervision",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 153,
+      "function": "ChatDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 182,
+      "function": "ChatDialog.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 530,
+      "function": "ChatHistoryDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 548,
+      "function": "ChatHistoryDialog.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 770,
+      "function": "ChatHistoryDialog._rename_selected_session",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 802,
+      "function": "ChatHistoryDialog._delete_selected_message",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 818,
+      "function": "ChatHistoryDialog._delete_selected_session",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 833,
+      "function": "AISettingsDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 1272,
+      "function": "AISettingsDialog._choose_music_program",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QFileDialog.getExistingDirectory"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 1273,
+      "function": "AISettingsDialog._choose_music_program",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QFileDialog.getOpenFileName"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 1284,
+      "function": "AISettingsDialog._choose_babuda_audio",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QFileDialog.getOpenFileName"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 1291,
+      "function": "AISettingsDialog._choose_local_lyrics",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QFileDialog.getOpenFileName"
+    },
+    {
+      "file": "src/onepic_desktop_pet/coaching_ui.py",
+      "line": 163,
+      "function": "CoachingPanel._show_pending",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QDialog"
+    },
+    {
+      "file": "src/onepic_desktop_pet/coaching_ui.py",
+      "line": 180,
+      "function": "CoachingPanel._details",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QDialog"
+    },
+    {
+      "file": "src/onepic_desktop_pet/coaching_ui.py",
+      "line": 196,
+      "function": "DesktopCoachingSurface.__init__",
+      "kind": "window_flags_constructor",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/compact_todo.py",
+      "line": 349,
+      "function": "CompactTodoPanel.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/compact_todo.py",
+      "line": 451,
+      "function": "CompactTodoPanel.set_companion_topmost",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/compact_todo.py",
+      "line": 727,
+      "function": "CompactTodoPanel.add_task",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/compact_todo.py",
+      "line": 747,
+      "function": "CompactTodoPanel._show_management_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/compact_todo.py",
+      "line": 792,
+      "function": "CompactTodoPanel._show_management_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/compact_todo.py",
+      "line": 817,
+      "function": "CompactTodoPanel._edit_task",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QDialog"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 151,
+      "function": "WorkControlBubble.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 273,
+      "function": "WorkDurationBubble.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 376,
+      "function": "VisitStatusBubble.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 485,
+      "function": "CoffeeScenePrompt.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 644,
+      "function": "QuickControlPanel.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 656,
+      "function": "QuickControlPanel.__init__",
+      "kind": "window_flags",
+      "receiver": "self.hover_hint"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 1117,
+      "function": "QuickControlPanel._show_music_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 1157,
+      "function": "QuickControlPanel._show_settings_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 1185,
+      "function": "QuickControlPanel._show_food_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 1265,
+      "function": "SizeControlDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/discipline_ui.py",
+      "line": 73,
+      "function": "FinishReviewDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/discipline_ui.py",
+      "line": 677,
+      "function": "DisciplineDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/economy_ui.py",
+      "line": 35,
+      "function": "EconomyDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/economy_ui.py",
+      "line": 381,
+      "function": "EconomyDialog._delete_pending_achievement",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/economy_ui.py",
+      "line": 400,
+      "function": "EconomyDialog._record_income",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/economy_ui.py",
+      "line": 403,
+      "function": "EconomyDialog._record_income",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/economy_ui.py",
+      "line": 406,
+      "function": "EconomyDialog._record_income",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/economy_ui.py",
+      "line": 413,
+      "function": "EconomyDialog._record_income",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/food_scene_ui.py",
+      "line": 39,
+      "function": "FoodSceneDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/food_scene_ui.py",
+      "line": 74,
+      "function": "FoodSceneDialog.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/food_scene_ui.py",
+      "line": 489,
+      "function": "FoodSceneDialog._request_cake_share",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/food_scene_ui.py",
+      "line": 508,
+      "function": "FoodSceneDialog._register_achievement",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/food_scene_ui.py",
+      "line": 511,
+      "function": "FoodSceneDialog._register_achievement",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/food_scene_ui.py",
+      "line": 542,
+      "function": "FoodSceneDialog._register_achievement",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/local_burst_effect.py",
+      "line": 749,
+      "function": "LocalBurstEffectWindow._configure_flags",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/macos_dock.py",
+      "line": 211,
+      "function": "MacDockMenuController._install_qt_dock_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 2150,
+      "function": "PasswordResetDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 2402,
+      "function": "BuddyCodeDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 2438,
+      "function": "BuddyProfileDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 2608,
+      "function": "BuddyCardWidget.__init__",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 2899,
+      "function": "IncomingVisitNotice.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 2910,
+      "function": "IncomingVisitNotice.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 2989,
+      "function": "BuddyVisitWindow.__init__",
+      "kind": "window_flags_constructor",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 3091,
+      "function": "AccountSecurityDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 3191,
+      "function": "AccountSecurityDialog._request_reset",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 3225,
+      "function": "AccountSecurityDialog._delete_account",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 3234,
+      "function": "AccountSecurityDialog._delete_account",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 3237,
+      "function": "AccountSecurityDialog._delete_account",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 3312,
+      "function": "SocialHubDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 3470,
+      "function": "SocialHubDialog.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 5170,
+      "function": "SocialHubDialog._set_focus_task",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 5180,
+      "function": "SocialHubDialog._set_tomorrow_review",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 5189,
+      "function": "SocialHubDialog._set_room_schedule",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 5192,
+      "function": "SocialHubDialog._set_room_schedule",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 5215,
+      "function": "SocialHubDialog._set_room_challenge",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 5545,
+      "function": "SocialHubDialog._set_room_goal",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 7150,
+      "function": "SocialHubDialog._remove_buddy",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 7181,
+      "function": "SocialHubDialog._buddy_context_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 7222,
+      "function": "SocialHubDialog._edit_buddy_private_note",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 7457,
+      "function": "SocialHubDialog._create_room",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 7464,
+      "function": "SocialHubDialog._join_room",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 49,
+      "function": "TodayNoteWindow.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 95,
+      "function": "TodayNoteWindow.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 162,
+      "function": "TodayNoteWindow.__init__",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 187,
+      "function": "TodayNoteWindow._build_more_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 396,
+      "function": "TodayNoteWindow.add_task",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 411,
+      "function": "TodayNoteWindow.edit_task",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QDialog"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 436,
+      "function": "TodayNoteWindow.delete_task",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 451,
+      "function": "TodayNoteWindow._task_context_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 479,
+      "function": "TodayNoteWindow.configure_display",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QDialog"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 518,
+      "function": "TodayNoteWindow.configure_display",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 543,
+      "function": "TimeMemoryWindow.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 554,
+      "function": "TimeMemoryWindow.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 620,
+      "function": "TimeMemoryWindow._show_memory_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 641,
+      "function": "TimeMemoryWindow.add_countdown",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 644,
+      "function": "TimeMemoryWindow.add_countdown",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 653,
+      "function": "TimeMemoryWindow.add_countdown",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 657,
+      "function": "TimeMemoryWindow.add_anniversary",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 660,
+      "function": "TimeMemoryWindow.add_anniversary",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 672,
+      "function": "TimeMemoryWindow.add_anniversary",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 680,
+      "function": "TimeMemoryWindow._edit_countdown",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 683,
+      "function": "TimeMemoryWindow._edit_countdown",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 698,
+      "function": "TimeMemoryWindow._edit_countdown",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 707,
+      "function": "TimeMemoryWindow._edit_anniversary",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 710,
+      "function": "TimeMemoryWindow._edit_anniversary",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 732,
+      "function": "TimeMemoryWindow._edit_anniversary",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 743,
+      "function": "TimeMemoryWindow._delete_countdown",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 749,
+      "function": "TimeMemoryWindow._delete_anniversary",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 755,
+      "function": "TimeMemoryWindow._delete_timeline",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 761,
+      "function": "TimeMemoryWindow.add_timeline",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/todo_center.py",
+      "line": 135,
+      "function": "_ItemEditor.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/todo_center.py",
+      "line": 418,
+      "function": "_ItemEditor.accept",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/todo_center.py",
+      "line": 423,
+      "function": "TodoCenterWindow.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/todo_center.py",
+      "line": 433,
+      "function": "TodoCenterWindow.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/todo_center.py",
+      "line": 506,
+      "function": "TodoCenterWindow.__init__",
+      "kind": "window_flags",
+      "receiver": "self._alarm_center"
+    },
+    {
+      "file": "src/onepic_desktop_pet/todo_center.py",
+      "line": 810,
+      "function": "TodoCenterWindow._new_item",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/todo_center.py",
+      "line": 847,
+      "function": "TodoCenterWindow._delete_current",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 483,
+      "function": "IdleRecoveryDialog.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 1061,
+      "function": "PetWindow.__init__",
+      "kind": "window_flags",
+      "receiver": "self.photo_bubble"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 1077,
+      "function": "PetWindow.__init__",
+      "kind": "window_flags",
+      "receiver": "self.speech_bubble"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 1417,
+      "function": "PetWindow.ensure_pet_window_policy",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 2412,
+      "function": "PetWindow.set_always_on_top",
+      "kind": "window_flags",
+      "receiver": "bubble"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 2419,
+      "function": "PetWindow.set_always_on_top",
+      "kind": "window_flags",
+      "receiver": "self.work_duration_bubble"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 4659,
+      "function": "PetWindow.show_sticky_note",
+      "kind": "window_flags",
+      "receiver": "self._today_note_window"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7368,
+      "function": "PetWindow.configure_daily_report",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QDialog"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7420,
+      "function": "PetWindow._show_daily_report_dialog",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QDialog"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7492,
+      "function": "PetWindow.rename_pet",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QInputDialog.getText"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7673,
+      "function": "PetWindow._start_new_conversation",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7747,
+      "function": "PetWindow._clear_all_chat_history",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.question"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 10521,
+      "function": "PetWindow._manual_focus_history_recovery",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMessageBox.warning"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 11403,
+      "function": "PetWindow.show_outfit_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 11922,
+      "function": "PetWindow.build_unified_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 11922,
+      "function": "PetWindow.build_unified_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 12419,
+      "function": "PetWindow._build_context_menu",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QMenu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 12457,
+      "function": "PetWindow._show_deferred_context_menu",
+      "kind": "window_flags",
+      "receiver": "menu"
+    },
+    {
+      "file": "src/onepic_desktop_pet/work_report.py",
+      "line": 1575,
+      "function": "WorkReportDialog.__init__",
+      "kind": "dialog_class",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/work_report.py",
+      "line": 1599,
+      "function": "WorkReportDialog.__init__",
+      "kind": "window_flags",
+      "receiver": "self"
+    },
+    {
+      "file": "src/onepic_desktop_pet/work_report.py",
+      "line": 1779,
+      "function": "WorkReportDialog._open_range_picker",
+      "kind": "dialog_or_menu_call",
+      "receiver": "QDialog"
+    }
+  ],
+  "focus_and_modal_calls": [
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 2039,
+      "function": "AlarmCenterDialog._add",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/alarm_ui.py",
+      "line": 2052,
+      "function": "AlarmCenterDialog._edit_selected",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/app.py",
+      "line": 549,
+      "function": "DesktopPetApplication.start",
+      "call": "self.qt_app.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/app.py",
+      "line": 562,
+      "function": "DesktopPetApplication.start",
+      "call": "self.qt_app.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/buddy_study_ui.py",
+      "line": 355,
+      "function": "BuddyStudyDialog._nudge",
+      "call": "box.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/buddy_study_ui.py",
+      "line": 455,
+      "function": "BuddyStudyDialog._open_together",
+      "call": "self.hub.rooms.setFocus"
+    },
+    {
+      "file": "src/onepic_desktop_pet/chat.py",
+      "line": 520,
+      "function": "ChatDialog.set_busy",
+      "call": "self.input.setFocus"
+    },
+    {
+      "file": "src/onepic_desktop_pet/coaching_ui.py",
+      "line": 125,
+      "function": "CoachingPanel._edit",
+      "call": "self.input.setFocus"
+    },
+    {
+      "file": "src/onepic_desktop_pet/coaching_ui.py",
+      "line": 175,
+      "function": "CoachingPanel._show_pending",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/coaching_ui.py",
+      "line": 187,
+      "function": "CoachingPanel._details",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/compact_todo.py",
+      "line": 765,
+      "function": "CompactTodoPanel._show_management_menu",
+      "call": "menu.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/compact_todo.py",
+      "line": 860,
+      "function": "CompactTodoPanel._edit_task",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 1152,
+      "function": "QuickControlPanel._show_music_menu",
+      "call": "menu.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 1175,
+      "function": "QuickControlPanel._show_settings_menu",
+      "call": "menu.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/controls.py",
+      "line": 1202,
+      "function": "QuickControlPanel._show_food_menu",
+      "call": "menu.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 2431,
+      "function": "BuddyCodeDialog.__init__",
+      "call": "self.code_edit.setFocus"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 2470,
+      "function": "BuddyProfileDialog.__init__",
+      "call": "self.return_button.setFocus"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 3198,
+      "function": "AccountSecurityDialog._request_reset",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 4518,
+      "function": "SocialHubDialog.open_buddy_study",
+      "call": "dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 4519,
+      "function": "SocialHubDialog.open_buddy_study",
+      "call": "dialog.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 5728,
+      "function": "SocialHubDialog._open_account_security",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 5744,
+      "function": "SocialHubDialog._request_password_reset",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 5771,
+      "function": "SocialHubDialog._open_relogin",
+      "call": "self.login_email.setFocus"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 6427,
+      "function": "SocialHubDialog._interaction_response",
+      "call": "self.inbox.setFocus"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 7204,
+      "function": "SocialHubDialog._buddy_context_menu",
+      "call": "menu.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 7302,
+      "function": "SocialHubDialog._add_buddy",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/social_ui.py",
+      "line": 7349,
+      "function": "SocialHubDialog._buddy_lookup_completed",
+      "call": "confirm.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 426,
+      "function": "TodayNoteWindow.edit_task",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 459,
+      "function": "TodayNoteWindow._task_context_menu",
+      "call": "menu.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 510,
+      "function": "TodayNoteWindow.configure_display",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/today_note.py",
+      "line": 638,
+      "function": "TimeMemoryWindow._show_memory_menu",
+      "call": "menu.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/todo_center.py",
+      "line": 821,
+      "function": "TodoCenterWindow._new_item",
+      "call": "menu.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/todo_center.py",
+      "line": 827,
+      "function": "TodoCenterWindow._new_item_type",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/todo_center.py",
+      "line": 839,
+      "function": "TodoCenterWindow._edit_current",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 3733,
+      "function": "PetWindow.show_food_scene_dialog",
+      "call": "self._food_scene_dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 3734,
+      "function": "PetWindow.show_food_scene_dialog",
+      "call": "self._food_scene_dialog.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 3842,
+      "function": "PetWindow._start_food_scene",
+      "call": "self._food_scene_dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 3854,
+      "function": "PetWindow._start_food_scene",
+      "call": "self._food_scene_dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 3898,
+      "function": "PetWindow._start_food_scene",
+      "call": "self._food_scene_dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 4681,
+      "function": "PetWindow.show_sticky_note",
+      "call": "self._today_note_window.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 4682,
+      "function": "PetWindow.show_sticky_note",
+      "call": "self._today_note_window.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 5285,
+      "function": "PetWindow.show_todo_center",
+      "call": "self._todo_center_window.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 5286,
+      "function": "PetWindow.show_todo_center",
+      "call": "self._todo_center_window.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 5312,
+      "function": "PetWindow.show_alarm_center",
+      "call": "self._alarm_center_dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 5313,
+      "function": "PetWindow.show_alarm_center",
+      "call": "self._alarm_center_dialog.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 5323,
+      "function": "PetWindow.show_time_memory",
+      "call": "self._time_memory_window.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 5324,
+      "function": "PetWindow.show_time_memory",
+      "call": "self._time_memory_window.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 5353,
+      "function": "PetWindow.show_economy",
+      "call": "self._economy_dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 5354,
+      "function": "PetWindow.show_economy",
+      "call": "self._economy_dialog.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7323,
+      "function": "PetWindow._activate_work_report_window",
+      "call": "dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7324,
+      "function": "PetWindow._activate_work_report_window",
+      "call": "dialog.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7404,
+      "function": "PetWindow.configure_daily_report",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7429,
+      "function": "PetWindow._show_daily_report_dialog",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7485,
+      "function": "PetWindow.prompt_dialogue",
+      "call": "self._chat_dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7486,
+      "function": "PetWindow.prompt_dialogue",
+      "call": "self._chat_dialog.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7722,
+      "function": "PetWindow._show_chat_history",
+      "call": "self._chat_history_dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7723,
+      "function": "PetWindow._show_chat_history",
+      "call": "self._chat_history_dialog.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7824,
+      "function": "PetWindow.open_settings",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7996,
+      "function": "PetWindow._activate_social_hub_window",
+      "call": "dialog.raise_"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 7997,
+      "function": "PetWindow._activate_social_hub_window",
+      "call": "dialog.activateWindow"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 11372,
+      "function": "PetWindow.open_size_control",
+      "call": "dialog.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 11405,
+      "function": "PetWindow.show_outfit_menu",
+      "call": "menu.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/window.py",
+      "line": 12483,
+      "function": "PetWindow._show_deferred_context_menu",
+      "call": "menu.exec"
+    },
+    {
+      "file": "src/onepic_desktop_pet/work_report.py",
+      "line": 1806,
+      "function": "WorkReportDialog._open_range_picker",
+      "call": "picker.exec"
+    }
+  ],
+  "embedded_native_sources": [
+    {
+      "file": "src/onepic_desktop_pet/music_playback.py",
+      "line": 1045,
+      "function": "NeteaseMusicAdapter._netease_default_desktop_script",
+      "kind": "embedded_user32_script",
+      "apis": [
+        "SetForegroundWindow",
+        "ShowWindow",
+        "AttachThreadInput"
+      ]
+    }
+  ]
+}

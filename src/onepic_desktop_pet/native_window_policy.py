@@ -1,4 +1,4 @@
-"""桌宠原生窗口层级的低频、非激活平台桥。
+"""桌宠原生窗口层级的低频、非激活平台桥；64 位 HWND 类型绑定避免句柄截断。
 
 Qt flags 是唯一的窗口策略来源；本模块只在 Show、WinIdChange、屏幕、
 应用生命周期节点或低频 watchdog 中校验已经存在的 native handle。Windows 使用
@@ -56,6 +56,21 @@ def apply_windows_window_policy(
         import ctypes
 
         user32 = ctypes.windll.user32
+        from ctypes import wintypes
+        # ctypes 默认 c_int 会截断 64 位 HWND；在第一次 native show 前绑定。
+        for name, arguments, result_type in (
+            ("GetWindowLongPtrW", [wintypes.HWND, ctypes.c_int], ctypes.c_ssize_t),
+            ("GetWindowLongW", [wintypes.HWND, ctypes.c_int], ctypes.c_long),
+            ("SetWindowLongPtrW", [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t], ctypes.c_ssize_t),
+            ("SetWindowLongW", [wintypes.HWND, ctypes.c_int, ctypes.c_long], ctypes.c_long),
+            ("SetWindowPos", [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint], wintypes.BOOL),
+        ):
+            function = getattr(user32, name, None)
+            if function is not None:
+                try:
+                    function.argtypes, function.restype = arguments, result_type
+                except AttributeError:
+                    pass  # Python 测试替身没有 ctypes 属性。
         native_id = int(widget.winId())  # type: ignore[attr-defined]
         result = _base_result(native_id, qt_stays_on_top)
         if native_id <= 0:

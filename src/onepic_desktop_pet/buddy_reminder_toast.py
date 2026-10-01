@@ -1,4 +1,6 @@
-"""显示不激活窗口的搭子提醒；正文校验、单窗内容更新与关闭生命周期统一处理。"""
+"""被动 Toast 在最终几何配置后创建 no-activate 原生句柄，并再次检查全屏许可。
+
+显示不激活窗口的搭子提醒；正文校验、单窗内容更新与关闭生命周期统一处理。"""
 
 from __future__ import annotations
 
@@ -132,12 +134,15 @@ class BuddyReminderToast(QFrame):
 
         if not self._detail or not self.title_label.text().strip():
             return
+        parent = self.parentWidget()
+        if hasattr(parent, "_passive_surfaces_blocked") and parent._passive_surfaces_blocked():
+            return
         self.adjustSize()
-        self._set_windows_no_activate()
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if screen is not None:
             area = screen.availableGeometry()
             self.move(area.right() - self.width() - 22, area.top() + 24 + max(0, stack_index) * 78)
+        self._set_windows_no_activate()
         self.show()
         if sys.platform == "win32":
             import ctypes

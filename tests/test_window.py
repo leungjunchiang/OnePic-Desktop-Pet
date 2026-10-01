@@ -2290,16 +2290,18 @@ def test_context_menu_state_uses_lightweight_snapshot_and_no_extra_delay(monkeyp
     app.processEvents()
 
 
-def test_background_visit_refresh_uses_one_compact_status_bubble() -> None:
+def test_background_visit_refresh_uses_one_inline_hint() -> None:
     app, window = _create_window()
     peer = {"id": "visit-1", "nickname": "搭子", "today_seconds": 5}
     window._show_buddy_visit(peer)
     app.processEvents()
-    assert window.visit_status_bubble.isVisible()
-    assert window.visit_status_bubble.text() == "搭子正在串门"
+    assert not window.visit_status_bubble.isVisible()
+    assert "搭子来串门了" in window._interaction_hint_text
+    assert window.interaction_hint_timer.interval() == 4000
     assert not window._buddy_visit_window.isVisible()
     window._show_buddy_visit(peer)
-    assert window.visit_status_bubble.text() == "搭子正在串门"
+    assert "搭子来串门了" in window._interaction_hint_text
+    assert "+2" not in window._interaction_hint_text
     window.close()
     window.deleteLater()
     app.processEvents()
@@ -2313,7 +2315,7 @@ def test_pending_visit_notice_closes_when_server_no_longer_lists_invitation() ->
     assert window._incoming_visit_notice is None
     window.notification_manager.flush()
     assert window.notification_manager.current is None
-    assert window.speech_bubble.isVisible() and window.speech_timer.interval() == 4000
+    assert bool(window._interaction_hint_text) and window.interaction_hint_timer.interval() == 4000
 
     window._social_dashboard_received({"visits": [], "active_visits": []})
     app.processEvents()
@@ -2326,12 +2328,12 @@ def test_pending_visit_notice_closes_when_server_no_longer_lists_invitation() ->
 
 
 def test_visit_status_bubble_sits_below_todo_and_left_of_work_duration() -> None:
-    """串门标签使用六毛下方的状态行，不遮挡待办内容。"""
+    """持续嘲讽进度牌使用六毛下方的状态行，不遮挡待办内容。"""
 
     app, window = _create_window()
     window.move(220, 120)
     window.start_work_timer()
-    window._show_buddy_visit({"id": "visit-layout", "nickname": "搭子", "today_seconds": 5})
+    window.visit_status_bubble.set_taunter("搭子", remaining_seconds=1200)
     app.processEvents()
 
     bubble = window.visit_status_bubble
@@ -4714,22 +4716,22 @@ def test_instant_interaction_uses_four_second_timer_and_expires_without_refresh(
     for timer in window.findChildren(__import__('PySide6.QtCore',fromlist=['QTimer']).QTimer):
         timer.stop()
     assert window._notify_instant_interaction('nudge:one','return','搭子喊你回来','正文')
-    assert window.speech_timer.interval()==4000 and window.speech_timer.isSingleShot()
-    assert window.speech_bubble.text()=='👀 该回来了 · +1'
+    assert window.interaction_hint_timer.interval()==4000 and window.interaction_hint_timer.isSingleShot()
+    assert window._interaction_hint_text=='👀 该回来了 · +1'
     QTest.qWait(2200)
     assert window._notify_instant_interaction('nudge:two','return','搭子喊你回来','正文')
-    assert window.speech_bubble.text()=='👀 该回来了 · +2'
-    remaining=window.speech_timer.remainingTime()
+    assert window._interaction_hint_text=='👀 该回来了 · +2'
+    remaining=window.interaction_hint_timer.remainingTime()
     assert not window._notify_instant_interaction('nudge:two','return','搭子喊你回来','正文')
-    assert window.speech_timer.remainingTime()<=remaining
+    assert window.interaction_hint_timer.remainingTime()<=remaining
     QTest.qWait(2100)
-    assert window.speech_bubble.isVisible() # Old timer cannot hide the new event.
+    assert bool(window._interaction_hint_text) # Old timer cannot hide the new event.
     QTest.qWait(2100)
-    assert not window.speech_bubble.isVisible() and not window.speech_timer.isActive()
+    assert not bool(window._interaction_hint_text) and not window.interaction_hint_timer.isActive()
     assert window._notify_instant_interaction('cheer:three','cheer','加油','正文')
-    assert window.speech_bubble.text()=='💪 加油 · +1'
+    assert window._interaction_hint_text=='💪 加油 · +1'
     window._reset_discipline_notifications()
-    assert not window.speech_bubble.isVisible() and not window.speech_timer.isActive()
+    assert not bool(window._interaction_hint_text) and not window.interaction_hint_timer.isActive()
     window.close();window.deleteLater();app.processEvents()
 
 
@@ -4741,14 +4743,14 @@ def test_restored_encouragement_is_silent_and_fresh_event_is_deduplicated(monkey
     monkeypatch.setattr(window.notification_manager,'blocked',lambda:False)
     state={'id':'old','active':True,'sender_id':'buddy','created_at':(now-timedelta(minutes=1)).isoformat()}
     window._social_dashboard_received({'_encouragement_state':state})
-    assert not window.speech_bubble.isVisible() and not window.visit_status_bubble.isVisible()
+    assert not bool(window._interaction_hint_text) and not window.visit_status_bubble.isVisible()
     window._social_dashboard_received({'_encouragement_state':state})
-    assert not window.speech_bubble.isVisible()
+    assert not bool(window._interaction_hint_text)
     now+=timedelta(seconds=2)
     fresh={**state,'id':'new','created_at':(now-timedelta(seconds=1)).isoformat()}
     window._social_dashboard_received({'_encouragement_state':fresh})
-    assert window.speech_bubble.text()=='💪 加油 · +1'
+    assert window._interaction_hint_text=='💪 加油 · +1'
     window._social_dashboard_received({'_encouragement_state':fresh})
-    assert window.speech_bubble.text()=='💪 加油 · +1'
+    assert window._interaction_hint_text=='💪 加油 · +1'
     assert 'cheer:new' in window.notification_manager.shown_event_ids
     window.close();window.deleteLater();app.processEvents()

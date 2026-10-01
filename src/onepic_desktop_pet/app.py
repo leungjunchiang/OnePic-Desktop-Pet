@@ -1,5 +1,5 @@
 """
-普通成功反馈复用页内标签，不创建系统对话框。
+普通成功反馈复用页内标签；下载进度禁用 QProgressDialog 自动 show，显式被动显示不抢前台。
 
 本模块（区分关闭窗口与真正退出应用）管理 Lili 应用生命周期、精简系统托盘菜单和退出时的位置保存。
 
@@ -867,19 +867,16 @@ class DesktopPetApplication(QObject):
         progress.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         progress.setWindowTitle("下载程序更新")
         progress.setWindowModality(Qt.WindowModality.NonModal)
-        progress.setMinimumDuration(0)
+        progress.setMinimumDuration(2_147_483_647)  # 禁止 setValue/内部 timer 自动抢先 show。
         progress.setAutoClose(False)
         progress.setAutoReset(False)
         progress.setCancelButton(None)
         progress.setValue(0)
         self._program_update_progress = progress
-        if sys.platform == "darwin":
-            # Reuse the same non-activating NSPanel configuration as the pet
-            # surfaces while giving this updater an explicit floating level.
-            self.window._apply_macos_window_behavior(progress, always_on_top=True)
-        progress.show()
+        progress.adjustSize()
         self._position_program_download_progress(progress)
-        progress.raise_()
+        self.window._external_passive_surfaces.append(progress)
+        self.window._show_nonactivating(progress, always_on_top=True)
         # A native dialog may receive its final size one event turn after
         # show(); repeat the anchor once so a resized label never drifts back
         # to the centre of the screen.
@@ -891,7 +888,7 @@ class DesktopPetApplication(QObject):
     def _position_program_download_progress(self, progress: QProgressDialog) -> None:
         """Keep the updater just above the pet, inside its current monitor."""
 
-        if progress is None or not progress.isVisible():
+        if progress is None:
             return
         pet = self.window
         screen = (

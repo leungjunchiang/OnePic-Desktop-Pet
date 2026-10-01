@@ -1,0 +1,68 @@
+{
+  "geometry_source": "owned non-activating windows, not a DirectX game",
+  "normal_mode": "normal",
+  "toast_noactivate": true,
+  "max_visible_toasts": 1,
+  "interaction_rendered_inside_pet": true,
+  "maximized_mode": "maximized",
+  "alarm_audio_requested": true,
+  "alarm_has_no_native_window": true,
+  "foreground_unchanged": true,
+  "foreground_sample_count": 225,
+  "visible_show_geometry": [
+    {
+      "class": "QWidget",
+      "width": 640,
+      "height": 400,
+      "no_focus": true
+    },
+    {
+      "class": "QLabel",
+      "width": 110,
+      "height": 16,
+      "no_focus": false
+    },
+    {
+      "class": "PetWindow",
+      "width": 191,
+      "height": 198,
+      "no_focus": true
+    },
+    {
+      "class": "BuddyReminderToast",
+      "width": 310,
+      "height": 56,
+      "no_focus": true
+    },
+    {
+      "class": "BuddyReminderToast",
+      "width": 310,
+      "height": 56,
+      "no_focus": true
+    },
+    {
+      "class": "QWidget",
+      "width": 1920,
+      "height": 1080,
+      "no_focus": true
+    },
+    {
+      "class": "PetWindow",
+      "width": 191,
+      "height": 198,
+      "no_focus": true
+    },
+    {
+      "class": "QWidget",
+      "width": 1920,
+      "height": 1080,
+      "no_focus": true
+    },
+    {
+      "class": "PetWindow",
+      "width": 191,
+      "height": 198,
+      "no_focus": true
+    }
+  ]
+}

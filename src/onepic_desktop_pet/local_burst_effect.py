@@ -1,4 +1,6 @@
-"""Local, event-driven burst effects for the desktop pet.
+"""本地视觉特效使用非激活窗口策略；独立调用也禁止 raise 抢前台。
+
+Local, event-driven burst effects for the desktop pet.
 
 The old Aura renderer was a persistent character-frame compositing layer.  It
 is intentionally not used here: a burst is a short-lived, local overlay that
@@ -851,8 +853,11 @@ class LocalBurstEffectWindow(QWidget):
             self._timer.start()
             self.update()
             if show_window:
-                self.show()
-                self.raise_()
+                from .quiet_mode import detect_quiet_mode
+                if not detect_quiet_mode().blocked:
+                    from .native_window_policy import apply_native_window_policy
+                    apply_native_window_policy(self, topmost=always_on_top, qt_stays_on_top=always_on_top)
+                    self.show()
         except Exception:
             LOGGER.exception("[LocalEffect] failed to show local effect")
             self.stop()

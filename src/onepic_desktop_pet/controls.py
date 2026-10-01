@@ -1,4 +1,4 @@
-"""提供六毛快捷面板、原生音乐控制、工作气泡和尺寸调节器；嘲讽挑战明确显示持续进度。
+"""六毛控制与持续状态气泡；内容更新经显示入口拦截全屏，不自行抢前台。
 
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
 播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
@@ -401,7 +401,13 @@ class VisitStatusBubble(RoundedSurfaceLabel):
         self.setMinimumWidth(0)
         self.setText(text)
         self.adjustSize()
-        self.show()
+        callback = getattr(self, "display_callback", None)
+        if callback is not None:
+            callback(self)
+        else:
+            from .buddy_reminder_toast import BuddyReminderToast
+            BuddyReminderToast._set_windows_no_activate(self)
+            self.show()
 
     def _set_taunt_style(self, active: bool) -> None:
         self.setProperty("taunt", bool(active))
@@ -1011,17 +1017,12 @@ class QuickControlPanel(QWidget):
         # Configure the native window before showing it.  Reconfiguring a
         # visible macOS Tool/ToolTip window can make AppKit hide the first
         # hover hint, which made the label appear only after a click.
-        if sys.platform == "darwin" and self._window_behavior_callback is not None:
+        if self._window_behavior_callback is not None:
             self._window_behavior_callback(self.hover_hint, always_on_top=True)
-        self.hover_hint.show()
-        # The hint is a separate top-level window. Raise it after applying
-        # the native non-activating style so it stays above the shortcut dock
-        # on macOS as well as Windows without taking keyboard focus.
-        # ``ToolTip`` windows are ordered by AppKit/Windows themselves.  A
-        # manual raise on macOS can make the desktop pet briefly become the
-        # active application, which is exactly when the hint disappears.
-        if sys.platform != "darwin":
-            self.hover_hint.raise_()
+        else:
+            from .buddy_reminder_toast import BuddyReminderToast
+            BuddyReminderToast._set_windows_no_activate(self.hover_hint)
+            self.hover_hint.show()
 
     def _hide_hint(self) -> None:
         """Hide the hover label when the pointer leaves a shortcut."""

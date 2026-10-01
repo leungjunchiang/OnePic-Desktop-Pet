@@ -1,4 +1,4 @@
-"""本地闹钟独立调度与 occurrence 去重；直接回请共用扣款、异步发送与按钮完成回调。
+"""被动窗口显示前拦截全屏；瞬时互动在六毛窗口内部呈现，闹钟声音与展示分离。
 
 北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
 
@@ -542,7 +542,11 @@ class IdleRecoveryDialog(QWidget):
             if y + self.height() > bounds.bottom():
                 y = max(bounds.top(), bounds.bottom() - self.height() - 8)
             self.move(x, y)
-        self.show()
+        if hasattr(anchor, "_show_nonactivating"):
+            anchor._show_nonactivating(self)
+        else:
+            BuddyReminderToast._set_windows_no_activate(self)
+            self.show()
         QTimer.singleShot(6500, self.hide)
 
     def _request_decision(self, decision: str) -> None:
@@ -794,13 +798,14 @@ class PetWindow(QWidget):
         self._fullscreen_hidden = False
         self._manually_hidden = False
         self._fullscreen_restore_visible: dict[QWidget, bool] = {}
+        self._external_passive_surfaces: list[QWidget] = []
         self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_NORMAL
         self._fullscreen_suppression_mode = "normal"
         self._fullscreen_poll_candidate = None
         self._fullscreen_poll_samples = 0
         self._process_started_at = now_beijing()
         from .notification_manager import NotificationManager
-        self.notification_manager = NotificationManager(self, blocked=lambda: self._close_in_progress or self._fullscreen_hidden or detect_quiet_mode().blocked or getattr(self,"_social_notification_dnd",False),
+        self.notification_manager = NotificationManager(self, blocked=lambda: self._passive_surfaces_blocked() or getattr(self,"_social_notification_dnd",False),
             foreground=lambda: self._social_dialog is not None and self._social_dialog.isActiveWindow(),
             inline=lambda text: self._social_dialog._set_status(text))
         self._sleep_after_sit = False
@@ -896,6 +901,7 @@ class PetWindow(QWidget):
         )
         self._buddy_visit_window = BuddyVisitWindow()
         self.visit_status_bubble = VisitStatusBubble()
+        self.visit_status_bubble.display_callback = self._show_visit_status_bubble
         self._seen_visit_ids: set[str] = set()
         # A notification that the user has accepted, rejected, or explicitly
         # deferred must not be recreated from the same dashboard snapshot.
@@ -1043,6 +1049,14 @@ class PetWindow(QWidget):
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setGeometry(6, 0, width, label_height)
 
+        # 普通互动直接绘制在既有 label 的像素上；连 Qt 原生子窗口也不新增。
+        self._interaction_hint_text = ""
+        self._interaction_hint_rect = QRect()
+        self.interaction_hint_timer = QTimer(self)
+        self.interaction_hint_timer.setSingleShot(True)
+        self.interaction_hint_timer.setInterval(4000)
+        self.interaction_hint_timer.timeout.connect(self._hide_interaction_hint)
+
         self.photo_bubble = QLabel()
         self.photo_bubble.setWindowFlags(self._ambient_window_flags())
         self.photo_bubble.setAttribute(
@@ -1122,7 +1136,7 @@ class PetWindow(QWidget):
         self.coffee_scene_prompt.continue_requested.connect(self._continue_after_coffee_scene)
         self.coffee_scene_prompt.finish_requested.connect(self._finish_after_coffee_scene)
         self.quick_panel = QuickControlPanel(self._pet_name())
-        self.quick_panel.set_window_behavior_callback(self._apply_macos_window_behavior)
+        self.quick_panel.set_window_behavior_callback(self._show_nonactivating)
         self.quick_panel.layout_changed.connect(self._position_quick_panel)
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
@@ -1675,7 +1689,7 @@ class PetWindow(QWidget):
             # is the source of the translucent multi-image ghosting.
             target = QPixmap(self._activity_transition_target)
             visible = self._blend_activity_transition(target)
-            self.label.setPixmap(visible)
+            self.label.setPixmap(self._paint_interaction_hint(visible))
             self._refresh_window_mask(
                 self._activity_transition_target_state,
                 visible,
@@ -1801,7 +1815,7 @@ class PetWindow(QWidget):
         # this character pixmap and therefore cannot tint or mask the pet.
         composed = mask_source
         visible = self._blend_activity_transition(composed)
-        self.label.setPixmap(visible)
+        self.label.setPixmap(self._paint_interaction_hint(visible))
         effect_key = self._effect_phase if emotion_effect_name(display_state) else -1
         # The computer indicator changes colour, not geometry. A Burst never
         # invalidates the native QRegion because it is outside this window.
@@ -2018,7 +2032,9 @@ class PetWindow(QWidget):
                 self.label.width(),
                 self.label.height(),
             )
-        applied_key = (*cache_key, "position", self.label.x(), self.label.y())
+        hint_rect = self._interaction_hint_rect if getattr(self, "_interaction_hint_text", "") else None
+        applied_key = (*cache_key, "position", self.label.x(), self.label.y(),
+                       tuple(hint_rect.getRect()) if hint_rect is not None else None)
         # Detached Burst pixels deliberately never change the native input
         # silhouette. Avoid calling the relatively costly native setMask()
         # again while that silhouette key is unchanged.
@@ -2041,7 +2057,10 @@ class PetWindow(QWidget):
             offset_y = (self.label.height() - logical.height()) // 2
             region = QRegion(logical.mask()).translated(offset_x, offset_y)
             self._remember_cache_item(self._mask_cache, cache_key, region)
-        self.setMask(region.translated(self.label.x(), self.label.y()))
+        display_region = region.translated(self.label.x(), self.label.y())
+        if hint_rect is not None:
+            display_region = display_region.united(QRegion(hint_rect))
+        self.setMask(display_region)
         self._last_applied_mask_key = applied_key
 
     @_guard_qt_callback
@@ -2227,7 +2246,7 @@ class PetWindow(QWidget):
     def _ensure_on_top(self, *, event: str = "PolicyCheck") -> None:
         """在生命周期节点校验 native 层级，但绝不激活或抢输入焦点。"""
 
-        if self._fullscreen_hidden or self._manually_hidden:
+        if self._passive_surfaces_blocked():
             return
         visible_surfaces = [
             widget for widget in self._fullscreen_surfaces() if widget.isVisible()
@@ -2238,6 +2257,8 @@ class PetWindow(QWidget):
             self._apply_native_window_policy_for_widget(self, event=event)
         # Detached passive surfaces are separate native windows. Recheck them
         # in the same lifecycle pass, but never poll or call activateWindow().
+        if event == "TopmostWatchdog":
+            return  # 置顶自愈只维护六毛本体，绝不对 Toast/附属窗 reassert。
         for accessory in self._fullscreen_surfaces():
             if accessory is self or not accessory.isVisible():
                 continue
@@ -2266,7 +2287,7 @@ class PetWindow(QWidget):
                 # changing its topmost level. The low-frequency watchdog and
                 # macOS app-switch repair force a non-activating reassertion;
                 # ordinary lifecycle checks remain verification passes.
-                force_topmost=event
+                force_topmost=widget is self and event
                 in {
                     "TopmostWatchdog",
                     "ApplicationDeactivate",
@@ -2298,50 +2319,56 @@ class PetWindow(QWidget):
 
     @staticmethod
     def _raise_accessory(widget: QWidget) -> None:
-        """Raise a pet accessory only where it is known to be non-activating.
+        """附属窗只校验非激活原生层级；禁止 Qt raise 导致平台激活。"""
+        if sys.platform == "win32" and isinstance(widget, QWidget) and widget.isVisible():
+            topmost = bool(widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+            apply_native_window_policy(widget, topmost=topmost, qt_stays_on_top=topmost)
 
-        On macOS, an order change for a no-focus accessory can still make the
-        owning application frontmost.  The native panel is ordered by its
-        level when shown, so animation and refresh paths must not call
-        ``raise_`` there.
-        """
+    def _passive_surfaces_blocked(self) -> bool:
+        """被动展示实时检查；不等 750ms 两次采样，也不触发任何远端请求。"""
+        return bool(getattr(self, "_close_in_progress", False)
+                    or getattr(self, "_manually_hidden", False)
+                    or getattr(self, "_fullscreen_hidden", False)
+                    or self._foreground_display_mode() in {"fullscreen", "game_fullscreen", "presentation_fullscreen"}
+                    or detect_quiet_mode().blocked)
 
-        if sys.platform != "darwin":
-            widget.raise_()
+    def _show_visit_status_bubble(self, bubble) -> None:
+        self._show_nonactivating(bubble)
 
     def _show_nonactivating(self, widget: QWidget, *, always_on_top: bool | None = None) -> None:
-        """Configure a pet surface before showing it on macOS.
-
-        Applying the NSPanel style after ``show()`` is too late on some Qt
-        builds: AppKit briefly activates Lili, and repeated speech/status
-        updates can then steal ChatGPT's text focus.  Creating/configuring the
-        native handle first makes every passive surface display-only.
-        """
-
-        # A focus/session refresh can request a passive surface after the
-        # fullscreen poll has already hidden it (the duration bubble is
-        # refreshed every timer tick).  Do not let that refresh punch through
-        # a video or presentation fullscreen window.
-        if (
-            getattr(self, "_manually_hidden", False)
-            or getattr(self, "_fullscreen_hidden", False)
-        ) and widget in self._fullscreen_surfaces():
+        """先做显示许可与几何配置，再给隐藏原生窗设置 no-activate，最后显示。"""
+        if self._passive_surfaces_blocked():
             widget.hide()
+            lifecycle_log("passive-window.suppressed", widget, creator="PetWindow._show_nonactivating",
+                          fullscreen=getattr(self, "_fullscreen_hidden", False), reason="live_foreground_or_hidden")
             return
-
+        if widget.isVisible():
+            return  # 内容/倒计时刷新不重复 native show 或记成一次窗口创建。
+        # 初次显示时旧 position helper 的 isVisible 判断会跳过定位。
+        # 显式 prepare 模式允许在隐藏状态完成最终几何，避免桌面原点闪现。
+        positioners = (
+            (getattr(self, "speech_bubble", None), lambda: self._position_speech_bubble(prepare=True)),
+            (getattr(self, "visit_status_bubble", None), lambda: self._position_visit_status_bubble(prepare=True)),
+            (getattr(self, "work_duration_bubble", None), self._position_work_duration_bubble),
+            (getattr(self, "quick_panel", None), self._position_quick_panel),
+            (getattr(self, "work_controls", None), self._position_work_controls),
+            (getattr(self, "coffee_scene_prompt", None), self._position_coffee_scene_prompt),
+        )
+        for target, position in positioners:
+            if widget is target:
+                position()
+                break
+        widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         if sys.platform == "darwin":
-            # Configure the freshly created NSWindow before it is ordered;
-            # the bridge is non-activating and does not bring the app front.
-            self._apply_macos_window_behavior(
-                widget,
-                always_on_top=always_on_top,
-                event="Show",
-            )
+            self._apply_macos_window_behavior(widget, always_on_top=always_on_top, event="Show")
+        else:
+            # HWND 可以在隐藏时创建；禁止先 show 再修 WS_EX_NOACTIVATE。
+            self._apply_native_window_policy_for_widget(widget, event="PrepareShow")
         widget.show()
-        if sys.platform != "darwin":
-            # Windows creates/recreates the HWND during show; check it after
-            # the handle exists without activating the window.
-            self._apply_native_window_policy_for_widget(widget, event="Show")
+        lifecycle_log("passive-window.show", widget, creator="PetWindow._show_nonactivating",
+                      window_id=int(widget.effectiveWinId()), noactivate=True,
+                      width=widget.width(), height=widget.height())
 
     def _apply_macos_window_behavior(
         self,
@@ -2513,6 +2540,7 @@ class PetWindow(QWidget):
         surfaces: list[QWidget] = [
             self,
             self.quick_panel,
+            self.quick_panel.hover_hint,
             self.work_controls,
             self.coffee_scene_prompt,
             self.work_duration_bubble,
@@ -2531,6 +2559,8 @@ class PetWindow(QWidget):
         ):
             if optional is not None:
                 surfaces.append(optional)
+        self._external_passive_surfaces = [widget for widget in self._external_passive_surfaces if self._qt_object_is_alive(widget)]
+        surfaces.extend(self._external_passive_surfaces)
         return list(dict.fromkeys(surfaces))
 
     def _foreground_display_mode(self) -> str:
@@ -2580,11 +2610,13 @@ class PetWindow(QWidget):
                     widget: bool(widget.isVisible())
                     and widget is not getattr(self, "_local_burst_effect", None)
                     and widget is not self.speech_bubble
+                    and widget is not self.quick_panel.hover_hint
                     and widget not in getattr(self, "_coaching_surfaces", {}).values()
                     for widget in self._fullscreen_surfaces()
                 }
                 # Hide transient notices without resetting event deduplication/baselines.
                 self.notification_manager.suspend_display()
+                self._hide_interaction_hint()
                 self.speech_timer.stop()
             self._fullscreen_visibility_state = FULLSCREEN_VISIBILITY_SUPPRESSED
             self._fullscreen_suppression_mode = str(mode)
@@ -3084,6 +3116,8 @@ class PetWindow(QWidget):
         started = self._away_recovery_started_at or time.monotonic()
         away_seconds = max(1, round(time.monotonic() - started))
         self._close_away_recovery_card()
+        if self._passive_surfaces_blocked():
+            return
         card = AwayRecoveryCard(reason, away_seconds)
         card.continue_requested.connect(self._continue_from_away_recovery)
         card.dismiss_requested.connect(self._dismiss_away_recovery)
@@ -3301,6 +3335,8 @@ class PetWindow(QWidget):
             return
         # Low confidence defaults to rest, but leaves one reversible hint.
         self._complete_idle_episode("rest")
+        if self._passive_surfaces_blocked():
+            return
         if self._idle_recovery_dialog is None:
             self._idle_recovery_dialog = IdleRecoveryDialog(self)
             self._idle_recovery_dialog.decision_requested.connect(self._resolve_idle_recovery)
@@ -3561,10 +3597,10 @@ class PetWindow(QWidget):
             area.bottom() - self.height() - 12,
         )))
 
-    def _position_speech_bubble(self) -> None:
+    def _position_speech_bubble(self, *, prepare: bool = False) -> None:
         """把对话气泡放在人物上方，空间不足时自动移到侧面。"""
 
-        if not self.speech_bubble.isVisible():
+        if not prepare and not self.speech_bubble.isVisible():
             return
         area = self._screen_geometry()
         visible_bounds = self.mask().boundingRect()
@@ -3597,8 +3633,8 @@ class PetWindow(QWidget):
 
         self.speech_bubble.setText(text)
         self.speech_bubble.adjustSize()
-        self._show_nonactivating(self.speech_bubble)
         self._position_speech_bubble()
+        self._show_nonactivating(self.speech_bubble)
         self.speech_timer.start(max(1200, duration_ms))
 
     def _schedule_taunt_chatter(self) -> None:
@@ -4979,7 +5015,7 @@ class PetWindow(QWidget):
         y = max(available.top(), min(top, available.bottom() - note.height() + 1))
         note.move(x, y)
 
-    def _position_visit_status_bubble(self) -> None:
+    def _position_visit_status_bubble(self, *, prepare: bool = False) -> None:
         """Place the visit label in the lower red-zone beside work duration.
 
         The compact todo panel occupies the pet's upper-left area.  Putting
@@ -4990,7 +5026,7 @@ class PetWindow(QWidget):
         """
 
         bubble = self.visit_status_bubble
-        if not bubble.isVisible():
+        if not prepare and not bubble.isVisible():
             return
         bubble.adjustSize()
         area = self._screen_geometry()
@@ -5253,6 +5289,10 @@ class PetWindow(QWidget):
         """Open the local alarm editor without creating a second reminder system."""
 
         self._record_user_interaction()
+        # 只有用户主动切回闹钟中心，才展开全屏期间延后的控制。
+        if self._alarm_card is not None and getattr(self._alarm_card, "_ui_deferred", False):
+            self._alarm_card.center_on_current_screen()
+            self._alarm_card.show_alarm_foreground()
         todos = list(self.time_memory.todos.items)
         if self._alarm_center_dialog is None:
             self._alarm_center_dialog = AlarmCenterDialog(
@@ -5600,7 +5640,10 @@ class PetWindow(QWidget):
         quiet = quiet or self._quiet_mode_for_work_tick()
         deep_food_scene = bool((self.economy.active_food_scene() or {}).get("deep_focus"))
         claimed = self.time_memory.alarms.claim_due(
-            allow_during_dnd=not (quiet.blocked or deep_food_scene),
+            # 自动游戏/全屏抑制只影响 UI，不静音用户预设闹钟。
+            # 会议/录屏、深度食物场景仍遵循已有勿扰选择。
+            allow_during_dnd=not ((quiet.blocked and getattr(quiet, "reason", "")
+                                  not in {"游戏中", "全屏工作中"}) or deep_food_scene),
         )
         # ``claim_due`` is the only entry point that may create a card.  Do
         # not resurrect ``active`` rows as a fallback: old builds persisted
@@ -5650,8 +5693,11 @@ class PetWindow(QWidget):
         )
         # Center only once.  After the user drags or minimizes the native
         # window, accessory reflows must never move it back to the pet.
-        self._alarm_card.center_on_current_screen()
-        self._alarm_card.show_alarm_foreground()
+        if self._passive_surfaces_blocked():
+            card.start_alarm_suppressed()
+        else:
+            card.center_on_current_screen()
+            card.show_alarm_foreground()
         lifecycle_log("alarm.popup.owner_show", self._alarm_card)
 
     def _close_alarm_card(self) -> None:
@@ -8004,20 +8050,70 @@ class PetWindow(QWidget):
             self._last_focus_snapshot_status = snapshot_status
 
     def _notify_instant_interaction(self, identifier, kind, title, detail, *, label=None):
-        """只由基线后的新事件调用；同类合并、异类替换，复用单次四秒计时器。"""
+        """普通互动只更新已有窗口；绝不为一句互动创建独立 Toast。"""
         from .interaction_center import InteractionHintState, INTERACTION_HINT_DURATION_MS
         if not hasattr(self, "_interaction_hint_state"):
             self._interaction_hint_state = InteractionHintState()
-        display = None
-        if (self.isVisible() and not self._manually_hidden and not self._fullscreen_hidden
-                and not (self._social_dialog is not None and self._social_dialog.isVisible())):
-            display = lambda: self.show_speech(self._interaction_hint_state.text(kind, label), INTERACTION_HINT_DURATION_MS)
+        def display():
+            text = self._interaction_hint_state.text(kind, label)
+            if self._social_dialog is not None and self._social_dialog.isVisible():
+                self._social_dialog._set_status(text)
+            elif self.isVisible():
+                self._show_interaction_hint(text, INTERACTION_HINT_DURATION_MS)
         return self.notification_manager.notify(identifier, title, detail, self._open_interaction_inbox,
-            duration_ms=INTERACTION_HINT_DURATION_MS, display=display)
+            duration_ms=INTERACTION_HINT_DURATION_MS, display=display, event_type=kind)
+
+    def _paint_interaction_hint(self, pixmap):
+        """在六毛既有图层绘制轻量反馈，不构造 QWidget/原生句柄。"""
+        text = getattr(self, "_interaction_hint_text", "")
+        if not text:
+            return pixmap
+        from PySide6.QtGui import QPainter, QPen, QFontMetrics, QColor
+        painted = QPixmap(pixmap)
+        dpr = float(painted.devicePixelRatio())
+        width, height = round(painted.width()/dpr), round(painted.height()/dpr)
+        box = QRect(2, max(0, height-32), max(1, width-4), 30)
+        self._interaction_hint_rect = box.translated(self.label.x(), self.label.y())
+        painter = QPainter(painted)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor("#fff5de"))
+        painter.setPen(QPen(QColor("#827047"), 1))
+        painter.drawRoundedRect(box, 9, 9)
+        font = self.label.font()
+        font.setPixelSize(12)
+        painter.setFont(font)
+        painter.setPen(QColor("#35443e"))
+        clipped = QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight, box.width()-10)
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, clipped)
+        painter.end()
+        return painted
+
+    def _show_interaction_hint(self, text, duration_ms=4000):
+        """最新互动覆盖既有像素；旧计时器先停，不创建任何桌面窗/子窗口。"""
+        if self._passive_surfaces_blocked():
+            return
+        self.interaction_hint_timer.stop()
+        self._interaction_hint_text = text
+        self._last_applied_mask_key = None
+        self._refresh_pixmap()
+        self.interaction_hint_timer.start(duration_ms)
+
+    def _hide_interaction_hint(self):
+        if not hasattr(self, "interaction_hint_timer"):
+            return
+        self.interaction_hint_timer.stop()
+        self._interaction_hint_text = ""
+        self._interaction_hint_rect = QRect()
+        self._last_applied_mask_key = None
+        self._cancel_activity_transition()
+        self._refresh_pixmap()
 
     def _room_event_received(self, event: dict) -> None:
         """Play a received room interaction on this desktop pet."""
 
+        if event.get("created_at") and not self.notification_manager.is_fresh(event["created_at"]):
+            lifecycle_log("notification.suppressed", event_id=str(event.get("id") or ""), event_type="room", reason="history_or_expired")
+            return
         actor_id = str(
             event.get("actor_id")
             or event.get("sender_id")
@@ -8025,8 +8121,6 @@ class PetWindow(QWidget):
             or ""
         )
         if actor_id and actor_id in self._muted_buddy_ids:
-            return
-        if detect_quiet_mode().blocked:
             return
         kind = str(event.get("kind") or "")
         actor = social_pet_label(event.get("nickname"))
@@ -8050,11 +8144,7 @@ class PetWindow(QWidget):
         sender_id = str(request.get("sender_id") or request.get("requester_id") or "")
         if sender_id and sender_id in self._muted_buddy_ids:
             return
-        if detect_quiet_mode().blocked:
-            return
-        label = social_pet_label(request.get("owner_nickname") or request.get("nickname"))
-        self._set_temporary_activity("pointing", 20_000)
-        self.show_speech(f"收到{label}的搭子申请。打开‘互动’页即可处理。", 5600)
+        self._enqueue_buddy_request_notice(request)
 
     def _set_focus_task(self, title: str, minutes: int) -> None:
         task = self.time_memory.todos.find(title)
@@ -8151,11 +8241,10 @@ class PetWindow(QWidget):
 
     @_guard_qt_callback
     def _discipline_tick(self) -> None:
-        """Run local plan reminders and queue isolated account synchronization."""
+        """本地纪律定时器只处理规则/状态；周期网络接收统一由 social coordinator 唤醒。"""
 
         try:
             engine = self._ensure_discipline_engine()
-            self._sync_discipline_state()
             self._advance_coaching_cases(engine)
             self._refresh_desktop_coaching(engine)
             if not engine.enabled:
@@ -8274,7 +8363,7 @@ class PetWindow(QWidget):
                     # Reconnect/hydration can deliver previously unseen old
                     # IDs. Timestamp + first-response fence keeps them silent.
                     if (accepted and not seen and baseline is not None and created is not None
-                            and baseline < created <= observed_at and not self._close_in_progress
+                            and self.notification_manager.is_fresh(created, observed=observed_at, baseline=baseline) and not self._close_in_progress
                             ):
                         if self._social_dialog is not None:
                             self._social_dialog.invalidate_interactions({"event_id":"nudge:"+identifier,
@@ -8285,8 +8374,7 @@ class PetWindow(QWidget):
                             continue
                         from .discipline import DisciplineNotice
                         if nudge.get("kind") in {"cheer", "praise", "flower", "approve_finish", "knock", "ask", "rest_more", "return", "start", "finish", "progress", "take_break", "rest"}:
-                            if not detect_quiet_mode().blocked:
-                                self._notify_instant_interaction("nudge:"+identifier, str(nudge.get("kind") or ""), title, detail)
+                            self._notify_instant_interaction("nudge:"+identifier, str(nudge.get("kind") or ""), title, detail)
                         else:
                             self._show_discipline_notice(DisciplineNotice("buddy_nudge", title, detail, "info", identifier))
                 engine.store._save()
@@ -8355,7 +8443,7 @@ class PetWindow(QWidget):
         surfaces = getattr(self, "_coaching_surfaces", {})
         self._coaching_surfaces = surfaces
         hidden = (self._close_in_progress or not self.isVisible() or getattr(self, "_manually_hidden", False)
-                  or getattr(self, "_fullscreen_hidden", False) or detect_quiet_mode().blocked
+                  or self._passive_surfaces_blocked()
                   or (self._social_dialog is not None and self._social_dialog.isVisible()))
         today_seconds = self._discipline_progress_seconds()[0]
         view = projection(engine, today_seconds) if not hidden else {"card": None, "badge": None}
@@ -8468,8 +8556,7 @@ class PetWindow(QWidget):
         self.notification_manager.clear_all()
         if hasattr(self, "_interaction_hint_state"):
             del self._interaction_hint_state
-            self.speech_timer.stop()
-            self.speech_bubble.hide()
+            self._hide_interaction_hint()
         timer = getattr(self, "_discipline_notice_timer", None)
         if timer is not None:
             timer.stop()
@@ -8596,7 +8683,7 @@ class PetWindow(QWidget):
         remaining_ms = max(1, int((NOTIFICATION_LIFETIME_SECONDS - age_seconds) * 1000))
         mini_title = f"{'🟢' if event_type == 'start_work' else '🌙'} {nickname}"
         self.notification_manager.notify("work:" + str(event.get("id") or ""), title, detail,
-            self.open_social_hub, duration_ms=remaining_ms)
+            self.open_social_hub, duration_ms=remaining_ms, event_type=event_type)
 
     def _social_dialog_finished(self) -> None:
         dialog = self._social_dialog
@@ -8984,7 +9071,7 @@ class PetWindow(QWidget):
         }
 
     def _social_tick_impl(self) -> None:
-        """每 30 秒刷新房间状态；心跳按需发送，失败时保留离线桌宠。"""
+        """15 秒协调入口；缓存 dashboard、节流纪律增量，心跳由独立进程级 worker 维护。"""
 
         if os.environ.get("ONEPIC_USE_DEMO_ASSETS") == "1":
             # Offscreen/demo windows intentionally have no authenticated
@@ -8995,6 +9082,9 @@ class PetWindow(QWidget):
             self._economy_sync_user_id = ""
             self._start_social_auth_recovery()
             return
+        # 只保留一个周期事件接收协调入口。纪律定时器不再单独发 SELECT/RPC；
+        # 用户保存/最终事件仍可即时提交，由原有 inflight + 60s 节流防重入。
+        self._sync_discipline_state()
         heartbeat_thread = self._social_heartbeat_thread
         # Do not create a background worker for anonymous/offline pet windows.
         # Start it lazily on the first authenticated sync so tests and a
@@ -9243,8 +9333,6 @@ class PetWindow(QWidget):
         if data.get("_sync_offline") or data.get("data_source") == "local_cache":
             return
 
-        if detect_quiet_mode().blocked:
-            return
         def sender_id(item: object) -> str:
             if not isinstance(item, dict):
                 return ""
@@ -10602,37 +10690,23 @@ class PetWindow(QWidget):
             timer.start(0 if immediate else 250)
 
     def _show_buddy_visit(self, peer: dict) -> None:
-        if detect_quiet_mode().blocked:
-            return
+        """普通串门只播一次四秒本体提示；不恢复独立长期访客气泡。"""
         if self._taunt_active:
             return
-        # Active visits normally carry a database id.  Keep a deterministic
-        # fallback for older backend responses so a 30-second heartbeat does
-        # not repeatedly reopen a minimized visit window.
-        visit_id = str(
-            peer.get("id")
-            or peer.get("visit_id")
-            or f"{peer.get('user_id', '')}:{peer.get('visit_started_at', '')}:{peer.get('nickname', '')}"
-        )
-        if visit_id and visit_id in self._shown_active_visit_ids:
+        visit_id = str(peer.get("id") or peer.get("visit_id")
+            or f"{peer.get('user_id', '')}:{peer.get('visit_started_at', '')}:{peer.get('nickname', '')}")
+        if not visit_id or visit_id in self._shown_active_visit_ids:
             return
-        if visit_id:
-            self._shown_active_visit_ids.add(visit_id)
-        # A visit is a lightweight presence state. Keep the large historical
-        # two-pet window available for compatibility, but do not open it for
-        # ordinary room visits; the small label follows the pet instead.
+        self._shown_active_visit_ids.add(visit_id)
         self._buddy_visit_window.hide_visit()
-        nickname = str(
-            peer.get("private_note_name")
-            or peer.get("owner_nickname")
-            or peer.get("nickname")
-            or "搭子"
-        ).strip()
-        if sys.platform == "darwin":
-            self._apply_macos_window_behavior(self.visit_status_bubble)
-        self.visit_status_bubble.set_visitor(nickname)
-        self._position_visit_status_bubble()
-        self._raise_accessory(self.visit_status_bubble)
+        self.visit_status_bubble.hide()
+        started = peer.get("responded_at") or peer.get("visit_started_at")
+        if started and not self.notification_manager.is_fresh(started):
+            return
+        nickname = str(peer.get("private_note_name") or peer.get("owner_nickname")
+                       or peer.get("nickname") or "搭子").strip()
+        self._notify_instant_interaction("visit:"+visit_id, "visit", nickname+"来串门了",
+                                       "打开互动收件箱查看。", label=nickname+"来串门了")
 
     def _hide_buddy_visit(self) -> None:
         """Hide the compact visit label after the server ends the visit."""
