@@ -111,7 +111,7 @@ class BuddyReminderToast(QFrame):
         self._last_tick = time.monotonic()
         self.adjustSize()
 
-    def _set_windows_no_activate(self) -> None:
+    def _set_windows_no_activate(self, *, tool_window: bool = True) -> None:
         if sys.platform != "win32":
             return
         import ctypes
@@ -124,7 +124,8 @@ class BuddyReminderToast(QFrame):
         set_style.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
         set_style.restype = ctypes.c_ssize_t
         style = get_style(hwnd, -20)
-        set_style(hwnd, -20, style | 0x08000000 | 0x00000080)  # WS_EX_NOACTIVATE | TOOLWINDOW
+        # 显式配置的闹钟复用此策略，同时保留任务栏入口；普通Toast使用ToolWindow。
+        set_style(hwnd, -20, style | 0x08000000 | (0x00000080 if tool_window else 0x00040000))
 
     def show_passive(self, *, stack_index: int = 0) -> None:
         """Place and show the toast without changing the foreground HWND."""

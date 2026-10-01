@@ -52,6 +52,8 @@ def test_alarm_card_changes_native_z_order_without_mutating_qt_flags() -> None:
     )
     assert card.graphicsEffect() is None
     initial_flags = card.windowFlags()
+    assert initial_flags & Qt.WindowType.WindowDoesNotAcceptFocus
+    assert card.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
     card.show_alarm_foreground()
     app.processEvents()

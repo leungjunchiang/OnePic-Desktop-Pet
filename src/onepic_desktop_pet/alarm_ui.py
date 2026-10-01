@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""闹钟与专注恢复卡被动显示、不抢焦点；保留显式设置的响铃和任务栏入口。
 
 勾选配置使用统一矢量绘制。
 Non-modal UI for managing alarms and showing alarm-style recovery cards.
@@ -721,9 +721,11 @@ class AlarmCard(QDialog):
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setModal(False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setStyleSheet(ALARM_STYLE)
         self.setMinimumWidth(420)
         layout = QVBoxLayout(self)
@@ -917,19 +919,13 @@ class AlarmCard(QDialog):
         return self._schedule_generation
 
     def show_alarm_foreground(self) -> None:
-        """Show once in front of the active app, then start the sound."""
+        """显示用户预设的闹钟，但不激活窗口；响铃继续按原设置执行。"""
 
         lifecycle_log("alarm.popup.show.request", self, alarm_id=str(self.alarm.id))
         self._state = AlarmPopupState.UNSEEN
+        from .buddy_reminder_toast import BuddyReminderToast
+        BuddyReminderToast._set_windows_no_activate(self, tool_window=False)
         self.show()
-        # Headless Qt platforms do not have a native foreground window.  In
-        # particular, macOS's offscreen backend can block in raise_/activate
-        # while handling a top-level show.  The real desktop path still uses
-        # both calls; the headless path only needs the widget to be shown so
-        # that lifecycle and audio scheduling can be tested deterministically.
-        if QApplication.platformName().casefold() not in {"offscreen", "minimal"}:
-            self.raise_()
-            self.activateWindow()
         self._queue_temporary_topmost(True)
         # Start immediately after the first foreground presentation.  The
         # media backends do their native work asynchronously, so this does
@@ -1594,6 +1590,7 @@ class AwayRecoveryCard(QDialog):
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setModal(False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)

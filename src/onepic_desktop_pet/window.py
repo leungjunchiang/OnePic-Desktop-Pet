@@ -480,6 +480,7 @@ class IdleRecoveryDialog(QWidget):
         self.setMinimumWidth(330)
         self.setWindowFlags(
             Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
 
         layout = QVBoxLayout(self)
