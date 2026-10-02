@@ -116,6 +116,8 @@ def test_recent_historical_day_cache_expires_quickly_after_midnight():
         store, engine, lambda: (0, 0), engine_provider=owner.engine
     )
     yesterday = datetime.now(BEIJING_TIMEZONE).date() - timedelta(days=1)
+    panel._day_totals_cache = {}
+    owner.focus_analytics.calls = 0
     first = panel._completed_day_seconds(yesterday, 0)
     assert first == 100 and owner.focus_analytics.calls == 1
     key = (store.account_id, yesterday.isoformat())
@@ -133,8 +135,12 @@ def test_current_day_record_uses_live_progress_without_history_cache():
     engine = DisciplineEngine(store)
 
     class Analytics:
-        def account_today_seconds(self, _at):
-            raise AssertionError("current day must not use historical cache")
+        def __init__(self):
+            self.calls = []
+
+        def account_today_seconds(self, at):
+            self.calls.append(at)
+            return 0
 
     class Owner:
         focus_analytics = Analytics()
@@ -148,7 +154,9 @@ def test_current_day_record_uses_live_progress_without_history_cache():
         store, engine, lambda: (0, 0), engine_provider=owner.engine
     )
     today = datetime.now(BEIJING_TIMEZONE).date()
+    owner.focus_analytics.calls.clear()
     assert panel._completed_day_seconds(today, 9 * 3600 + 59 * 60) == 9 * 3600 + 59 * 60
+    assert owner.focus_analytics.calls == []
     dispose(panel)
 
 def test_history_includes_previous_weeks_and_pending_explanations():
