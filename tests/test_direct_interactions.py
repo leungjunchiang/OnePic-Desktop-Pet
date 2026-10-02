@@ -67,6 +67,10 @@ def test_reply_uses_original_sender_without_any_room_reads(app, action, kind):
 def test_response_button_immediate_feedback_survives_render_and_failure(app):
     client = Client(); client.error = True
     dialog = SocialHubDialog(client)
+    # This test owns the interaction RPC lifecycle only. Stop the unrelated
+    # 50ms bootstrap dashboard refresh so slower macOS runners cannot replace
+    # the transient failure status while this assertion is observing it.
+    dialog._initial_refresh_timer.stop()
     row = {"event_id":"visit:1", "sender_id":"b", "nickname":"搭子", "event_type":"cheer", "created_at":now_beijing().isoformat()}
     feed = dialog.interaction_feed
     feed.render([row])
