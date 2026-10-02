@@ -470,18 +470,31 @@ class DisciplineWorkspace(QWidget):
         self.reference_hint.setText(f"每周 {count} 个工作日 · 建议每天约 {format_work_duration(seconds)}\n本周未完成的时间自动分摊到剩余工作日。" if count else "未选择通常工作日；周目标保留。")
 
     def _completed_day_seconds(self, day, fallback):
-        """历史完成时长读取同一账号区间账本；不再以纪律日报副本为唯一来源。"""
+        """Read historical completion from the account interval ledger.
+
+        The current day is already supplied by the live progress provider and
+        must never be replaced by a five-minute history cache.  The immediately
+        preceding Beijing day also uses a short cache because its final
+        cross-midnight segment may be sealed on the first tick after 00:00.
+        Older days are immutable enough for the existing five-minute cache.
+        """
+        now_day = local_work_time().date()
+        if day == now_day:
+            return max(0, int(fallback or 0))
         owner = getattr(self.engine_provider, "__self__", None)
         owner = getattr(getattr(owner, "_discipline_engine_provider", None), "__self__", owner)
         analytics = getattr(owner, "focus_analytics", None)
         reader = getattr(analytics, "account_today_seconds", None)
-        if not callable(reader): return fallback
+        if not callable(reader):
+            return max(0, int(fallback or 0))
         cache = getattr(self, "_day_totals_cache", {})
         key = (self.store.account_id, day.isoformat())
         now = monotonic_time.monotonic()
-        if key not in cache or now - cache[key][0] >= 300:
+        cache_ttl = 8 if day == now_day - timedelta(days=1) else 300
+        if key not in cache or now - cache[key][0] >= cache_ttl:
             from .discipline import BEIJING_TIMEZONE
-            cache[key] = (now, int(reader(datetime.combine(day, time(23,59,59), BEIJING_TIMEZONE))))
+            value = int(reader(datetime.combine(day, time(23,59,59), BEIJING_TIMEZONE)))
+            cache[key] = (now, max(0, value))
         self._day_totals_cache = cache
         return cache[key][1]
 
@@ -586,17 +599,24 @@ class DisciplineWorkspace(QWidget):
             return  # 历史仅进入时展开；不随今日每次刷新扫描历史。
         rows = list(discipline_events(self.store.events))
         session_days = {stamp.date().isoformat() for stamp in starts.starts if stamp.date() < now_day} if starts else set()
+        owner = getattr(self.engine_provider, "__self__", None)
+        owner = getattr(getattr(owner, "_discipline_engine_provider", None), "__self__", owner)
+        analytics = getattr(owner, "focus_analytics", None)
+        # A Beijing-midnight seal changes the canonical interval projection
+        # without necessarily adding a discipline event.  Include that local
+        # revision in the render signature so a 23:57 cached history row is
+        # allowed to become the final 23:59/00:00 total immediately after the
+        # seal instead of remaining frozen for the rest of the dialog.
+        focus_revision = int(getattr(owner, "_focus_projection_revision", 0) or 0)
         signature = (tuple(repr(row) for row in rows), tuple(sorted(self.store.rest_days)), starts,
-                     tuple((row.get("id"), row.get("revision")) for row in self.store.coaching_cases))
+                     tuple((row.get("id"), row.get("revision")) for row in self.store.coaching_cases),
+                     focus_revision)
         if signature == getattr(self, "_ledger_signature", None): return
         self._ledger_signature = signature
         settled_days = sorted(session_days | {str(row.get("event_date")) for row in rows if row.get("event_type") in {"daily_report", "finish_work", "rest_day"} or str(row.get("event_date")) < now_day.isoformat()}, reverse=True)
         settled_days = sorted(set(settled_days) | {str(row.get("event_date")) for row in self.store.coaching_cases
                                                  if row.get("state") in {"completed", "forgiven"}}, reverse=True)
         history_totals = {}
-        owner = getattr(self.engine_provider, "__self__", None)
-        owner = getattr(getattr(owner, "_discipline_engine_provider", None), "__self__", owner)
-        analytics = getattr(owner, "focus_analytics", None)
         if settled_days and callable(getattr(analytics, "range_aggregate", None)):
             # 一次本地范围汇总，避免为历史每一行重复遍历全部区间；绝不请求服务器。
             from .discipline import BEIJING_TIMEZONE

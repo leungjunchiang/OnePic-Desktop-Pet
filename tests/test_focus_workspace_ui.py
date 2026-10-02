@@ -1,7 +1,7 @@
 """验证专注导航、备注身份、直接监督、撤权与跨账号回调隔离。"""
 
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -88,6 +88,76 @@ def test_account_switch_cannot_save_previous_accounts_form():
     assert panel.store.account_id == "b"
     dispose(panel)
 
+
+def test_recent_historical_day_cache_expires_quickly_after_midnight():
+    qt = app()
+    store = DisciplineStore("a", persist=False)
+    engine = DisciplineEngine(store)
+
+    class Analytics:
+        def __init__(self):
+            self.value = 100
+            self.calls = 0
+
+        def account_today_seconds(self, _at):
+            self.calls += 1
+            return self.value
+
+    class Owner:
+        def __init__(self):
+            self.focus_analytics = Analytics()
+            self._focus_projection_revision = 0
+
+        def engine(self):
+            return engine
+
+    owner = Owner()
+    panel = DisciplineDialog(
+        store, engine, lambda: (0, 0), engine_provider=owner.engine
+    )
+    yesterday = datetime.now(BEIJING_TIMEZONE).date() - timedelta(days=1)
+    panel._day_totals_cache = {}
+    owner.focus_analytics.calls = 0
+    first = panel._completed_day_seconds(yesterday, 0)
+    assert first == 100 and owner.focus_analytics.calls == 1
+    key = (store.account_id, yesterday.isoformat())
+    cached_at, value = panel._day_totals_cache[key]
+    panel._day_totals_cache[key] = (cached_at - 9, value)
+    owner.focus_analytics.value = 120
+    assert panel._completed_day_seconds(yesterday, 0) == 120
+    assert owner.focus_analytics.calls == 2
+    dispose(panel)
+
+
+def test_current_day_record_uses_live_progress_without_history_cache():
+    qt = app()
+    store = DisciplineStore("a", persist=False)
+    engine = DisciplineEngine(store)
+
+    class Analytics:
+        def __init__(self):
+            self.calls = []
+
+        def account_today_seconds(self, at):
+            self.calls.append(at)
+            return 0
+
+    class Owner:
+        focus_analytics = Analytics()
+        _focus_projection_revision = 0
+
+        def engine(self):
+            return engine
+
+    owner = Owner()
+    panel = DisciplineDialog(
+        store, engine, lambda: (0, 0), engine_provider=owner.engine
+    )
+    today = datetime.now(BEIJING_TIMEZONE).date()
+    owner.focus_analytics.calls.clear()
+    assert panel._completed_day_seconds(today, 9 * 3600 + 59 * 60) == 9 * 3600 + 59 * 60
+    assert owner.focus_analytics.calls == []
+    dispose(panel)
 
 def test_history_includes_previous_weeks_and_pending_explanations():
     qt = app()

@@ -50,6 +50,7 @@ from .ui_feedback import ACTION_BUTTON_STYLE, decorate_buttons, begin_button_wor
 from .accessories import SPECIAL_OUTFIT_SPRITES
 from .social import (
     PRESENCE_ONLINE_TTL_SECONDS,
+    SOCIAL_LEADERBOARD_TTL_SECONDS,
     SignupResult,
     SocialClient,
     SocialError,
@@ -361,10 +362,11 @@ def _buddy_focus_totals_text(buddy: dict[str, Any]) -> str:
 
     today = buddy.get("today_seconds")
     week = buddy.get("week_seconds")
+    day_label = now_beijing().strftime("%m/%d")
     today_text = (
         "今日专注时长已隐藏"
         if today is None
-        else f"今日已专注 {format_work_duration(today)}"
+        else f"今日（{day_label}）已专注 {format_work_duration(today)}"
     )
     week_text = (
         "本周专注时长已隐藏"
@@ -3408,6 +3410,11 @@ class SocialHubDialog(QDialog):
         self._leaderboard_rows: list[Any] = []
         self._leaderboard_loaded = False
         self._leaderboard_error = False
+        # The client already enforces the 5-minute RPC cache. Keep one UI
+        # timestamp too so every dashboard poll does not create a throwaway
+        # leaderboard worker, while still allowing refresh later in the same
+        # long-running study-room window.
+        self._leaderboard_last_refresh_at = 0.0
         # The server supplies friend rows as aggregate seconds. The current
         # user's row is refreshed from the local account projection without
         # causing another leaderboard RPC.
@@ -4921,12 +4928,78 @@ class SocialHubDialog(QDialog):
         self._queue_dashboard_apply(data)
         self._start_leaderboard_refresh()
 
+    def _reconcile_leaderboard_with_dashboard(self, rows: Any) -> list[dict[str, Any]]:
+        """Overlay fresh dashboard week totals onto cached leaderboard rows.
+
+        The leaderboard and buddy cards show the same Beijing-week aggregate.
+        The leaderboard RPC is intentionally cached for five minutes, while a
+        dashboard snapshot can be fresher. Reusing the already-downloaded buddy
+        totals removes visible card/ranking disagreements without another read.
+        A stale/offline dashboard is never allowed to roll the board backwards.
+        """
+
+        source_rows = list(rows or []) if isinstance(rows, list) else []
+        if bool(self.data.get("is_stale")) or str(
+            self.data.get("data_source") or self.data.get("_data_source") or ""
+        ).casefold() == "local_cache":
+            return self._decorate_leaderboard_rows(source_rows)
+
+        current_week: dict[str, int] = {}
+
+        def collect(items: Any) -> None:
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                user_id = _buddy_identifier(item)
+                if not user_id or item.get("week_seconds") is None:
+                    continue
+                try:
+                    current_week[user_id] = max(0, int(item.get("week_seconds") or 0))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+
+        for key in ("buddies", "room_people", "active_visits"):
+            collect(self.data.get(key))
+        current_room = self.data.get("current_room")
+        if isinstance(current_room, dict):
+            collect(current_room.get("room_people"))
+            collect(current_room.get("active_visits"))
+
+        reconciled: list[dict[str, Any]] = []
+        for raw in source_rows:
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            user_id = _buddy_identifier(row)
+            if user_id in current_week:
+                row["week_seconds"] = current_week[user_id]
+                row["focus_totals_source"] = (
+                    row.get("focus_totals_source")
+                    or self.data.get("focus_totals_source")
+                    or "dashboard_reconciled"
+                )
+            reconciled.append(row)
+        return self._decorate_leaderboard_rows(reconciled)
+
     def _start_leaderboard_refresh(self) -> None:
-        """Fetch the optional leaderboard without delaying the room snapshot."""
+        """Refresh the weekly board on its normal TTL, never once-per-window.
+
+        Buddy cards arrive through the dashboard and can update every minute or
+        two. v0.23.315 treated any embedded leaderboard field as a reason to
+        suppress this method forever, so the board could remain hours behind
+        the cards until the whole dialog was recreated.
+        """
 
         if self._closed or not self.client.signed_in:
             return
-        if "leaderboard" in self.data:
+        if (
+            self._leaderboard_loaded
+            and self._leaderboard_last_refresh_at > 0.0
+            and time.monotonic() - self._leaderboard_last_refresh_at
+            < SOCIAL_LEADERBOARD_TTL_SECONDS
+        ):
             return
         # 内存客户端与 dashboard 使用同样的同步边界，避免为本地空结果
         # 启动 QThread，再在窗口销毁时与原生线程析构发生竞争。
@@ -4949,9 +5022,10 @@ class SocialHubDialog(QDialog):
         thread.start()
 
     def _leaderboard_received(self, rows: list) -> None:
-        self._leaderboard_rows = self._decorate_leaderboard_rows(rows or [])
+        self._leaderboard_rows = self._reconcile_leaderboard_with_dashboard(rows or [])
         self._leaderboard_loaded = True
         self._leaderboard_error = False
+        self._leaderboard_last_refresh_at = time.monotonic()
         self._render_wealth_leaderboard(self._leaderboard_rows)
 
     def _leaderboard_failed(self, error: object) -> None:
@@ -6622,9 +6696,20 @@ class SocialHubDialog(QDialog):
         # while the room dashboard remains healthy.  Preserve the last known
         # board until an explicit ``leaderboard=[]`` arrives.
         if "leaderboard" in self.data:
-            self._leaderboard_rows = self._decorate_leaderboard_rows(self.data.get("leaderboard") or [])
+            self._leaderboard_rows = self._reconcile_leaderboard_with_dashboard(
+                self.data.get("leaderboard") or []
+            )
             self._leaderboard_loaded = True
             self._leaderboard_error = False
+            self._leaderboard_last_refresh_at = time.monotonic()
+            self._render_wealth_leaderboard(self._leaderboard_rows)
+        elif self._leaderboard_rows:
+            # A normal dashboard usually omits the dedicated leaderboard.
+            # Reuse its fresher buddy totals locally so cards and ranking stay
+            # on the same week value without any extra Supabase request.
+            self._leaderboard_rows = self._reconcile_leaderboard_with_dashboard(
+                self._leaderboard_rows
+            )
             self._render_wealth_leaderboard(self._leaderboard_rows)
         me_presence = self.data.get("me_presence") or {}
         own_label = social_pet_label(self.owner_nickname or me.get("nickname") or me.get("display_name"))
