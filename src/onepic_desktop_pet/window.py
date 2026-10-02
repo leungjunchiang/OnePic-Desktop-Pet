@@ -3704,14 +3704,30 @@ class PetWindow(QWidget):
                 y = max(area.top(), self.y())
         self.speech_bubble.move(x, y)
 
-    def show_speech(self, text: str, duration_ms: int = 4800) -> None:
-        """显示不会抢走键盘焦点的桌面对话气泡。"""
+    def show_speech(
+        self,
+        text: str,
+        duration_ms: int = 4800,
+        *,
+        source: str = "passive",
+    ) -> None:
+        """显示不会抢走键盘焦点的桌面对话气泡。
+
+        用户操作反馈可跳过普通 quiet mode；真正全屏、手动隐藏和退出
+        仍由统一显示门禁处理。
+        """
 
         self.speech_bubble.setText(text)
         self.speech_bubble.adjustSize()
         self._position_speech_bubble()
-        self._show_nonactivating(self.speech_bubble)
-        self.speech_timer.start(max(1200, duration_ms))
+        shown = self._show_nonactivating(
+            self.speech_bubble,
+            source=source,
+        )
+        if shown:
+            self.speech_timer.start(max(1200, duration_ms))
+        else:
+            self.speech_timer.stop()
 
     def _schedule_taunt_chatter(self) -> None:
         """旧入口不再为持续状态启动重复通知。"""
@@ -3760,6 +3776,7 @@ class PetWindow(QWidget):
         self.show_speech(
             f"{reply.text}\n精力 {self.mood.energy} · 饱食 {self.mood.fullness}",
             5200,
+            source="user_action",
         )
         return reply
 
@@ -4048,7 +4065,11 @@ class PetWindow(QWidget):
         if not self.work_timer.is_running:
             self.start_work_timer()
         else:
-            self.show_speech("好，继续工作。", 3200)
+            self.show_speech(
+                "好，继续工作。",
+                3200,
+                source="user_action",
+            )
 
     def _finish_after_coffee_scene(self) -> None:
         self.coffee_scene_prompt.hide()
@@ -11733,7 +11754,32 @@ class PetWindow(QWidget):
         # temporarily combined in the wrong order.
         self.quick_panel.prepare_for_show()
         self._position_quick_panel()
-        self._show_nonactivating(self.quick_panel)
+        quiet = detect_quiet_mode()
+        foreground_mode = self._foreground_display_mode()
+        lifecycle_log(
+            "quick_panel.show.request",
+            self.quick_panel,
+            source="user_action",
+            foreground_mode=foreground_mode,
+            quiet_mode=bool(getattr(quiet, "blocked", False)),
+            quiet_reason=str(getattr(quiet, "reason", "") or ""),
+            decision=(
+                "block_fullscreen"
+                if foreground_mode in {
+                    "fullscreen",
+                    "game_fullscreen",
+                    "presentation_fullscreen",
+                }
+                else "allow_explicit"
+            ),
+        )
+        shown = self._show_nonactivating(
+            self.quick_panel,
+            source="user_action",
+        )
+        if not shown:
+            self.quick_panel.hide_timer.stop()
+            return
         self._raise_accessory(self.quick_panel)
         # A newly positioned top-level panel can receive a synthetic
         # enterEvent on headless/offscreen runners when it opens beneath the
@@ -11762,8 +11808,12 @@ class PetWindow(QWidget):
             "本轮 " + duration if snapshot.status in {"focus", "rest"} else "本轮未开始"
         )
         self._position_work_controls()
-        self._show_nonactivating(self.work_controls)
-        self._raise_accessory(self.work_controls)
+        shown = self._show_nonactivating(
+            self.work_controls,
+            source="user_action",
+        )
+        if shown:
+            self._raise_accessory(self.work_controls)
 
     def _start_work_from_control(self) -> None:
         """Start from the IDLE right-click control, then collapse it."""
