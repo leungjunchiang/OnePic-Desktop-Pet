@@ -1,4 +1,6 @@
-"""远端返回量可选本地诊断；进程 Presence 与 focus/rest/idle 分离，心跳不携带统计或配置。
+"""互动接收字段支持省略；未主动修改时不覆盖服务端或其他设备的选择。
+
+远端返回量可选本地诊断；进程 Presence 与 focus/rest/idle 分离，心跳不携带统计或配置。
 
 Lili 搭子自习室的最小社交客户端与可替换网络后端。
 
@@ -1532,7 +1534,7 @@ class SocialBackend(Protocol):
     def rpc(self, name: str, body: dict[str, Any]) -> Any: ...
     def todo_upsert(self, payload: dict[str, Any]) -> Any: ...
     def todo_pull(self, *, after_updated_at: str | None, after_id: str | None, limit: int) -> Any: ...
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None: ...
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool | None = None, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None: ...
     def update_owner_nickname(self, nickname: str) -> None: ...
     def heartbeat(self, *, user_id: str | None = None, working: bool, session_active: bool = False, session_id: str | None = None, session_started_at: str | None = None, device_id: str = "", sequence: int = 0, input_idle_seconds: int | None = None, presence_state: str | None = None, activity_state: str | None = None) -> None: ...
     def recover_session(self) -> bool: ...
@@ -2192,9 +2194,11 @@ class HttpSocialBackend:
             },
         )
 
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None:
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool | None = None, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None:
         clean = nickname.strip()[:24]
-        body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set)}
+        body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set)}
+        if allow_visits is not None:
+            body["allow_visits"] = bool(allow_visits)
         if pet_name is not None:
             body["pet_name"] = str(pet_name or "").replace("\x00", "").strip()[:24] or None
         # Omitting owner_nickname preserves the legacy coupling for old
@@ -3122,7 +3126,7 @@ class LegacyDirectSocialClient:
             return self._http_backend.rpc(name, body)
         return self._raw("POST", f"/rest/v1/rpc/{name}", body, authenticated=True)
 
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None:
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool | None = None, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None:
         if self._http_backend is not None:
             return self._http_backend.update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set, pet_name=pet_name, owner_nickname=owner_nickname)
         if not self.session:
@@ -3130,7 +3134,9 @@ class LegacyDirectSocialClient:
         query = urllib.parse.urlencode({"user_id": f"eq.{self.session.user_id}"})
         clean = nickname.strip()[:24]
         path = f"/rest/v1/lili_profiles?{query}"
-        body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "allow_visits": bool(allow_visits), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": now_beijing().isoformat()}
+        body = {"visibility": visibility, "show_exact_time": bool(show_exact_time), "outfit_key": outfit_key[:60], "wealth_leaderboard_enabled": bool(wealth_leaderboard_enabled), "wealth_leaderboard_preference_set": bool(wealth_leaderboard_preference_set), "updated_at": now_beijing().isoformat()}
+        if allow_visits is not None:
+            body["allow_visits"] = bool(allow_visits)
         if pet_name is not None:
             body["pet_name"] = str(pet_name or "").replace("\x00", "").strip()[:24] or None
         if owner_nickname is _PROFILE_FIELD_UNSET:
@@ -3615,7 +3621,7 @@ class DashboardCacheClientBase:
             raise
 
     def rpc(self, name: str, body: dict[str, Any]) -> Any: return self._require_backend().rpc(name, body)
-    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None: self._require_backend().update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set, pet_name=pet_name, owner_nickname=owner_nickname)
+    def update_profile(self, *, nickname: str, visibility: str, show_exact_time: bool, allow_visits: bool | None = None, outfit_key: str = "", wealth_leaderboard_enabled: bool = True, wealth_leaderboard_preference_set: bool = True, pet_name: str | None = None, owner_nickname: str | None | object = _PROFILE_FIELD_UNSET) -> None: self._require_backend().update_profile(nickname=nickname, visibility=visibility, show_exact_time=show_exact_time, allow_visits=allow_visits, outfit_key=outfit_key, wealth_leaderboard_enabled=wealth_leaderboard_enabled, wealth_leaderboard_preference_set=wealth_leaderboard_preference_set, pet_name=pet_name, owner_nickname=owner_nickname)
     def update_owner_nickname(self, nickname: str) -> None: self._require_backend().update_owner_nickname(nickname)
     def heartbeat(self, **kwargs: Any) -> None: self._require_backend().heartbeat(**kwargs)
     def send_interaction(self, **kwargs: Any) -> None: self._require_backend().send_interaction(**kwargs)

@@ -1,4 +1,6 @@
-"""普通成功反馈复用页内标签；Presence 退出等待真实网络线程收口后再销毁 Qt。
+"""搭子互动默认欢迎；只提交主动修改的接收选项，避免旧设备保存资料时关闭互动。
+
+普通成功反馈复用页内标签；Presence 退出等待真实网络线程收口后再销毁 Qt。
 
 统一进程 Presence、活动状态、TTL 与本地自身显示。
 
@@ -3367,6 +3369,10 @@ class SocialHubDialog(QDialog):
         self.owner_nickname = clean_owner_nickname(owner_nickname)
         self._owner_nickname_dirty = False
         self._pending_owner_nickname: str | object = _NO_PENDING_OWNER_NICKNAME
+        self._interaction_preferences_account = _session_user_id(client)
+        self._interaction_preferences_baseline = {"allow_visits": True, "buddy_interaction_mode": "welcome"}
+        self._interaction_preferences_dirty: set[str] = set()
+        self._interaction_preferences_pending: dict[str, tuple[Any, float]] = {}
         self.data: dict[str, Any] = {}
         # A private note belongs to this viewer, not to the shared profile.
         # Keep it across partial/legacy snapshots so a missing optional field
@@ -5120,7 +5126,7 @@ class SocialHubDialog(QDialog):
     def _auto_accept_light_food_interactions(self) -> None:
         """欢迎互动时自动接下茶/蛋糕；专注优先只在本地空闲时接下。"""
         me = self.data.get("me") or {}
-        mode = str(me.get("buddy_interaction_mode") or "focus_priority")
+        mode = str(me.get("buddy_interaction_mode") or "welcome")
         if mode == "do_not_disturb":
             return
         snapshot = self._focus_snapshot
@@ -5673,7 +5679,7 @@ class SocialHubDialog(QDialog):
         return card
 
     def _profile_card(self) -> QWidget:
-        card, layout = self._card("我的账号", "管理搭子码、可见性和串门权限。")
+        card, layout = self._card("我的账号", "管理搭子码、可见性与互动偏好。")
         self.identity = QLabel(); self.identity.setStyleSheet("font-size:18px;font-weight:650;"); self.identity.setWordWrap(True)
         identity_row = QHBoxLayout()
         identity_row.setSpacing(8)
@@ -5695,21 +5701,34 @@ class SocialHubDialog(QDialog):
         layout.addLayout(owner_name_row)
         self.hidden = QCheckBox("隐身")
         self.exact = QCheckBox("显示准确时长")
-        self.visits_allowed = QCheckBox("允许搭子串门")
+        self.visits_allowed = QCheckBox("接收搭子互动（默认开启）")
+        self.visits_allowed.setChecked(True)
+        self.visits_allowed.setToolTip("接收串门、加油、嘲讽与投喂；专注、后台运行或全屏不会关闭此开关。")
+        self.visits_allowed.toggled.connect(lambda _checked: self._interaction_preference_edited("allow_visits"))
         self.wealth_opt_in = QCheckBox("参加本周专注排行榜")
         self.wealth_opt_in.setChecked(True)
         self.wealth_opt_in.setToolTip("默认参加；仅已接受的搭子可见，可随时关闭。")
         layout.addWidget(self.hidden); layout.addWidget(self.exact); layout.addWidget(self.visits_allowed); layout.addWidget(self.wealth_opt_in)
         layout.addWidget(QLabel("搭子互动："))
         self.interaction_mode = QComboBox()
-        self.interaction_mode.addItem("欢迎互动", "welcome")
-        self.interaction_mode.addItem("专注优先（推荐）", "focus_priority")
-        self.interaction_mode.addItem("免打扰", "do_not_disturb")
+        self.interaction_mode.addItem("欢迎互动（默认）", "welcome")
+        self.interaction_mode.addItem("专注优先（仍接收互动）", "focus_priority")
+        self.interaction_mode.addItem("暂停接收互动（手动关闭）", "do_not_disturb")
+        self.interaction_mode.currentIndexChanged.connect(lambda _index: self._interaction_preference_edited("buddy_interaction_mode"))
         self.interaction_mode.setMinimumWidth(0)
         self.interaction_mode.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.interaction_mode.setToolTip("决定好友敬茶、请吃蛋糕、请奶茶或邀请开工时如何到达你的六毛。")
         layout.addWidget(self.interaction_mode)
-        save = QPushButton("保存隐私设置"); save.clicked.connect(self._save_profile)
+        hint = QLabel("建议保持欢迎互动。全屏或游戏时仅隐藏即时提示，互动仍保留在收件箱。")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.restore_interactions_button = QPushButton("恢复欢迎互动")
+        self.restore_interactions_button.setVisible(False)
+        self.restore_interactions_button.clicked.connect(self._restore_interactions)
+        layout.addWidget(self.restore_interactions_button)
+        self.profile_save_button = QPushButton("保存隐私设置")
+        save = self.profile_save_button
+        save.clicked.connect(self._save_profile)
         security = QPushButton("账号与安全…"); security.clicked.connect(self._open_account_security)
         logout = QPushButton("退出账号"); logout.clicked.connect(self._logout)
         for button in (save, security, logout):
@@ -5718,6 +5737,83 @@ class SocialHubDialog(QDialog):
             layout.addWidget(button)
         layout.addStretch()
         return card
+
+    def _interaction_preference_value(self, field: str) -> Any:
+        if field == "allow_visits":
+            return self.visits_allowed.isChecked()
+        return str(self.interaction_mode.currentData() or "welcome")
+
+    def _interaction_preference_edited(self, field: str) -> None:
+        if self._interaction_preference_value(field) == self._interaction_preferences_baseline[field]:
+            self._interaction_preferences_dirty.discard(field)
+        else:
+            self._interaction_preferences_dirty.add(field)
+        self._update_interaction_restore_button()
+
+    def _update_interaction_restore_button(self) -> None:
+        if hasattr(self, "restore_interactions_button"):
+            self.restore_interactions_button.setVisible(
+                not self.visits_allowed.isChecked()
+                or self.interaction_mode.currentData() == "do_not_disturb"
+            )
+
+    def _restore_interactions(self) -> None:
+        """恢复接收是用户明确操作；不替其他搭子修改权限。"""
+        self.visits_allowed.setChecked(True)
+        self.interaction_mode.setCurrentIndex(self.interaction_mode.findData("welcome"))
+        self._save_profile()
+
+    def _reset_interaction_preferences(self, account: str) -> None:
+        self._interaction_preferences_account = account
+        self._interaction_preferences_baseline = {"allow_visits": True, "buddy_interaction_mode": "welcome"}
+        self._interaction_preferences_dirty.clear()
+        self._interaction_preferences_pending.clear()
+        if hasattr(self, "visits_allowed"):
+            for field, widget in (("allow_visits", self.visits_allowed), ("buddy_interaction_mode", self.interaction_mode)):
+                was_blocked = widget.blockSignals(True)
+                if field == "allow_visits":
+                    widget.setChecked(True)
+                else:
+                    widget.setCurrentIndex(widget.findData("welcome"))
+                widget.blockSignals(was_blocked)
+            self._update_interaction_restore_button()
+
+    def _render_interaction_preferences(self, me: dict[str, Any]) -> None:
+        """刷新只读取服务端配置，不覆盖正在编辑的选项或立即回滚刚保存的值。"""
+        for field, widget in (("allow_visits", self.visits_allowed), ("buddy_interaction_mode", self.interaction_mode)):
+            if field not in me or me[field] is None:
+                # Keep the acknowledged configuration in the data projection
+                # too, so a sparse heartbeat cannot unmute notifications.
+                me[field] = self._interaction_preferences_baseline[field]
+            if field in self._interaction_preferences_dirty:
+                continue
+            value = bool(me[field]) if field == "allow_visits" else str(me[field])
+            if field == "buddy_interaction_mode" and widget.findData(value) < 0:
+                continue
+            pending = self._interaction_preferences_pending.get(field)
+            if pending is not None:
+                if value == pending[0] or time.monotonic() >= pending[1]:
+                    self._interaction_preferences_pending.pop(field, None)
+                else:
+                    value = pending[0]
+                    me[field] = value
+            self._interaction_preferences_baseline[field] = value
+            was_blocked = widget.blockSignals(True)
+            if field == "allow_visits":
+                widget.setChecked(value)
+            else:
+                widget.setCurrentIndex(widget.findData(value))
+            widget.blockSignals(was_blocked)
+        self._update_interaction_restore_button()
+
+    def _interaction_preference_saved(self, field: str, value: Any) -> None:
+        self._interaction_preferences_baseline[field] = value
+        self._interaction_preferences_dirty.discard(field)
+        # A response already in flight before the save may contain old values.
+        # The short fence expires so another device's explicit choice can arrive.
+        self._interaction_preferences_pending[field] = (value, time.monotonic() + 15)
+        self.data.setdefault("me", {})[field] = value
+        self._update_interaction_restore_button()
 
     def _copy_buddy_code(self) -> None:
         me = self.data.get("me") or {}
@@ -5835,6 +5931,7 @@ class SocialHubDialog(QDialog):
             self._fill_signed_out_placeholders()
 
     def _fill_signed_out_placeholders(self) -> None:
+        self._reset_interaction_preferences("")
         self._buddy_presence_batch_ready = False
         self._buddy_order_ids = []
         self.buddies.clear(); self.buddies.addItem("登录后，这里会显示搭子的在线与专注状态。")
@@ -6484,6 +6581,10 @@ class SocialHubDialog(QDialog):
             )
             return
 
+        preference_account = active_user_id or payload_user_id
+        if preference_account != self._interaction_preferences_account:
+            self._reset_interaction_preferences(preference_account)
+
         payload, partial = _merge_dashboard_snapshot(previous_data, payload)
         if (
             "_reminder_snapshot" not in payload
@@ -6639,10 +6740,10 @@ class SocialHubDialog(QDialog):
             if request_id and request_id not in self._seen_buddy_request_ids:
                 self._seen_buddy_request_ids.add(request_id)
                 self.buddy_request_received.emit(dict(request))
-        self.hidden.setChecked(me.get("visibility") == "hidden"); self.exact.setChecked(bool(me.get("show_exact_time",True))); self.visits_allowed.setChecked(bool(me.get("allow_visits",True))); self.wealth_opt_in.setChecked(_wealth_leaderboard_enabled(me))
-        mode = str(me.get("buddy_interaction_mode") or "focus_priority")
-        mode_index = self.interaction_mode.findData(mode)
-        self.interaction_mode.setCurrentIndex(mode_index if mode_index >= 0 else 1)
+        self.hidden.setChecked(me.get("visibility") == "hidden")
+        self.exact.setChecked(bool(me.get("show_exact_time", True)))
+        self.wealth_opt_in.setChecked(_wealth_leaderboard_enabled(me))
+        self._render_interaction_preferences(me)
         people=(self.data.get("buddies") or [])+(self.data.get("room_people") or [])
         seen=set()
         unique_people = []
@@ -7040,6 +7141,8 @@ class SocialHubDialog(QDialog):
 
     def _save_profile(self) -> None:
         if not self._require_login(): return
+        if not begin_button_work(self.profile_save_button, "正在保存…"):
+            return
         self._begin_action("正在保存隐私设置…")
         try:
             me=self.data.get("me") or {}
@@ -7051,7 +7154,12 @@ class SocialHubDialog(QDialog):
                 me.get("nickname") or me.get("display_name") or "搭子"
             ).replace("\x00", "").strip()[:24] or "搭子"
             owner_nickname = clean_owner_nickname(self.owner_name_edit.text())
-            self.client.update_profile(nickname=account_nickname,visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),allow_visits=self.visits_allowed.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True,owner_nickname=owner_nickname)
+            interaction_update = {}
+            if "allow_visits" in self._interaction_preferences_dirty:
+                interaction_update["allow_visits"] = self.visits_allowed.isChecked()
+            self.client.update_profile(nickname=account_nickname,visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True,owner_nickname=owner_nickname, **interaction_update)
+            if "allow_visits" in interaction_update:
+                self._interaction_preference_saved("allow_visits", interaction_update["allow_visits"])
             self.owner_nickname = owner_nickname
             self._owner_nickname_dirty = False
             self._pending_owner_nickname = owner_nickname
@@ -7059,9 +7167,15 @@ class SocialHubDialog(QDialog):
             me["owner_nickname"] = owner_nickname or None
             self.data["me"] = me
             self._render_self_identity()
-            self.client.rpc("lili_set_buddy_interaction_mode", {"p_mode": str(self.interaction_mode.currentData() or "focus_priority")})
+            if "buddy_interaction_mode" in self._interaction_preferences_dirty:
+                mode = str(self.interaction_mode.currentData() or "welcome")
+                self.client.rpc("lili_set_buddy_interaction_mode", {"p_mode": mode})
+                self._interaction_preference_saved("buddy_interaction_mode", mode)
             self.refresh()
         except SocialError as exc: self._error(exc)
+        finally:
+            self._end_action()
+            end_button_work(self.profile_save_button)
 
     def _set_subscription(self, buddy: dict[str, Any], event_type: str, enabled: bool) -> None:
         """Change exactly one durable subscription flag after a user click."""

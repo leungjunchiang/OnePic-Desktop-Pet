@@ -1,4 +1,4 @@
-"""Tests for Supabase-first routing and the CloudBase proxy fallback."""
+"""验证资料保存省略未修改的互动接收权限，以及 Supabase 优先与代理路由。"""
 
 import json
 import io

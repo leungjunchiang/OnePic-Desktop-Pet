@@ -1,11 +1,23 @@
 -- Real PostgreSQL RPC tests. Synthetic users only; no personal data retained.
 begin;
+create temporary table interaction_opt_out_fixture(id uuid) on commit drop;
+insert into interaction_opt_out_fixture values(gen_random_uuid());
+insert into auth.users(id,raw_user_meta_data)
+  select id,'{}'::jsonb from interaction_opt_out_fixture;
+update public.lili_profiles set allow_visits=false,buddy_interaction_mode='do_not_disturb'
+  where user_id in(select id from interaction_opt_out_fixture);
 -- REPLAY_DIRECT_HERE
 do $$
 declare a uuid:=gen_random_uuid(); b uuid:=gen_random_uuid(); c uuid:=gen_random_uuid();
   origin uuid; sent uuid; again uuid; item text; key text; denied boolean; n integer;
 begin
+  if not exists(select 1 from public.lili_profiles where user_id in(select id from interaction_opt_out_fixture)
+    and not allow_visits and buddy_interaction_mode='do_not_disturb') then
+    raise exception 'Default upgrade overwrote an explicit opt-out'; end if;
   insert into auth.users(id,raw_user_meta_data) values(a,'{}'),(b,'{}'),(c,'{}');
+  if (select count(*) from public.lili_profiles where user_id in(a,b,c)
+    and allow_visits and buddy_interaction_mode='welcome')<>3 then
+    raise exception 'New profiles did not default to enabled welcome interactions'; end if;
   insert into public.lili_buddy_links(requester_id,addressee_id,status) values(a,b,'accepted');
   -- No room or room membership fixtures at all.
   insert into public.lili_visit_events(sender_id,receiver_id,kind,status) values(b,a,'cheer','accepted') returning id into origin;

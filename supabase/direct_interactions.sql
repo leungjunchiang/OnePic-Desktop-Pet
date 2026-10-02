@@ -1,5 +1,9 @@
 -- Ordinary one-to-one interactions reuse visit facts. Room events retain their
 -- NOT NULL room_id and coaching retains its independent authorization RPCs.
+-- New profiles welcome interactions. Replaying this upgrade changes defaults
+-- only; a person's deliberate opt-out remains intact. Presence never owns them.
+alter table public.lili_profiles alter column allow_visits set default true;
+alter table public.lili_profiles alter column buddy_interaction_mode set default 'welcome';
 alter table public.lili_visit_events drop constraint if exists lili_visit_events_kind_check;
 alter table public.lili_visit_events add constraint lili_visit_events_kind_check check(kind in (
   'visit','cheer','water','rest','food_coffee','food_milk_tea','food_tea','food_cake','food_cake_share',
