@@ -1,4 +1,4 @@
-"""验证自习室导航、备注优先身份、直接互动与房间边界、账号同步及未登录交互。"""
+"""验证自习室导航、备注优先身份、直接互动、账号同步及 Presence 安全退出。"""
 
 import json
 import os
@@ -92,6 +92,58 @@ def test_heartbeat_worker_sends_inactive_presence_without_waiting_for_focus_ack(
     )
     assert worker._shutdown_payload["working"] is False
     assert worker._shutdown_payload["session_active"] is False
+
+
+def test_heartbeat_shutdown_does_not_queue_second_request_behind_inflight(
+    monkeypatch,
+) -> None:
+    """退出遇到 TLS 请求进行中时复用该请求并等待，而不是再排一次 heartbeat。"""
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class Client:
+        def __init__(self) -> None:
+            self.payloads: list[dict] = []
+
+        def heartbeat(self, **payload) -> None:
+            self.payloads.append(dict(payload))
+            entered.set()
+            release.wait(2.0)
+
+    monkeypatch.setattr(
+        "onepic_desktop_pet.social_ui._next_presence_sequence",
+        lambda _user_id: 51,
+    )
+    client = Client()
+    worker = SocialHeartbeatWorker(client)
+    worker.start()
+    assert worker._thread is not None and worker._thread.daemon is False
+    worker.update_presence(
+        {
+            "user_id": "account-shutdown",
+            "working": True,
+            "session_active": True,
+            "session_id": "focus-a",
+            "session_started_at": "2026-10-02T09:00:00+08:00",
+        },
+        immediate=True,
+    )
+    assert entered.wait(1.0)
+
+    worker.stop(
+        {
+            "user_id": "account-shutdown",
+            "presence_state": "offline",
+            "activity_state": "idle",
+            "working": False,
+            "session_active": False,
+        }
+    )
+    assert worker._shutdown_payload is None
+    release.set()
+    assert worker.wait(2_000)
+    assert len(client.payloads) == 1
 
 
 def test_heartbeat_worker_force_inactive_replaces_retained_active_payload() -> None:
