@@ -2821,11 +2821,16 @@ class PetWindow(QWidget):
                 if final_user_id
                 else None
             )
-        # Keep Qt alive while the process worker finishes its final small RPC.
-        # A broken network must still permit exit, with the existing TTL fallback.
-        if (isinstance(heartbeat_thread, SocialHeartbeatWorker)
-                and heartbeat_thread.isRunning()
-                and time.monotonic() - self._presence_exit_started_at < 15.0):
+        # Keep Qt and Python alive until the plain heartbeat transport really
+        # leaves its bounded HTTPS call. v0.23.313 previously stopped waiting
+        # after 15 seconds even though BackendRouteManager can still be inside
+        # a TLS retry/fallback; interpreter teardown around that daemon thread
+        # produced the native-crash do_handshake stack. stop() now suppresses
+        # a redundant final RPC when a request is already in flight.
+        if (
+            isinstance(heartbeat_thread, SocialHeartbeatWorker)
+            and heartbeat_thread.isRunning()
+        ):
             event.ignore()
             if not self._close_retry_scheduled:
                 self._close_retry_scheduled = True
