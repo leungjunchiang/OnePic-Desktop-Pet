@@ -1,3 +1,11 @@
+# v0.23.314 · 修复主动交互被勿扰策略误拦与退出期 TLS 崩溃
+
+- 将窗口显示权限明确拆分为 passive 与 user_action：快捷口袋、工作控制、工作报告入口、喂食反馈、用户主动 speech 与彩雾世界不再因 Steam／游戏／OBS／会议等普通 quiet-mode 分类被拒绝，同时继续保持 no-activate，不抢键盘焦点。
+- 真正全屏、手动隐藏与退出中的生命周期保护仍对两类窗口生效；普通后台 Toast、训导、恢复提示和持续状态继续服从被动 suppression，不恢复 v0.23.313 之前的多窗闪烁。
+- 彩雾世界保证逻辑状态与渲染窗口一致：用户主动开启后必须实际可见，否则立即回滚，杜绝 active=True 但 renderer 隐藏。
+- 根据现场 native-crash.log 修复退出期心跳线程仍停留在 OpenSSL TLS handshake 时的 Python Abort：heartbeat transport 改为非 daemon；若已有请求在途，退出不再排第二次 final heartbeat，并等待现有有界网络线程离开后再完成 Qt/Python teardown。
+- 新增 quiet-mode/user-action、工作报告、喂食、彩雾切换、真正全屏与在途 TLS 退出回归测试；不增加任何新的 Supabase 查询、RPC、轮询或 heartbeat 频率。
+
 # v0.23.313 · 游戏期间不抢焦点与全项目被动窗口审计
 
 - 普通互动直接画在六毛原有图层，4秒自动清除，不再创建气泡窗口。
