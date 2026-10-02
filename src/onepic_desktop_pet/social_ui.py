@@ -5447,7 +5447,13 @@ class SocialHubDialog(QDialog):
         # avoiding an old ranking cache showing yesterday's missing hours.
         peer_week_seconds: dict[str, int] = {}
         source = str(self.data.get("focus_totals_source") or "")
-        if not self.data.get("is_stale") and self.data.get("data_source") != "local_cache":
+        today = _beijing_now().date()
+        week_start = (today - timedelta(days=today.weekday())).isoformat()
+        dashboard_at = _focus_timestamp(self.data.get("server_timestamp") or self.data.get("_server_timestamp"))
+        same_week = dashboard_at is None or (
+            dashboard_at.date() - timedelta(days=dashboard_at.weekday())
+        ).isoformat() == week_start
+        if same_week and not self.data.get("is_stale") and self.data.get("data_source") != "local_cache":
             for peer in self.data.get("buddies") or []:
                 if not isinstance(peer, dict):
                     continue
@@ -5456,8 +5462,6 @@ class SocialHubDialog(QDialog):
                 seconds = _safe_nonnegative_seconds(peer.get("week_seconds"))
                 if peer_id and seconds is not None and peer_source.startswith("canonical_interval_union"):
                     peer_week_seconds[peer_id] = seconds
-        today = _beijing_now().date()
-        week_start = (today - timedelta(days=today.weekday())).isoformat()
         decorated: list[dict[str, Any]] = []
         for row in rows if isinstance(rows, list) else []:
             if not isinstance(row, dict):

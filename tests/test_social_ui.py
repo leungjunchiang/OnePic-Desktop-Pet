@@ -886,6 +886,12 @@ def test_cached_leaderboard_uses_same_canonical_buddy_totals_as_cards() -> None:
     payload["buddies"][0]["week_seconds"] = None  # Respect hidden totals.
     dialog.apply_dashboard(payload)
     assert dialog._leaderboard_rows[0]["week_seconds"] == 38 * 3600
+    # A prior-week dashboard must not overwrite this week's new ranking.
+    payload["server_timestamp"] = (datetime.now(timezone(timedelta(hours=8))) - timedelta(days=7)).isoformat()
+    payload["buddies"][0]["week_seconds"] = 39 * 3600
+    dialog.apply_dashboard(payload)
+    dialog._leaderboard_received([{"user_id": "buddy-1", "week_seconds": 3600}])
+    assert dialog._leaderboard_rows[0]["week_seconds"] == 3600
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
