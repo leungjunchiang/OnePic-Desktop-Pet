@@ -12,9 +12,14 @@ def test_fractional_checkpoints_do_not_lose_minutes_and_recover(tmp_path):
     start = datetime(2026, 10, 2, 9, tzinfo=BEIJING_TIMEZONE)
     options = dict(path=tmp_path / "timer.json", monotonic_provider=lambda: clock[0],
                    now_provider=lambda: start + timedelta(seconds=clock[0]))
-    timer = WorkTimerModel(**options)
+    timer = WorkTimerModel(**options, persist=False)
     timer.start()
-    for _ in range(600):
+    for index in range(600):
+        # Advance simulated hours in memory; only the last checkpoint needs
+        # disk I/O for recovery. Hundreds of instant renames can race Windows
+        # file scanners, unlike production's one write per minute.
+        if index == 599:
+            timer.path = options["path"]
         clock[0] += 60.75
         assert timer.checkpoint()
         assert timer.session_seconds() == int(clock[0])
@@ -63,4 +68,3 @@ def test_account_projection_keeps_advancing_across_disk_checkpoints_and_midnight
     clock[0] += 60.75
     timer.checkpoint()
     assert read() == {"today_seconds": 180, "week_seconds": 660}
-

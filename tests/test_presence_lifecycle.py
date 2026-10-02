@@ -1,6 +1,7 @@
-"""验证进程级存活与专注活动分离、后台心跳、退出下线、多设备兼容及过期展示。"""
+"""验证进程存活、后台心跳、退出下线及 TTL；异步退出使用有界条件等待。"""
 import os
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -142,7 +143,11 @@ def test_real_quit_waits_for_offline_ack_without_blocking_qt(monkeypatch):
         assert quitting.wait(2)
         assert window._close_retry_scheduled
         release.set(); assert worker.wait(2000)
-        QTest.qWait(300)
+        # Production retries every 250ms and also drains other native Qt
+        # workers. A fixed 300ms sleep races their cleanup on macOS runners.
+        deadline = time.monotonic() + 2.0
+        while window.isVisible() and time.monotonic() < deadline:
+            QTest.qWait(25)
         assert not window.isVisible()
         assert sum(p["presence_state"]=="offline" for p in client.payloads)==1
     finally:
