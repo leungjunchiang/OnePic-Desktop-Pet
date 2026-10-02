@@ -1,5 +1,7 @@
 """搭子互动默认欢迎；只提交主动修改的接收选项，避免旧设备保存资料时关闭互动。
 
+搭子卡片与榜单复用同一账号区间统计；按用户 ID 组装，刷新不保留另一套旧时长。
+
 普通成功反馈复用页内标签；Presence 退出等待真实网络线程收口后再销毁 Qt。
 
 统一进程 Presence、活动状态、TTL 与本地自身显示。
@@ -5440,11 +5442,29 @@ class SocialHubDialog(QDialog):
         if not own_id:
             me = self.data.get("me") if isinstance(self.data.get("me"), dict) else {}
             own_id = str(me.get("user_id") or me.get("id") or "").strip()
+        # Membership/opt-in still comes from the ranking RPC. Durations for
+        # those members use the same authorized account projection as cards,
+        # avoiding an old ranking cache showing yesterday's missing hours.
+        peer_week_seconds: dict[str, int] = {}
+        source = str(self.data.get("focus_totals_source") or "")
+        if not self.data.get("is_stale") and self.data.get("data_source") != "local_cache":
+            for peer in self.data.get("buddies") or []:
+                if not isinstance(peer, dict):
+                    continue
+                peer_source = str(peer.get("focus_totals_source") or source)
+                peer_id = str(peer.get("user_id") or peer.get("buddy_user_id") or "")
+                seconds = _safe_nonnegative_seconds(peer.get("week_seconds"))
+                if peer_id and seconds is not None and peer_source.startswith("canonical_interval_union"):
+                    peer_week_seconds[peer_id] = seconds
+        today = _beijing_now().date()
+        week_start = (today - timedelta(days=today.weekday())).isoformat()
         decorated: list[dict[str, Any]] = []
         for row in rows if isinstance(rows, list) else []:
             if not isinstance(row, dict):
                 continue
             copy = dict(row)
+            if copy.get("week_start") and str(copy["week_start"]) != week_start:
+                continue
             user_id = next(
                 (
                     str(copy.get(field)).strip()
@@ -5454,6 +5474,8 @@ class SocialHubDialog(QDialog):
                 "",
             )
             copy["is_self"] = bool(copy.get("is_self")) or bool(own_id and user_id == own_id)
+            if not copy["is_self"] and user_id in peer_week_seconds:
+                copy["week_seconds"] = peer_week_seconds[user_id]
             if copy["is_self"]:
                 me = self.data.get("me") if isinstance(self.data.get("me"), dict) else {}
                 public_name = self.owner_nickname or clean_owner_nickname(
@@ -6726,6 +6748,11 @@ class SocialHubDialog(QDialog):
             self._leaderboard_rows = self._decorate_leaderboard_rows(self.data.get("leaderboard") or [])
             self._leaderboard_loaded = True
             self._leaderboard_error = False
+            self._render_wealth_leaderboard(self._leaderboard_rows)
+        elif self._leaderboard_rows:
+            # A fresh dashboard must refresh cached ranking durations too;
+            # this is local assembly, not another leaderboard request.
+            self._leaderboard_rows = self._decorate_leaderboard_rows(self._leaderboard_rows)
             self._render_wealth_leaderboard(self._leaderboard_rows)
         me_presence = self.data.get("me_presence") or {}
         own_label = social_pet_label(self.owner_nickname or me.get("nickname") or me.get("display_name"))

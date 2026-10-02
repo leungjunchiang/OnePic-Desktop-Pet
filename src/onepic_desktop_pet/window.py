@@ -1,5 +1,7 @@
 """主动交互与被动窗口分流；隐藏口袋不重显提示，Qt退出等待原生清理。
 
+专注统计缓存按逻辑会话累计秒数推进，不受每分钟本地保存归零影响。
+
 瞬时互动在六毛窗口内部呈现，闹钟声音与展示分离。
 
 北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
@@ -6883,7 +6885,7 @@ class PetWindow(QWidget):
                 "base_local_elapsed": 0,
             }
             if self.work_timer.is_running:
-                current_elapsed = max(0, int(self.work_timer.current_elapsed_seconds() or 0))
+                session_elapsed = max(0, int(self.work_timer.session_seconds() or 0))
                 recorded_session = max(
                     0,
                     int(
@@ -6900,7 +6902,10 @@ class PetWindow(QWidget):
                     # local live row.  Anchor the cheap per-tick delta at the
                     # value used to build this cache, so the UI advances
                     # locally without rescanning or making a request.
-                    cached["base_local_elapsed"] = current_elapsed
+                    # A disk checkpoint resets current_elapsed_seconds(),
+                    # but does not invalidate this projection cache. Anchor
+                    # to the cumulative logical session so minutes keep moving.
+                    cached["base_local_elapsed"] = session_elapsed
                 elif cached["has_legacy_local_evidence"]:
                     # Compatibility for pre-ledger lifecycle snapshots: the
                     # mocked/stale summary is the sealed base and the current
@@ -6917,14 +6922,9 @@ class PetWindow(QWidget):
         today_local_delta = 0
         week_local_delta = 0
         if self.work_timer.is_running:
-            elapsed_reader = (
-                self.work_timer.current_elapsed_seconds
-                if cached.get("has_account_projection")
-                else self.work_timer.session_seconds
-            )
             local_delta = max(
                 0,
-                int(elapsed_reader() or 0)
+                int(self.work_timer.session_seconds() or 0)
                 - int(cached.get("base_local_elapsed", 0) or 0),
             )
             today_local_delta = local_delta

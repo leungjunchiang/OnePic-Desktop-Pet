@@ -1,4 +1,4 @@
-"""验证资料保存省略未修改的互动接收权限，以及 Supabase 优先与代理路由。"""
+"""验证互动接收权限的增量保存、北京时间周缓存隔离，以及 Supabase 优先与代理路由。"""
 
 import json
 import io
@@ -985,6 +985,32 @@ def test_leaderboard_refresh_manager_reuses_last_known_good_rows(monkeypatch):
     # The UI owns rendering on errors; its existing rows are never replaced
     # by an empty list. The manager itself has not written a failed payload.
     assert client._leaderboard_refresh_manager._cache
+
+
+def test_leaderboard_cache_isolated_by_beijing_week(monkeypatch):
+    """周一午夜不能复用上一周榜单，周内仍复用五分钟缓存。"""
+    transport = SimpleNamespace(session=SocialSession("token", "refresh", "user-1", 9_999_999_999), auth_manager=None)
+    class Manager:
+        active = transport
+        direct = transport
+        proxy = None
+        backend_name = "Supabase Direct"
+        backend_endpoint = "https://supabase.example.test"
+        signed_in = True
+        calls = 0
+        def request(self, *args, **kwargs):
+            self.calls += 1
+            return [{"user_id": "user-1", "week_seconds": self.calls}]
+    manager = Manager()
+    client = SocialClient(backend=manager, persist_tokens=False)
+    from datetime import datetime, timezone, timedelta
+    moment = [datetime(2026, 10, 4, 23, 59, tzinfo=timezone(timedelta(hours=8)))]
+    monkeypatch.setattr(social_module, "now_beijing", lambda: moment[0])
+    assert client.focus_leaderboard()[0]["week_seconds"] == 1
+    assert client.focus_leaderboard()[0]["week_seconds"] == 1
+    moment[0] += timedelta(minutes=2)
+    assert client.focus_leaderboard()[0]["week_seconds"] == 2
+    assert manager.calls == 2
 
 
 def test_read_managers_are_isolated_when_authenticated_account_changes():

@@ -1,4 +1,4 @@
-"""验证自习室导航、备注优先身份、直接互动、账号同步及 Presence 安全退出。"""
+"""验证自习室导航、备注身份、搭子卡与榜单统计一致、直接互动及 Presence 安全退出。"""
 
 import json
 import os
@@ -856,6 +856,36 @@ def test_private_buddy_note_is_used_for_viewer_only_in_weekly_leaderboard() -> N
     app.processEvents()
 
     assert "论文搭子" in dialog.wealth_leaderboard.item(0).text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_cached_leaderboard_uses_same_canonical_buddy_totals_as_cards() -> None:
+    """旧榜单、较晚到达的 RPC、同名不同账号均不能覆盖最新搭子统计。"""
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog._leaderboard_received([
+        {"user_id": "buddy-1", "nickname": "mianmian", "week_seconds": 32 * 3600 + 51 * 60},
+        {"user_id": "buddy-2", "nickname": "mianmian", "week_seconds": 100},
+    ])
+    payload = {"me": {"nickname": "我"}, "room_people": [], "rooms": [], "requests": [], "visits": [],
+               "focus_totals_source": "canonical_interval_union",
+               "buddies": [{"user_id": "buddy-1", "nickname": "mianmian",
+                            "today_seconds": 6 * 60, "week_seconds": 39 * 3600 + 35 * 60}]}
+    dialog.apply_dashboard(payload)
+    expected = 39 * 3600 + 35 * 60
+    assert dialog._leaderboard_rows[0]["week_seconds"] == expected
+    assert dialog._leaderboard_rows[1]["week_seconds"] == 100
+    assert "39小时35分钟" in dialog.wealth_leaderboard.item(0).text()
+    # A delayed response from the separate ranking worker is reconciled too.
+    dialog._leaderboard_received([
+        {"user_id": "buddy-1", "nickname": "mianmian", "week_seconds": 32 * 3600}])
+    assert dialog._leaderboard_rows[0]["week_seconds"] == expected
+    payload["buddies"][0]["week_seconds"] = 38 * 3600
+    dialog.apply_dashboard(payload)
+    assert dialog._leaderboard_rows[0]["week_seconds"] == 38 * 3600  # Real corrections may decrease.
+    payload["buddies"][0]["week_seconds"] = None  # Respect hidden totals.
+    dialog.apply_dashboard(payload)
+    assert dialog._leaderboard_rows[0]["week_seconds"] == 38 * 3600
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 

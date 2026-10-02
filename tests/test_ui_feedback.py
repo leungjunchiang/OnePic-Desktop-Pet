@@ -1,4 +1,4 @@
-"""验证真实 Qt 反馈、阻塞网络期间的事件循环、重复提交保护及投喂成功后记账。"""
+"""验证真实 Qt 反馈、事件循环、重复提交及投喂记账；免战反馈不依赖测试执行星期。"""
 
 import os
 import threading
@@ -126,6 +126,10 @@ def test_blocked_interaction_does_not_block_gui_and_releases_guard(application, 
 
 def test_rest_day_failure_restores_only_working_button(application):
     client = Client(); hub = SocialHubDialog(client); client.signed_in = True
+    from onepic_desktop_pet.discipline import WEEKDAYS
+    # This test covers a save request's lifecycle, not the fixed-rest-day rule.
+    hub._focus_engine().store.settings.workdays = list(WEEKDAYS)
+    hub._refresh_focus_goals()
     calls = []
     hub._discipline_rpc_executor = lambda name, body, done, fail: calls.append((done, fail))
     hub._set_rest_day(lambda: None, hub.rest_day_button)

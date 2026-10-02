@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""北京时间业务时间与显示统一；保存保留单调时钟的亚秒尾数，长时间运行不累积丢秒。
 
 
 本模块提供 Lili 的本地工作计时与温和休息提醒，不创建窗口或访问网络。
@@ -949,12 +949,17 @@ class WorkTimerModel:
         self._lifetime_seconds += elapsed
         self._session_accumulated_seconds += elapsed
         self._episode_accumulated_seconds += elapsed
-        self._running_since = now
+        # Commit whole seconds without throwing away the fractional tail on
+        # every checkpoint. GUI timers rarely fire on exact second boundaries;
+        # resetting to `now` used to lose minutes over a long working day.
+        self._running_since += elapsed
         self._last_checkpoint = now
         checkpoint_at = self._now()
         if checkpoint_at.tzinfo is None:
             checkpoint_at = checkpoint_at.replace(tzinfo=BEIJING_TIMEZONE)
-        self._last_trusted_checkpoint_at = checkpoint_at.astimezone(BEIJING_TIMEZONE)
+        self._last_trusted_checkpoint_at = checkpoint_at.astimezone(BEIJING_TIMEZONE) - timedelta(
+            seconds=max(0.0, now - self._running_since)
+        )
         self._last_update_reason = "checkpoint"
         self._save()
         return True

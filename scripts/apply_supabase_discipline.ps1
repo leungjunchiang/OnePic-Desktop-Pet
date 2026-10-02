@@ -104,6 +104,10 @@ if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
     $timezoneBody = @{ query = $timezoneTest } | ConvertTo-Json -Compress
     $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $timezoneBody
     Write-Host 'Actual timestamptz schema, UTC return shape, Beijing midnight/week, 06:00 genuine session start, legacy device offset and wall-clock plan verified; fixtures rolled back.'
+    $focusClockTest = Get-Content -Raw -LiteralPath 'scripts/verify_focus_clock_consistency.sql'
+    $focusClockBody = @{ query = $focusClockTest } | ConvertTo-Json -Compress
+    $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $focusClockBody
+    Write-Host 'Focus interval overlap, previous-day retention, midnight clipping, shared weekly projection and timezone independence verified; synthetic fixture rolled back.'
     $presenceTest = Get-Content -Raw -LiteralPath 'scripts/verify_presence_lifecycle.sql'
     $presenceReplay = Get-Content -Raw -LiteralPath 'supabase/presence_lifecycle.sql'
     $presenceTest = $presenceTest.Replace('-- REPLAY_PRESENCE_HERE', "$presenceReplay`n$presenceReplay")

@@ -1,5 +1,7 @@
 """互动接收字段支持省略；未主动修改时不覆盖服务端或其他设备的选择。
 
+排行榜缓存按账号及北京时间周起点隔离，周一不沿用上一周数据。
+
 远端返回量可选本地诊断；进程 Presence 与 focus/rest/idle 分离，心跳不携带统计或配置。
 
 Lili 搭子自习室的最小社交客户端与可替换网络后端。
@@ -4442,7 +4444,9 @@ class SupabaseFirstSocialClient(DashboardCacheClientBase):
 
         period = str(kwargs.get("period") or "week")
         account_id = _session_user_id(self)
-        cache_key = f"{account_id}:{period}"
+        today = now_beijing().date()
+        week_start = today - timedelta(days=today.weekday())
+        cache_key = f"{account_id}:{period}:{week_start.isoformat()}"
 
         def load() -> list[dict[str, Any]]:
             payload = self._manager.request("focus_leaderboard", **kwargs)
