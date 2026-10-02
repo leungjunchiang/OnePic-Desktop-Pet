@@ -1,4 +1,6 @@
-"""普通成功反馈复用页内标签；统一进程 Presence、活动状态、TTL 与本地自身显示。
+"""普通成功反馈复用页内标签；Presence 退出等待真实网络线程收口后再销毁 Qt。
+
+统一进程 Presence、活动状态、TTL 与本地自身显示。
 
 互动收件箱按北京日期分组；直接回应继承原发送者、独立于房间，并保证按钮恢复和短暂错误反馈。
 
@@ -1007,7 +1009,11 @@ class SocialHeartbeatWorker:
             self._thread = threading.Thread(
                 target=self.run,
                 name="lili-social-heartbeat",
-                daemon=True,
+                # A daemon may be torn down while OpenSSL is inside
+                # do_handshake during installer/app shutdown. Keep the
+                # bounded transport thread non-daemon so Python cannot abort
+                # around a live SSL frame.
+                daemon=False,
             )
             self._thread.start()
 
@@ -1100,15 +1106,25 @@ class SocialHeartbeatWorker:
 
     def stop(self, final_presence: dict[str, Any] | None = None) -> None:
         with self._condition:
-            if isinstance(final_presence, dict):
-                # Queue one best-effort inactive state before the daemon
-                # worker exits.  This is intentionally asynchronous: closing
-                # the desktop must never wait on a network socket, while an
-                # explicit finalize helps peers stop showing a ghost session
-                # before the normal server freshness timeout.
+            # last_attempt_at advances immediately before the blocking HTTPS
+            # call; success/failure timestamps advance only after it returns.
+            # If shutdown catches that interval, do not enqueue a second final
+            # request behind the already-running TLS handshake. The existing
+            # server freshness TTL remains the fallback.
+            request_inflight = self._last_attempt_at > max(
+                self._last_success_at,
+                self._last_failure_at,
+            )
+            if isinstance(final_presence, dict) and not request_inflight:
                 raw = dict(final_presence)
                 raw.pop("_defer_inactive_until_focus_ack", None)
                 self._shutdown_payload = _heartbeat_payload(raw)
+            elif request_inflight:
+                self._shutdown_payload = None
+                lifecycle_log(
+                    "social.heartbeat.shutdown_reuses_inflight",
+                    user_id=str((final_presence or {}).get("user_id") or ""),
+                )
             self._stopped = True
             self._condition.notify_all()
 
