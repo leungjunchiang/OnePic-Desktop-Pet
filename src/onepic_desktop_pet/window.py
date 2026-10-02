@@ -11039,9 +11039,14 @@ class PetWindow(QWidget):
                 always_on_top=bool(self.settings.always_on_top),
                 show_window=False,
             )
+            source = str(
+                getattr(self, "_local_effect_display_source", "passive")
+                or "passive"
+            )
             self._show_nonactivating(
                 effect,
                 always_on_top=bool(self.settings.always_on_top),
+                source=source,
             )
             self._raise_local_effect_accessories()
         except Exception:
@@ -11169,16 +11174,55 @@ class PetWindow(QWidget):
             manager.request_event(normalize_effect_kind(kind))
 
     def _start_color_mist_world(self) -> bool:
-        """Start the local double-right-click easter egg without touching app state."""
+        """启动用户明确请求的彩雾，并保证策略状态与渲染窗口一致。"""
 
         if not bool(getattr(self.settings, "color_mist_world_enabled", True)):
             return False
         if not bool(getattr(self.settings, "state_effects_enabled", True)):
             return False
         manager = getattr(self, "_local_effect_manager", None)
-        if manager is not None:
-            return bool(manager.start_color_mist_world())
-        return False
+        effect = getattr(self, "_local_burst_effect", None)
+        if manager is None or effect is None:
+            return False
+        blocked_reason = self._surface_block_reason("user_action")
+        if blocked_reason:
+            lifecycle_log(
+                "color_mist.user_action.suppressed",
+                effect,
+                source="user_action",
+                blocked_reason=blocked_reason,
+            )
+            return False
+        previous_source = str(
+            getattr(self, "_local_effect_display_source", "passive")
+            or "passive"
+        )
+        self._local_effect_display_source = "user_action"
+        try:
+            started = bool(manager.start_color_mist_world())
+        finally:
+            self._local_effect_display_source = previous_source
+        # When a stable work effect already owns the reusable renderer,
+        # LocalEffectManager switches colour instead of calling on_start.
+        # Re-show that existing renderer explicitly if quiet mode had hidden
+        # it before this user gesture.
+        if started and not effect.isVisible() and bool(getattr(effect, "active", False)):
+            self._show_nonactivating(
+                effect,
+                always_on_top=bool(self.settings.always_on_top),
+                source="user_action",
+            )
+        if started and not effect.isVisible():
+            # Never keep logical active=True with no visible renderer.
+            manager.force_stop()
+            lifecycle_log(
+                "color_mist.user_action.rollback",
+                effect,
+                source="user_action",
+                blocked_reason="renderer_hidden",
+            )
+            return False
+        return started
 
     def _toggle_color_mist_world(self) -> bool:
         """Use the hidden double-right-click gesture as an on/off toggle."""
@@ -11190,7 +11234,10 @@ class PetWindow(QWidget):
         manager = getattr(self, "_local_effect_manager", None)
         if manager is None:
             return False
-        return bool(manager.toggle_color_mist_world())
+        if bool(manager.color_mist_world_active):
+            manager.stop_color_mist_world(restore_background=False)
+            return False
+        return self._start_color_mist_world()
 
     def set_state_effects_enabled(self, enabled: bool, *, persist: bool = True) -> None:
         self.settings.state_effects_enabled = bool(enabled)
@@ -11240,10 +11287,14 @@ class PetWindow(QWidget):
                 show_window=False,
                 managed=False,
             )
-            self._show_nonactivating(
+            shown = self._show_nonactivating(
                 effect,
                 always_on_top=bool(self.settings.always_on_top),
+                source="user_action",
             )
+            if not shown:
+                effect.stop()
+                return
             self._raise_local_effect_accessories()
         except Exception:
             LOGGER.exception("[LocalEffect] manual effect trigger failed")
@@ -12742,9 +12793,17 @@ class PetWindow(QWidget):
             self._record_user_interaction()
             was_active = bool(self._local_effect_manager.color_mist_world_active)
             if self._toggle_color_mist_world():
-                self.show_speech("彩雾世界开始了！", 1500)
+                self.show_speech(
+                    "彩雾世界开始了！",
+                    1500,
+                    source="user_action",
+                )
             elif was_active:
-                self.show_speech("彩雾世界结束了。", 1500)
+                self.show_speech(
+                    "彩雾世界结束了。",
+                    1500,
+                    source="user_action",
+                )
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
