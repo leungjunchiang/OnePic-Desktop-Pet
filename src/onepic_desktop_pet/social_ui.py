@@ -3561,6 +3561,9 @@ class SocialHubDialog(QDialog):
             for label, factory in page_factories:
                 self.tabs.addTab(factory(), label)
         self.tabs.currentChanged.connect(self._tab_changed)
+        # “互动”是搭子自习室的默认落点。这样用户每次打开窗口即可先看
+        # 待回应和近期互动；显式跳转到首页/专注/我的的入口仍可覆盖这里。
+        self.tabs.setCurrentIndex(1)
         root.addWidget(self.tabs, 1)
         QTimer.singleShot(0, self, self._apply_adaptive_tab_widths)
         if self._defer_pages:
@@ -6081,7 +6084,8 @@ class SocialHubDialog(QDialog):
         # in account could display or prepare the previous account's totals.
         self.account_state_changed.emit(True)
         self._update_account_state()
-        self.tabs.setCurrentIndex(0)
+        # 登录完成后回到默认的“互动”页，而不是重新跳回首页。
+        self.tabs.setCurrentIndex(1)
         self.refresh()
         payload = dict(result or {}) if isinstance(result, dict) else {}
         self.login_streak_updated.emit(payload)
