@@ -3913,6 +3913,13 @@ class PetWindow(QWidget):
         source: str = "food_scene",
     ) -> bool:
         """Turn a food item into a real focus/rest/companion scene."""
+        # Every entry into this method comes from the supply dialog or the
+        # shortcut pocket.  The resulting feedback is therefore explicit
+        # user UI and may bypass ordinary game/meeting quiet mode while
+        # retaining the same no-activate/fullscreen safety policy.
+        def show_user_feedback(text: str, duration_ms: int) -> None:
+            self.show_speech(text, duration_ms, source="user_action")
+
         item_key = str(item_key or "").strip()
         if item_key == "cake" and consume_inventory:
             self.show_food_scene_dialog()
@@ -3925,7 +3932,7 @@ class PetWindow(QWidget):
         if start_error == "inventory":
             spec = self.economy.catalog().get(item_key) or {}
             name = str(spec.get("name") or item_key)
-            self.show_speech(
+            show_user_feedback(
                 f"仓库里没有「{name}」。补给站已经按最新库存刷新，请先购买或等待补给。",
                 5200,
             )
@@ -3937,7 +3944,7 @@ class PetWindow(QWidget):
         if start_error == "active_scene":
             current = self.economy.active_food_scene() or {}
             current_name = str(current.get("name") or "上一段补给场景")
-            self.show_speech(
+            show_user_feedback(
                 f"六毛正在{current_name}场景里，先等这一段结束再用新的补给。",
                 5200,
             )
@@ -3947,7 +3954,7 @@ class PetWindow(QWidget):
                 self._food_scene_dialog.raise_()
             return False
         if start_error == "invalid_item":
-            self.show_speech("这个补给暂时不能使用。", 4200)
+            show_user_feedback("这个补给暂时不能使用。", 4200)
             return False
         resume_after_rest = item_key == "milk_tea" and status == "focus"
         if resume_after_rest:
@@ -3984,7 +3991,7 @@ class PetWindow(QWidget):
         if result is None:
             if resume_after_rest:
                 self.start_work_timer()
-            self.show_speech("补给状态刚发生变化，请重新打开仓库后再试。", 4800)
+            show_user_feedback("补给状态刚发生变化，请重新打开仓库后再试。", 4800)
             if self._food_scene_dialog is not None:
                 self._food_scene_dialog.refresh()
                 self._food_scene_dialog.show()
@@ -4002,20 +4009,20 @@ class PetWindow(QWidget):
             self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
             label = "☕ 喝贵的 · 深度工作中" if item_key == "expensive_coffee" else "☕ 咖啡开工"
             detail = f"\n{todo_title[:80]}" if todo_title else "\n无任务开工"
-            self.show_speech(f"{label}{detail}\n{result.get('feedback') or ''}", 6200)
+            show_user_feedback(f"{label}{detail}\n{result.get('feedback') or ''}", 6200)
         elif item_key == "milk_tea":
             minutes = int(scene.get("duration_minutes") or 10)
             self._set_temporary_activity("milk-tea", minutes * 60 * 1000)
             self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
-            self.show_speech(f"🥤 奶茶时间 · {minutes:02d}:00\n{result.get('feedback') or ''}", 5200)
+            show_user_feedback(f"🥤 奶茶时间 · {minutes:02d}:00\n{result.get('feedback') or ''}", 5200)
         elif item_key == "cake":
             self._set_temporary_activity("feast", 20_000)
             self.food_scene_timer.start(20_000)
             title = todo_title or "今天完成的一件事"
-            self.show_speech(f"🍰 今天庆祝过\n{title[:100]}", 6200)
+            show_user_feedback(f"🍰 今天庆祝过\n{title[:100]}", 6200)
         else:
             self._set_temporary_activity("tea", 60_000)
-            self.show_speech("🍵 喝会儿茶\n今天不用赶，六毛陪你待一会儿。", 5600)
+            show_user_feedback("🍵 喝会儿茶\n今天不用赶，六毛陪你待一会儿。", 5600)
         self._refresh_pixmap()
         return True
 
