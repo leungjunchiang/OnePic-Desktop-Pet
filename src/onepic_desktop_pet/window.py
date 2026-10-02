@@ -1,4 +1,6 @@
-"""被动窗口显示前拦截全屏；瞬时互动在六毛窗口内部呈现，闹钟声音与展示分离。
+"""主动交互与被动窗口分流显示；被动通知拦截全屏，用户操作保持非激活响应。
+
+瞬时互动在六毛窗口内部呈现，闹钟声音与展示分离。
 
 北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
 
@@ -1136,7 +1138,11 @@ class PetWindow(QWidget):
         self.coffee_scene_prompt.continue_requested.connect(self._continue_after_coffee_scene)
         self.coffee_scene_prompt.finish_requested.connect(self._finish_after_coffee_scene)
         self.quick_panel = QuickControlPanel(self._pet_name())
-        self.quick_panel.set_window_behavior_callback(self._show_nonactivating)
+        # 快捷口袋及其悬停提示都由用户明确手势触发。它们继续使用
+        # no-activate 原生策略，但不能再经过被动 quiet-mode 拦截。
+        self.quick_panel.set_window_behavior_callback(
+            self._show_user_surface_nonactivating
+        )
         self.quick_panel.layout_changed.connect(self._position_quick_panel)
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
@@ -2324,26 +2330,87 @@ class PetWindow(QWidget):
             topmost = bool(widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
             apply_native_window_policy(widget, topmost=topmost, qt_stays_on_top=topmost)
 
+    def _surface_block_reason(self, source: str = "passive") -> str:
+        """返回显示拦截原因，并严格区分主动操作与被动打扰。
+
+        真正全屏、手动隐藏和退出对所有窗口都有效；进程名、会议、游戏
+        等 quiet mode 只拦软件主动展示。整个判断只读取本地窗口状态，
+        不触发网络或 Supabase 请求。
+        """
+
+        normalized = "user_action" if str(source) == "user_action" else "passive"
+        if getattr(self, "_close_in_progress", False):
+            return "closing"
+        if getattr(self, "_manually_hidden", False):
+            return "manual_hidden"
+        if getattr(self, "_fullscreen_hidden", False):
+            return "fullscreen_hidden"
+        mode = self._foreground_display_mode()
+        if mode in {"fullscreen", "game_fullscreen", "presentation_fullscreen"}:
+            return str(mode)
+        if normalized == "passive":
+            quiet = detect_quiet_mode()
+            if bool(getattr(quiet, "blocked", False)):
+                reason = str(getattr(quiet, "reason", "") or "").strip()
+                return "quiet" if not reason else f"quiet:{reason}"
+        return ""
+
     def _passive_surfaces_blocked(self) -> bool:
         """被动展示实时检查；不等 750ms 两次采样，也不触发任何远端请求。"""
-        return bool(getattr(self, "_close_in_progress", False)
-                    or getattr(self, "_manually_hidden", False)
-                    or getattr(self, "_fullscreen_hidden", False)
-                    or self._foreground_display_mode() in {"fullscreen", "game_fullscreen", "presentation_fullscreen"}
-                    or detect_quiet_mode().blocked)
+
+        return bool(self._surface_block_reason("passive"))
 
     def _show_visit_status_bubble(self, bubble) -> None:
-        self._show_nonactivating(bubble)
+        self._show_nonactivating(bubble, source="passive")
 
-    def _show_nonactivating(self, widget: QWidget, *, always_on_top: bool | None = None) -> None:
-        """先做显示许可与几何配置，再给隐藏原生窗设置 no-activate，最后显示。"""
-        if self._passive_surfaces_blocked():
+    def _show_user_surface_nonactivating(
+        self,
+        widget: QWidget,
+        *,
+        always_on_top: bool | None = None,
+    ) -> bool:
+        """显示用户明确请求的浮层，同时继续保持 no-activate。"""
+
+        return self._show_nonactivating(
+            widget,
+            always_on_top=always_on_top,
+            source="user_action",
+        )
+
+    def _show_nonactivating(
+        self,
+        widget: QWidget,
+        *,
+        always_on_top: bool | None = None,
+        source: str = "passive",
+    ) -> bool:
+        """先判显示资格，再设置 no-activate，最后显示并返回是否成功。"""
+
+        normalized_source = (
+            "user_action" if str(source) == "user_action" else "passive"
+        )
+        blocked_reason = self._surface_block_reason(normalized_source)
+        if blocked_reason:
             widget.hide()
-            lifecycle_log("passive-window.suppressed", widget, creator="PetWindow._show_nonactivating",
-                          fullscreen=getattr(self, "_fullscreen_hidden", False), reason="live_foreground_or_hidden")
-            return
+            lifecycle_log(
+                "passive-window.suppressed",
+                widget,
+                creator="PetWindow._show_nonactivating",
+                source=normalized_source,
+                blocked_reason=blocked_reason,
+                fullscreen=getattr(self, "_fullscreen_hidden", False),
+                reason="live_foreground_or_hidden",
+            )
+            return False
         if widget.isVisible():
-            return  # 内容/倒计时刷新不重复 native show 或记成一次窗口创建。
+            lifecycle_log(
+                "passive-window.show.reuse",
+                widget,
+                creator="PetWindow._show_nonactivating",
+                source=normalized_source,
+                blocked_reason="",
+            )
+            return True  # 内容/倒计时刷新不重复 native show 或记成一次窗口创建。
         # 初次显示时旧 position helper 的 isVisible 判断会跳过定位。
         # 显式 prepare 模式允许在隐藏状态完成最终几何，避免桌面原点闪现。
         positioners = (
@@ -2366,9 +2433,18 @@ class PetWindow(QWidget):
             # HWND 可以在隐藏时创建；禁止先 show 再修 WS_EX_NOACTIVATE。
             self._apply_native_window_policy_for_widget(widget, event="PrepareShow")
         widget.show()
-        lifecycle_log("passive-window.show", widget, creator="PetWindow._show_nonactivating",
-                      window_id=int(widget.effectiveWinId()), noactivate=True,
-                      width=widget.width(), height=widget.height())
+        lifecycle_log(
+            "passive-window.show",
+            widget,
+            creator="PetWindow._show_nonactivating",
+            source=normalized_source,
+            blocked_reason="",
+            window_id=int(widget.effectiveWinId()),
+            noactivate=True,
+            width=widget.width(),
+            height=widget.height(),
+        )
+        return True
 
     def _apply_macos_window_behavior(
         self,
