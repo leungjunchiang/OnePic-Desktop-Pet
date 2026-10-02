@@ -156,7 +156,14 @@ class SmoothDurationDisplay:
             # down here produced the observed 9h59 -> 9h57 regression.
             # Only an identity change (account/day) is allowed to reset the
             # visible cumulative duration.
-            stable = max(int(self._value or 0), authoritative)
+            previous_value = int(self._value or 0)
+            stable = max(previous_value, authoritative)
+            if authoritative < previous_value:
+                LOGGER.info(
+                    "retained cumulative duration across same-day transition "
+                    "identity=%s authoritative=%s visible=%s active=%s",
+                    clean_identity, authoritative, previous_value, bool(active),
+                )
             self._identity = clean_identity
             self._value = stable
             self._active = bool(active)
