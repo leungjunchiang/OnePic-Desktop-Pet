@@ -1,4 +1,4 @@
-"""Small helpers for keeping Qt worker threads alive until they are stopped.
+"""Qt 线程销毁门禁：等待原生线程/TLS 清理完成，不能只依据 isRunning。
 
 Qt owns the native ``QThread`` object separately from the Python wrapper.  A
 running thread must not be destroyed while its native work is still active;
@@ -82,7 +82,7 @@ def running_threads(*roots: QObject | None) -> tuple[QThread, ...]:
     result: list[QThread] = []
     for thread in child_qthreads(*roots):
         try:
-            if thread.isRunning():
+            if thread.isRunning() or not thread.wait(0):
                 result.append(thread)
         except RuntimeError:
             continue
@@ -107,8 +107,7 @@ def wait_for_thread(thread: QThread | None, timeout_ms: int) -> bool:
         if not thread.isRunning():
             # Synchronize with the native thread's final teardown before a
             # later deleteLater() or QObject-parent destruction.
-            thread.wait(0)
-            return True
+            return bool(thread.wait(0))
         thread.requestInterruption()
         lifecycle_log(
             "qthread.quit.request",

@@ -1,4 +1,4 @@
-"""Safe full-program update checks and downloads.
+"""安全的整包更新检查与下载；日志 repr 不展开完整发布历史，保留关键诊断。
 
 Content patches can be applied while Lili is running.  A program update is
 different: the running executable must be closed before the installer can
@@ -20,7 +20,7 @@ from time import monotonic, sleep
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Callable
@@ -108,7 +108,7 @@ class ProgramRelease:
     asset_size: int
     checksum_url: str | None
     checksum_value: str | None
-    release_notes: str = ""
+    release_notes: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True)

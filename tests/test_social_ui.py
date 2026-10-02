@@ -964,6 +964,8 @@ def test_outgoing_buddy_request_has_retract_action_and_is_not_acceptable() -> No
 def test_buddy_lookup_with_existing_pending_request_does_not_claim_to_send_again() -> None:
     app = QApplication.instance() or QApplication([])
     dialog = SocialHubDialog(SignedInClient())
+    # 本用例只验证申请查询反馈，排除50ms启动刷新覆盖状态的时序竞争。
+    dialog._initial_refresh_timer.stop()
 
     dialog._buddy_lookup_completed(
         "5BCF1D45",

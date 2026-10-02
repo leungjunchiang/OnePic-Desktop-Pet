@@ -1,5 +1,5 @@
 """
-普通成功反馈复用页内标签；下载进度禁用 QProgressDialog 自动 show，显式被动显示不抢前台。
+主动快捷操作不受后台通知门禁影响；记录 Qt 原生错误，退出先等待音频线程完整清理。
 
 本模块（区分关闭窗口与真正退出应用）管理 Lili 应用生命周期、精简系统托盘菜单和退出时的位置保存。
 
@@ -53,6 +53,8 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
     QObject,
+    QtMsgType,
+    qInstallMessageHandler,
 )
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import (
@@ -96,6 +98,7 @@ _RUNTIME_HANDLER_MARKER = "_lili_runtime_handler"
 _EXCEPTION_HOOK_MARKER = "_lili_exception_hook"
 _UNRAISABLE_HOOK_MARKER = "_lili_unraisable_hook"
 _FAULT_HANDLER_STREAM = None
+_QT_MESSAGE_HANDLER = None
 
 
 def _configure_runtime_diagnostics() -> None:
@@ -139,6 +142,7 @@ def _configure_runtime_diagnostics() -> None:
             runtime_log=log_path,
         )
         _enable_native_fault_diagnostics(log_dir)
+        _install_qt_message_diagnostics()
         _install_process_exception_hooks()
     except Exception:
         # Diagnostics are deliberately non-critical.  Import/startup must
@@ -159,6 +163,36 @@ def _enable_native_fault_diagnostics(log_dir: Path) -> None:
         lifecycle_log("runtime.faulthandler.enabled", path=native_path)
     except Exception:
         _FAULT_HANDLER_STREAM = None
+
+
+def _install_qt_message_diagnostics() -> None:
+    """捕获 Qt 原生 abort 前的具体错误；回调不调用任何 Qt/UI API。"""
+    global _QT_MESSAGE_HANDLER
+    if _QT_MESSAGE_HANDLER is not None:
+        return
+    previous = None
+
+    def handler(kind, context, message):
+        try:
+            level = {QtMsgType.QtDebugMsg: logging.DEBUG, QtMsgType.QtInfoMsg: logging.INFO,
+                     QtMsgType.QtWarningMsg: logging.WARNING, QtMsgType.QtCriticalMsg: logging.ERROR,
+                     QtMsgType.QtFatalMsg: logging.CRITICAL}.get(kind, logging.WARNING)
+            LOGGER.log(level, "[QtNative] type=%s category=%s function=%s thread=%s message=%s",
+                       kind.name, getattr(context, "category", "") or "",
+                       getattr(context, "function", "") or "", threading.current_thread().name, message)
+            if kind == QtMsgType.QtFatalMsg and _FAULT_HANDLER_STREAM is not None:
+                _FAULT_HANDLER_STREAM.write("\n[QtNative fatal] " + str(message) + "\n")
+                _FAULT_HANDLER_STREAM.flush()
+                faulthandler.dump_traceback(file=_FAULT_HANDLER_STREAM, all_threads=True)
+            if previous is not None:
+                previous(kind, context, message)
+            elif level >= logging.WARNING and sys.stderr is not None:
+                sys.stderr.write(str(message) + "\n")
+        except Exception:
+            pass  # 诊断回调不得产生第二个原生错误。
+
+    previous = qInstallMessageHandler(handler)
+    _QT_MESSAGE_HANDLER = handler
 
 
 def _install_process_exception_hooks() -> None:
@@ -632,6 +666,12 @@ class DesktopPetApplication(QObject):
         if not window_closed:
             LOGGER.info("[Lifecycle] waiting for Qt worker threads before exit")
             lifecycle_log("application.quit.waiting_for_window_threads", self.window)
+            self._schedule_quit_retry()
+            return
+
+        from .alarm_audio_service import prepare_audio_shutdown
+        if not prepare_audio_shutdown():
+            lifecycle_log("application.quit.waiting_for_audio_threads", self.qt_app)
             self._schedule_quit_retry()
             return
 

@@ -1,0 +1,1194 @@
+{
+  "geometry_source": "owned non-activating windows, not a DirectX game",
+  "foreground_samples": [
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "toast",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "replacement",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "inline",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-shortcuts",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "explicit-color-world",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "maximized",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "borderless-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "fullscreen-exit",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    },
+    {
+      "phase": "alarm",
+      "unchanged": true
+    }
+  ],
+  "shown_windows": [
+    {
+      "class": "QWidget",
+      "width": 640,
+      "height": 400,
+      "no_focus": true
+    },
+    {
+      "class": "QLabel",
+      "width": 110,
+      "height": 16,
+      "no_focus": false
+    },
+    {
+      "class": "PetWindow",
+      "width": 191,
+      "height": 198,
+      "no_focus": true
+    },
+    {
+      "class": "BuddyReminderToast",
+      "width": 310,
+      "height": 56,
+      "no_focus": true
+    },
+    {
+      "class": "BuddyReminderToast",
+      "width": 310,
+      "height": 56,
+      "no_focus": true
+    },
+    {
+      "class": "QuickControlPanel",
+      "width": 302,
+      "height": 108,
+      "no_focus": true
+    },
+    {
+      "class": "QLabel",
+      "width": 70,
+      "height": 24,
+      "no_focus": true
+    },
+    {
+      "class": "WorkControlBubble",
+      "width": 201,
+      "height": 40,
+      "no_focus": true
+    },
+    {
+      "class": "LocalBurstEffectWindow",
+      "width": 430,
+      "height": 326,
+      "no_focus": true
+    },
+    {
+      "class": "QWidget",
+      "width": 1920,
+      "height": 1080,
+      "no_focus": true
+    },
+    {
+      "class": "PetWindow",
+      "width": 191,
+      "height": 198,
+      "no_focus": true
+    },
+    {
+      "class": "QWidget",
+      "width": 1920,
+      "height": 1080,
+      "no_focus": true
+    },
+    {
+      "class": "PetWindow",
+      "width": 191,
+      "height": 198,
+      "no_focus": true
+    }
+  ],
+  "normal_mode": "normal",
+  "toast_noactivate": true,
+  "max_visible_toasts": 1,
+  "interaction_rendered_inside_pet": true,
+  "explicit_shortcuts_noactivate": true,
+  "maximized_mode": "maximized",
+  "alarm_audio_requested": true,
+  "alarm_has_no_native_window": true,
+  "foreground_unchanged": true
+}

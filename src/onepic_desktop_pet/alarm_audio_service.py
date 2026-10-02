@@ -1,4 +1,4 @@
-"""试听与正式闹钟共用的本地播放状态机；复用原后端，交接前等待旧音频停止。"""
+"""试听与闹钟共用播放状态机；退出保持事件循环直到所有音频线程原生清理完成。"""
 from __future__ import annotations
 
 from collections import deque
@@ -242,7 +242,22 @@ class AlarmAudioService(QObject):
         self.timer.stop()
         from .alarm_ui import _WindowsAlarmAudio
         _WindowsAlarmAudio.request_stop_all()
-        # 退出阶段允许短暂等待，避免 Qt 销毁仍运行的原生清理线程。
+        # aboutToQuit 里等待1秒后继续销毁仍运行的音频桥会触发 Qt abort。
+        # 这里只发停止命令；应用退出门禁在事件循环仍工作时确认线程已清理。
         for job in tuple(_QT_AUDIO_JOBS):
             job.stop()
-            job.thread_owner.wait(1000)
+
+
+def prepare_audio_shutdown() -> bool:
+    """非阻塞退出门禁；没有音频时不创建播放器或共享服务。"""
+    app = QApplication.instance()
+    service = getattr(app, "_lili_alarm_audio_service", None)
+    if service is not None:
+        service.clear()
+    ready = True
+    for job in tuple(_QT_AUDIO_JOBS):
+        job.stop()
+        if not job.thread_owner.wait(0):
+            ready = False
+            lifecycle_log("alarm.audio.shutdown.pending", job, thread_class="QtThreadAudio")
+    return ready

@@ -1,4 +1,4 @@
-"""主动交互与被动窗口分流显示；被动通知拦截全屏，用户操作保持非激活响应。
+"""主动交互与被动窗口分流；隐藏口袋不重显提示，Qt退出等待原生清理。
 
 瞬时互动在六毛窗口内部呈现，闹钟声音与展示分离。
 
@@ -1141,7 +1141,7 @@ class PetWindow(QWidget):
         # 快捷口袋及其悬停提示都由用户明确手势触发。它们继续使用
         # no-activate 原生策略，但不能再经过被动 quiet-mode 拦截。
         self.quick_panel.set_window_behavior_callback(
-            self._show_user_surface_nonactivating
+            self._show_shortcut_hint
         )
         self.quick_panel.layout_changed.connect(self._position_quick_panel)
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
@@ -2362,6 +2362,12 @@ class PetWindow(QWidget):
 
     def _show_visit_status_bubble(self, bubble) -> None:
         self._show_nonactivating(bubble, source="passive")
+
+    def _show_shortcut_hint(self, widget: QWidget, **kwargs) -> bool:
+        """只显示已打开口袋的悬停提示，隐藏口袋不能重显旧提示。"""
+        if not self.quick_panel.isVisible():
+            return False
+        return self._show_user_surface_nonactivating(widget, **kwargs)
 
     def _show_user_surface_nonactivating(
         self,
