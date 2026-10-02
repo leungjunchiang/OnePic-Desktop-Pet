@@ -1,4 +1,4 @@
-"""验证专注导航、备注身份、直接监督、撤权与跨账号回调隔离。"""
+"""验证午夜历史缓存及区间修订失效；验证专注导航、备注身份、直接监督、撤权与跨账号回调隔离。"""
 
 import os
 from datetime import datetime
@@ -206,3 +206,82 @@ def test_authorized_report_open_records_read_receipt_and_discards_revoked_callba
     old_receipt({"read_at": "2026-09-30"})
     assert room.records.count() == 0
     dispose(room, hub)
+
+
+def test_history_cache_tracks_midnight_and_real_interval_revision(monkeypatch):
+    import onepic_desktop_pet.discipline_ui as module
+    app()
+    moment = datetime(2026, 10, 3, 0, 2, tzinfo=BEIJING_TIMEZONE)
+    monkeypatch.setattr(module, "local_work_time", lambda: moment)
+    clock = [1000.0]
+    monkeypatch.setattr(module.monotonic_time, "monotonic", lambda: clock[0])
+    store = DisciplineStore("a", persist=False)
+    engine = DisciplineEngine(store)
+    class Analytics:
+        value = 100
+        calls = 0
+        def account_today_seconds(self, at):
+            assert at.tzinfo == BEIJING_TIMEZONE
+            self.calls += 1
+            return self.value
+    class Owner:
+        focus_analytics = Analytics()
+        _focus_projection_revision = 0
+        def provider(self): return engine
+    owner = Owner()
+    dialog = DisciplineDialog(store, engine, lambda: (0, 0), engine_provider=owner.provider)
+    panel = dialog.workspace  # The actual QWidget owns the cache, not its dialog wrapper.
+    panel._day_totals_cache = {}
+    owner.focus_analytics.calls = 0
+    today = moment.date()
+    yesterday = today - module.timedelta(days=1)
+    assert panel._completed_day_seconds(today, 35940) == 35940
+    assert owner.focus_analytics.calls == 0
+    assert panel._completed_day_seconds(yesterday, 0) == 100
+    assert owner.focus_analytics.calls == 1
+    owner.focus_analytics.value = 120
+    clock[0] += 7
+    assert panel._completed_day_seconds(yesterday, 0) == 100
+    clock[0] += 1
+    assert panel._completed_day_seconds(yesterday, 0) == 120
+    owner.focus_analytics.value = 140
+    owner._focus_projection_revision += 1
+    assert panel._completed_day_seconds(yesterday, 0) == 140
+    assert owner.focus_analytics.calls == 3
+    old_day = today - module.timedelta(days=10)
+    assert panel._completed_day_seconds(old_day, 0) == 140
+    owner.focus_analytics.value = 130  # Real corrections can decrease historical totals.
+    clock[0] += 299
+    assert panel._completed_day_seconds(old_day, 0) == 140
+    owner._focus_projection_revision += 1
+    assert panel._completed_day_seconds(old_day, 0) == 130
+    dispose(dialog)
+
+
+def test_history_rows_refresh_without_new_discipline_event(monkeypatch):
+    import onepic_desktop_pet.discipline_ui as module
+    app()
+    moment = datetime(2026, 10, 3, 0, 2, tzinfo=BEIJING_TIMEZONE)
+    monkeypatch.setattr(module, "local_work_time", lambda: moment)
+    store = DisciplineStore("a", persist=False)
+    store.append_event("daily_report", moment - module.timedelta(days=1), metadata={"today_seconds": 100})
+    engine = DisciplineEngine(store)
+    class Analytics:
+        value = 100
+        def account_today_seconds(self, at): return self.value
+        def range_aggregate(self, *args): return SimpleNamespace(daily={"2026-10-02": self.value})
+    class Owner:
+        focus_analytics = Analytics()
+        _focus_projection_revision = 0
+        def provider(self): return engine
+    owner = Owner()
+    dialog = DisciplineDialog(store, engine, lambda: (0, 0), engine_provider=owner.provider)
+    panel = dialog.workspace
+    panel.records.setCurrentIndex(2)
+    assert "1分钟" in panel.ledger.item(0, 2).text()
+    owner.focus_analytics.value = 180
+    owner._focus_projection_revision += 1
+    panel.refresh()
+    assert "3分钟" in panel.ledger.item(0, 2).text()
+    assert len(store.events) == 1
+    dispose(dialog)

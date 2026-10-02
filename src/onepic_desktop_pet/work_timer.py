@@ -1,4 +1,6 @@
-"""北京时间业务时间与显示统一；保存保留单调时钟的亚秒尾数，长时间运行不累积丢秒。
+"""北京时间业务时间与显示统一；普通暂停保留可见累计，明确区间修正仍可校准。
+
+保存保留单调时钟的亚秒尾数，长时间运行不累积丢秒。
 
 
 本模块提供 Lili 的本地工作计时与温和休息提醒，不创建窗口或访问网络。
@@ -104,8 +106,9 @@ class SmoothDurationDisplay:
     the display to monotonic time instead of allowing a stale value to freeze
     it.  A delayed GUI callback therefore catches up in one update, while a
     newer authoritative value is applied immediately.  Running displays are
-    monotonic; pause/account/day transitions deliberately snap to the value
-    supplied by the owner.
+    monotonic across ordinary pause/resume transitions. Account/day changes
+    and an explicitly verified interval correction may reset the display.
+    The retained value is UI state only; it is never a persisted focus fact.
     """
 
     def __init__(
@@ -132,6 +135,7 @@ class SmoothDurationDisplay:
         *,
         active: bool,
         identity: str,
+        allow_decrease: bool = False,
     ) -> int:
         authoritative = max(0, int(authoritative_seconds or 0))
         now = self._monotonic()
@@ -139,8 +143,7 @@ class SmoothDurationDisplay:
         must_snap = (
             self._value is None
             or clean_identity != self._identity
-            or not active
-            or not self._active
+            or allow_decrease
             or now < self._anchor_monotonic
         )
         if must_snap:
@@ -150,6 +153,21 @@ class SmoothDurationDisplay:
             self._anchor_seconds = authoritative
             self._anchor_monotonic = now
             return authoritative
+
+        if not active or not self._active:
+            previous_value = int(self._value or 0)
+            stable = max(previous_value, authoritative)
+            if authoritative < previous_value and bool(active) != self._active:
+                LOGGER.info(
+                    "retained cumulative duration across transition "
+                    "authoritative=%s visible=%s active=%s",
+                    authoritative, previous_value, bool(active),
+                )
+            self._value = stable
+            self._active = bool(active)
+            self._anchor_seconds = stable
+            self._anchor_monotonic = now
+            return stable
 
         self._active = True
         local_projection = self._anchor_seconds + max(

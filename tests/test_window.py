@@ -1,4 +1,5 @@
 """
+本模块还验证有效离开截止时间可校准显示，不被普通暂停防回退掩盖。
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
 喂食、离线对话、陪伴动作、工作计时、专注导航、备注提醒和自拍成片；手动监视器用例隔离周期轮询。
 
@@ -3986,9 +3987,11 @@ def test_auto_pause_records_effective_cutoff_in_shared_focus_path(tmp_path) -> N
     window.start_work_timer()
     now[0] += timedelta(minutes=17)
     monotonic[0] += 17 * 60
+    assert window._account_today_display_seconds() == 17 * 60
     effective = now[0] - timedelta(minutes=7)
     window.pause_work_timer(reason="idle_10m", effective_end_at=effective)
     assert timer.session_seconds() == 10 * 60
+    assert window._account_today_display_seconds() == 10 * 60
     segments = window.focus_analytics.focus_segments()
     assert segments
     assert int((segments[-1].end_at - segments[-1].start_at).total_seconds()) == 10 * 60

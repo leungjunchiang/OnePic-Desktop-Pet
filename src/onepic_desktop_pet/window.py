@@ -1,4 +1,6 @@
-"""主动交互与被动窗口分流；隐藏口袋不重显提示，Qt退出等待原生清理。
+"""显示防回退不改变专注账本；明确离开截止时间和验证后的新区间允许校准。
+
+主动交互与被动窗口分流；隐藏口袋不重显提示，Qt退出等待原生清理。
 
 专注统计缓存按逻辑会话累计秒数推进，不受每分钟本地保存归零影响。
 
@@ -4505,6 +4507,11 @@ class PetWindow(QWidget):
                 source="focus_paused",
             )
             self._invalidate_focus_projection("focus_paused")
+            if effective_end_at is not None:
+                # A verified idle/sleep cutoff can legitimately exclude time
+                # shown before the delayed OS callback. Never keep that
+                # excluded interval merely to make the UI nondecreasing.
+                self._duration_display_correction_pending = True
             # Publish one more snapshot after the durable segment and paused
             # state are both committed so the study room/report see one fact.
             self.focus_session.refresh()
@@ -6999,7 +7006,13 @@ class PetWindow(QWidget):
             authoritative,
             active=status == "focus",
             identity=f"{account_id}:{display_day}",
+            allow_decrease=self._consume_duration_display_correction(),
         )
+
+    def _consume_duration_display_correction(self) -> bool:
+        correction = bool(getattr(self, "_duration_display_correction_pending", False))
+        self._duration_display_correction_pending = False
+        return correction
 
     def _shared_today_focus_seconds(self) -> int:
         """Backward-compatible day-only accessor for legacy callers."""
@@ -10230,6 +10243,11 @@ class PetWindow(QWidget):
             snapshot=self.focus_session.snapshot(include_projection=False),
             source="remote_focus_segments",
         )
+        if segment_changed and transaction_ok:
+            # A newly validated durable interval revision is different from
+            # receiving the same old scalar again. Permit the next UI sample
+            # to reflect an actual correction, without resetting any facts.
+            self._duration_display_correction_pending = True
 
         if "outfit_key" not in profile and "outfit_key" not in personal_state:
             return

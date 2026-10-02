@@ -1,4 +1,6 @@
-"""纪律记录按内容布局；免战入口显示北京时间自然月八日额度并提前禁用超额操作。
+"""纪律记录缓存随账号区间修订失效；当天实时、昨天短缓存、稳定历史低频重算。
+
+纪律记录按内容布局；免战入口显示北京时间自然月八日额度并提前禁用超额操作。
 
 双向训导结案汇总进入纪律记录，正式说明通过今日回应卡，勾选配置统一绘制。
 专注导航的计划、训导与记录复用统一按钮反馈；统计刷新不读取授权表单；记录只呈现紧凑纪律摘要和已结算事项，分析留在工作报告。"""
@@ -471,19 +473,35 @@ class DisciplineWorkspace(QWidget):
 
     def _completed_day_seconds(self, day, fallback):
         """历史完成时长读取同一账号区间账本；不再以纪律日报副本为唯一来源。"""
-        owner = getattr(self.engine_provider, "__self__", None)
-        owner = getattr(getattr(owner, "_discipline_engine_provider", None), "__self__", owner)
+        now_day = local_work_time().date()
+        if day == now_day:
+            return max(0, int(fallback or 0))
+        owner = self._focus_projection_owner()
+        self._invalidate_day_totals_if_changed(owner)
         analytics = getattr(owner, "focus_analytics", None)
         reader = getattr(analytics, "account_today_seconds", None)
         if not callable(reader): return fallback
         cache = getattr(self, "_day_totals_cache", {})
         key = (self.store.account_id, day.isoformat())
         now = monotonic_time.monotonic()
-        if key not in cache or now - cache[key][0] >= 300:
+        ttl = 8 if day == now_day - timedelta(days=1) else 300
+        if key not in cache or now - cache[key][0] >= ttl:
             from .discipline import BEIJING_TIMEZONE
-            cache[key] = (now, int(reader(datetime.combine(day, time(23,59,59), BEIJING_TIMEZONE))))
+            cache[key] = (now, max(0, int(reader(datetime.combine(day, time.max, BEIJING_TIMEZONE)))))
         self._day_totals_cache = cache
         return cache[key][1]
+
+    def _focus_projection_owner(self):
+        """解析真实页面持有者；兼容自习室的 provider 转发。"""
+        owner = getattr(self.engine_provider, "__self__", None)
+        return getattr(getattr(owner, "_discipline_engine_provider", None), "__self__", owner)
+
+    def _invalidate_day_totals_if_changed(self, owner):
+        token = (self.store.account_id, int(getattr(owner, "_focus_projection_revision", 0) or 0))
+        if token != getattr(self, "_day_totals_revision", None):
+            self._day_totals_cache = {}
+            self._day_totals_revision = token
+        return token
 
     @staticmethod
     def _event_description(row):
@@ -586,16 +604,17 @@ class DisciplineWorkspace(QWidget):
             return  # 历史仅进入时展开；不随今日每次刷新扫描历史。
         rows = list(discipline_events(self.store.events))
         session_days = {stamp.date().isoformat() for stamp in starts.starts if stamp.date() < now_day} if starts else set()
+        owner = self._focus_projection_owner()
+        focus_revision = self._invalidate_day_totals_if_changed(owner)
         signature = (tuple(repr(row) for row in rows), tuple(sorted(self.store.rest_days)), starts,
-                     tuple((row.get("id"), row.get("revision")) for row in self.store.coaching_cases))
+                     tuple((row.get("id"), row.get("revision")) for row in self.store.coaching_cases),
+                     focus_revision, now_day)
         if signature == getattr(self, "_ledger_signature", None): return
         self._ledger_signature = signature
         settled_days = sorted(session_days | {str(row.get("event_date")) for row in rows if row.get("event_type") in {"daily_report", "finish_work", "rest_day"} or str(row.get("event_date")) < now_day.isoformat()}, reverse=True)
         settled_days = sorted(set(settled_days) | {str(row.get("event_date")) for row in self.store.coaching_cases
                                                  if row.get("state") in {"completed", "forgiven"}}, reverse=True)
         history_totals = {}
-        owner = getattr(self.engine_provider, "__self__", None)
-        owner = getattr(getattr(owner, "_discipline_engine_provider", None), "__self__", owner)
         analytics = getattr(owner, "focus_analytics", None)
         if settled_days and callable(getattr(analytics, "range_aggregate", None)):
             # 一次本地范围汇总，避免为历史每一行重复遍历全部区间；绝不请求服务器。

@@ -1,4 +1,6 @@
-"""搭子互动默认欢迎；只提交主动修改的接收选项，避免旧设备保存资料时关闭互动。
+"""搭子今日标明北京日期；榜单按五分钟刷新资格，复用已有卡片的权威周统计。
+
+搭子互动默认欢迎；只提交主动修改的接收选项，避免旧设备保存资料时关闭互动。
 
 搭子卡片与榜单复用同一账号区间统计；按用户 ID 组装，刷新不保留另一套旧时长。
 
@@ -54,6 +56,7 @@ from .ui_feedback import ACTION_BUTTON_STYLE, decorate_buttons, begin_button_wor
 from .accessories import SPECIAL_OUTFIT_SPRITES
 from .social import (
     PRESENCE_ONLINE_TTL_SECONDS,
+    SOCIAL_LEADERBOARD_TTL_SECONDS,
     SignupResult,
     SocialClient,
     SocialError,
@@ -365,10 +368,14 @@ def _buddy_focus_totals_text(buddy: dict[str, Any]) -> str:
 
     today = buddy.get("today_seconds")
     week = buddy.get("week_seconds")
+    now = now_beijing()
+    snapshot_at = _focus_timestamp(buddy.get("_server_timestamp")) or now
+    day_label = snapshot_at.strftime("%m/%d")
+    day_prefix = f"今日（{day_label}）" if snapshot_at.date() == now.date() else f"{day_label}（上次统计）"
     today_text = (
         "今日专注时长已隐藏"
         if today is None
-        else f"今日已专注 {format_work_duration(today)}"
+        else f"{day_prefix}已专注 {format_work_duration(today)}"
     )
     week_text = (
         "本周专注时长已隐藏"
@@ -3416,6 +3423,8 @@ class SocialHubDialog(QDialog):
         self._leaderboard_rows: list[Any] = []
         self._leaderboard_loaded = False
         self._leaderboard_error = False
+        self._leaderboard_last_refresh_at: float | None = None
+        self._leaderboard_refresh_week = ""
         # The server supplies friend rows as aggregate seconds. The current
         # user's row is refreshed from the local account projection without
         # causing another leaderboard RPC.
@@ -4934,11 +4943,19 @@ class SocialHubDialog(QDialog):
 
         if self._closed or not self.client.signed_in:
             return
-        if "leaderboard" in self.data:
+        now = now_beijing()
+        week = (now.date() - timedelta(days=now.weekday())).isoformat()
+        if (
+            self._leaderboard_last_refresh_at is not None
+            and self._leaderboard_refresh_week == week
+            and time.monotonic() - self._leaderboard_last_refresh_at < SOCIAL_LEADERBOARD_TTL_SECONDS
+        ):
             return
         # 内存客户端与 dashboard 使用同样的同步边界，避免为本地空结果
         # 启动 QThread，再在窗口销毁时与原生线程析构发生竞争。
         if not isinstance(self.client, SocialClient):
+            self._leaderboard_last_refresh_at = time.monotonic()
+            self._leaderboard_refresh_week = week
             try:
                 loader = getattr(self.client, "focus_leaderboard", None)
                 rows = loader(period="week") if callable(loader) else []
@@ -4951,15 +4968,22 @@ class SocialHubDialog(QDialog):
             return
         thread = SocialLeaderboardThread(self.client, self)
         self._leaderboard_thread = thread
-        thread.completed.connect(self._leaderboard_received)
+        self._leaderboard_last_refresh_at = time.monotonic()
+        self._leaderboard_refresh_week = week
+        thread.completed.connect(
+            lambda rows, requested_week=week: self._leaderboard_received(rows, requested_week=requested_week)
+        )
         thread.failed.connect(self._leaderboard_failed)
         thread.finished.connect(lambda: self._leaderboard_thread_finished(thread), Qt.ConnectionType.QueuedConnection)
         thread.start()
 
-    def _leaderboard_received(self, rows: list) -> None:
+    def _leaderboard_received(self, rows: list, *, requested_week: str | None = None) -> None:
         self._leaderboard_rows = self._decorate_leaderboard_rows(rows or [])
         self._leaderboard_loaded = True
         self._leaderboard_error = False
+        self._leaderboard_last_refresh_at = time.monotonic()
+        now = now_beijing()
+        self._leaderboard_refresh_week = requested_week or (now.date() - timedelta(days=now.weekday())).isoformat()
         self._render_wealth_leaderboard(self._leaderboard_rows)
 
     def _leaderboard_failed(self, error: object) -> None:
@@ -5985,6 +6009,8 @@ class SocialHubDialog(QDialog):
             self._leaderboard_rows = []
             self._leaderboard_loaded = False
             self._leaderboard_error = False
+            self._leaderboard_last_refresh_at = None
+            self._leaderboard_refresh_week = ""
             self._render_wealth_leaderboard(self._leaderboard_rows)
 
     def _update_inbox_actions(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:

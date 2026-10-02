@@ -1,5 +1,5 @@
 """
-本模块测试“六毛工作搭子”的本地工作计时、跨启动累计、日期切换和休息提醒。
+本模块测试工作计时精度、暂停防回退、明确区间校准、跨启动累计及休息提醒。
 
 测试只写 pytest 临时目录，不访问真实用户设置目录或网络。
 """
@@ -57,8 +57,16 @@ def test_smooth_duration_display_uses_monotonic_anchor_and_immediate_calibration
     clock.advance(3)
     assert display.project(404, active=True, identity="account:day") == 407
 
-    # Pausing and a new day must show the authoritative value immediately.
-    assert display.project(405, active=False, identity="account:day") == 405
+    # Ordinary pause keeps the visible total despite a stale scalar.
+    assert display.project(405, active=False, identity="account:day") == 407
+    clock.advance(90)
+    assert display.project(405, active=False, identity="account:day") == 407
+    assert display.project(405, active=True, identity="account:day") == 407
+    clock.advance(1)
+    assert display.project(405, active=True, identity="account:day") == 408
+    # Verified corrections remain possible without a reset card or data reset.
+    assert display.project(390, active=False, identity="account:day", allow_decrease=True) == 390
+    assert display.project(15, active=False, identity="other-account:day") == 15
     assert display.project(2, active=True, identity="account:next-day") == 2
 
 

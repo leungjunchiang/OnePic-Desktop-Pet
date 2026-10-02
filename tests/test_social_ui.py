@@ -1,4 +1,6 @@
-"""验证自习室导航、备注身份、搭子卡与榜单统计一致、直接互动及 Presence 安全退出。"""
+"""回归北京日期标识、榜单有限频刷新及现有搭子交互。
+
+验证自习室导航、备注身份、搭子卡与榜单统计一致、直接互动及 Presence 安全退出。"""
 
 import json
 import os
@@ -1921,7 +1923,7 @@ def test_buddy_card_keeps_focus_totals_when_presence_is_uncertain_or_stale() -> 
     ):
         widget = BuddyCardWidget({"nickname": "搭子", **presence})
         labels = [label.text() for label in widget.findChildren(QLabel)]
-        assert any("今日已专注 2小时3分钟" in text for text in labels)
+        assert any("）已专注 2小时3分钟" in text for text in labels)
         assert any("本周已专注 12小时8分钟" in text for text in labels)
         assert all("状态同步中 ·" not in text for text in labels)
         widget.close(); widget.deleteLater()
@@ -2040,3 +2042,52 @@ def test_confirmed_interaction_merges_cache_without_history_download(monkeypatch
     dialog.invalidate_interactions(row);dialog.invalidate_interactions(row)
     assert len(dialog._interaction_rows)==1 and not calls
     dialog.close();dialog.deleteLater();app.processEvents()
+
+
+def test_buddy_today_label_uses_beijing_snapshot_date(monkeypatch):
+    import onepic_desktop_pet.social_ui as module
+    monkeypatch.setattr(module, "now_beijing", lambda: datetime(2026, 10, 3, 0, 2, tzinfo=module.BEIJING_TIMEZONE))
+    assert "今日（10/03）已专注 2分钟" in module._buddy_focus_totals_text({"today_seconds": 120})
+    assert "10/02（上次统计）已专注 6小时38分钟" in module._buddy_focus_totals_text({"today_seconds": 23880, "_server_timestamp": "2026-10-02T15:59:00Z"})
+    assert "今日（10/03）已专注 2分钟" in module._buddy_focus_totals_text({"today_seconds": 120, "_server_timestamp": "2026-10-02T16:02:00Z"})
+
+
+def test_embedded_leaderboard_does_not_disable_future_refresh(monkeypatch):
+    import onepic_desktop_pet.social_ui as module
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    clock = [1000.0]
+    moment = [datetime(2026, 10, 4, 23, 59, tzinfo=module.BEIJING_TIMEZONE)]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module, "now_beijing", lambda: moment[0])
+    calls = []
+    def loader(**kwargs):
+        calls.append(kwargs)
+        return []
+    dialog.client.focus_leaderboard = loader
+    dialog.data["leaderboard"] = []
+    dialog._start_leaderboard_refresh()
+    assert len(calls) == 1
+    clock[0] += 299
+    dialog._start_leaderboard_refresh()
+    assert len(calls) == 1
+    clock[0] += 1
+    dialog._start_leaderboard_refresh()
+    assert len(calls) == 2
+    moment[0] += timedelta(minutes=2)
+    dialog._start_leaderboard_refresh()
+    assert len(calls) == 3  # A new Beijing week has a distinct cache identity.
+    # A late previous-week response cannot start a new-week five-minute gate.
+    dialog._leaderboard_received([], requested_week="2026-09-28")
+    dialog._start_leaderboard_refresh()
+    assert len(calls) == 4
+    def failing_loader(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("network unavailable")
+    dialog.client.focus_leaderboard = failing_loader
+    clock[0] += 300
+    dialog._start_leaderboard_refresh()
+    assert len(calls) == 5
+    dialog._start_leaderboard_refresh()
+    assert len(calls) == 5  # Failed reads do not cause a worker on every poll.
+    dialog.close(); dialog.deleteLater(); app.processEvents()
