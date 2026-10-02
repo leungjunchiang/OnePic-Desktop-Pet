@@ -1,4 +1,6 @@
-"""被动窗口显示前拦截全屏；瞬时互动在六毛窗口内部呈现，闹钟声音与展示分离。
+"""主动交互与被动窗口分流显示；被动通知拦截全屏，用户操作保持非激活响应。
+
+瞬时互动在六毛窗口内部呈现，闹钟声音与展示分离。
 
 北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
 
@@ -1136,7 +1138,11 @@ class PetWindow(QWidget):
         self.coffee_scene_prompt.continue_requested.connect(self._continue_after_coffee_scene)
         self.coffee_scene_prompt.finish_requested.connect(self._finish_after_coffee_scene)
         self.quick_panel = QuickControlPanel(self._pet_name())
-        self.quick_panel.set_window_behavior_callback(self._show_nonactivating)
+        # 快捷口袋及其悬停提示都由用户明确手势触发。它们继续使用
+        # no-activate 原生策略，但不能再经过被动 quiet-mode 拦截。
+        self.quick_panel.set_window_behavior_callback(
+            self._show_user_surface_nonactivating
+        )
         self.quick_panel.layout_changed.connect(self._position_quick_panel)
         self.quick_panel.chat_requested.connect(self.prompt_dialogue)
         self.quick_panel.work_requested.connect(self._quick_work_action)
@@ -2324,26 +2330,87 @@ class PetWindow(QWidget):
             topmost = bool(widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
             apply_native_window_policy(widget, topmost=topmost, qt_stays_on_top=topmost)
 
+    def _surface_block_reason(self, source: str = "passive") -> str:
+        """返回显示拦截原因，并严格区分主动操作与被动打扰。
+
+        真正全屏、手动隐藏和退出对所有窗口都有效；进程名、会议、游戏
+        等 quiet mode 只拦软件主动展示。整个判断只读取本地窗口状态，
+        不触发网络或 Supabase 请求。
+        """
+
+        normalized = "user_action" if str(source) == "user_action" else "passive"
+        if getattr(self, "_close_in_progress", False):
+            return "closing"
+        if getattr(self, "_manually_hidden", False):
+            return "manual_hidden"
+        if getattr(self, "_fullscreen_hidden", False):
+            return "fullscreen_hidden"
+        mode = self._foreground_display_mode()
+        if mode in {"fullscreen", "game_fullscreen", "presentation_fullscreen"}:
+            return str(mode)
+        if normalized == "passive":
+            quiet = detect_quiet_mode()
+            if bool(getattr(quiet, "blocked", False)):
+                reason = str(getattr(quiet, "reason", "") or "").strip()
+                return "quiet" if not reason else f"quiet:{reason}"
+        return ""
+
     def _passive_surfaces_blocked(self) -> bool:
         """被动展示实时检查；不等 750ms 两次采样，也不触发任何远端请求。"""
-        return bool(getattr(self, "_close_in_progress", False)
-                    or getattr(self, "_manually_hidden", False)
-                    or getattr(self, "_fullscreen_hidden", False)
-                    or self._foreground_display_mode() in {"fullscreen", "game_fullscreen", "presentation_fullscreen"}
-                    or detect_quiet_mode().blocked)
+
+        return bool(self._surface_block_reason("passive"))
 
     def _show_visit_status_bubble(self, bubble) -> None:
-        self._show_nonactivating(bubble)
+        self._show_nonactivating(bubble, source="passive")
 
-    def _show_nonactivating(self, widget: QWidget, *, always_on_top: bool | None = None) -> None:
-        """先做显示许可与几何配置，再给隐藏原生窗设置 no-activate，最后显示。"""
-        if self._passive_surfaces_blocked():
+    def _show_user_surface_nonactivating(
+        self,
+        widget: QWidget,
+        *,
+        always_on_top: bool | None = None,
+    ) -> bool:
+        """显示用户明确请求的浮层，同时继续保持 no-activate。"""
+
+        return self._show_nonactivating(
+            widget,
+            always_on_top=always_on_top,
+            source="user_action",
+        )
+
+    def _show_nonactivating(
+        self,
+        widget: QWidget,
+        *,
+        always_on_top: bool | None = None,
+        source: str = "passive",
+    ) -> bool:
+        """先判显示资格，再设置 no-activate，最后显示并返回是否成功。"""
+
+        normalized_source = (
+            "user_action" if str(source) == "user_action" else "passive"
+        )
+        blocked_reason = self._surface_block_reason(normalized_source)
+        if blocked_reason:
             widget.hide()
-            lifecycle_log("passive-window.suppressed", widget, creator="PetWindow._show_nonactivating",
-                          fullscreen=getattr(self, "_fullscreen_hidden", False), reason="live_foreground_or_hidden")
-            return
+            lifecycle_log(
+                "passive-window.suppressed",
+                widget,
+                creator="PetWindow._show_nonactivating",
+                source=normalized_source,
+                blocked_reason=blocked_reason,
+                fullscreen=getattr(self, "_fullscreen_hidden", False),
+                reason="live_foreground_or_hidden",
+            )
+            return False
         if widget.isVisible():
-            return  # 内容/倒计时刷新不重复 native show 或记成一次窗口创建。
+            lifecycle_log(
+                "passive-window.show.reuse",
+                widget,
+                creator="PetWindow._show_nonactivating",
+                source=normalized_source,
+                blocked_reason="",
+            )
+            return True  # 内容/倒计时刷新不重复 native show 或记成一次窗口创建。
         # 初次显示时旧 position helper 的 isVisible 判断会跳过定位。
         # 显式 prepare 模式允许在隐藏状态完成最终几何，避免桌面原点闪现。
         positioners = (
@@ -2366,9 +2433,18 @@ class PetWindow(QWidget):
             # HWND 可以在隐藏时创建；禁止先 show 再修 WS_EX_NOACTIVATE。
             self._apply_native_window_policy_for_widget(widget, event="PrepareShow")
         widget.show()
-        lifecycle_log("passive-window.show", widget, creator="PetWindow._show_nonactivating",
-                      window_id=int(widget.effectiveWinId()), noactivate=True,
-                      width=widget.width(), height=widget.height())
+        lifecycle_log(
+            "passive-window.show",
+            widget,
+            creator="PetWindow._show_nonactivating",
+            source=normalized_source,
+            blocked_reason="",
+            window_id=int(widget.effectiveWinId()),
+            noactivate=True,
+            width=widget.width(),
+            height=widget.height(),
+        )
+        return True
 
     def _apply_macos_window_behavior(
         self,
@@ -2745,11 +2821,16 @@ class PetWindow(QWidget):
                 if final_user_id
                 else None
             )
-        # Keep Qt alive while the process worker finishes its final small RPC.
-        # A broken network must still permit exit, with the existing TTL fallback.
-        if (isinstance(heartbeat_thread, SocialHeartbeatWorker)
-                and heartbeat_thread.isRunning()
-                and time.monotonic() - self._presence_exit_started_at < 15.0):
+        # Keep Qt and Python alive until the plain heartbeat transport really
+        # leaves its bounded HTTPS call. v0.23.313 previously stopped waiting
+        # after 15 seconds even though BackendRouteManager can still be inside
+        # a TLS retry/fallback; interpreter teardown around that daemon thread
+        # produced the native-crash do_handshake stack. stop() now suppresses
+        # a redundant final RPC when a request is already in flight.
+        if (
+            isinstance(heartbeat_thread, SocialHeartbeatWorker)
+            and heartbeat_thread.isRunning()
+        ):
             event.ignore()
             if not self._close_retry_scheduled:
                 self._close_retry_scheduled = True
@@ -3628,14 +3709,30 @@ class PetWindow(QWidget):
                 y = max(area.top(), self.y())
         self.speech_bubble.move(x, y)
 
-    def show_speech(self, text: str, duration_ms: int = 4800) -> None:
-        """显示不会抢走键盘焦点的桌面对话气泡。"""
+    def show_speech(
+        self,
+        text: str,
+        duration_ms: int = 4800,
+        *,
+        source: str = "passive",
+    ) -> None:
+        """显示不会抢走键盘焦点的桌面对话气泡。
+
+        用户操作反馈可跳过普通 quiet mode；真正全屏、手动隐藏和退出
+        仍由统一显示门禁处理。
+        """
 
         self.speech_bubble.setText(text)
         self.speech_bubble.adjustSize()
         self._position_speech_bubble()
-        self._show_nonactivating(self.speech_bubble)
-        self.speech_timer.start(max(1200, duration_ms))
+        shown = self._show_nonactivating(
+            self.speech_bubble,
+            source=source,
+        )
+        if shown:
+            self.speech_timer.start(max(1200, duration_ms))
+        else:
+            self.speech_timer.stop()
 
     def _schedule_taunt_chatter(self) -> None:
         """旧入口不再为持续状态启动重复通知。"""
@@ -3684,6 +3781,7 @@ class PetWindow(QWidget):
         self.show_speech(
             f"{reply.text}\n精力 {self.mood.energy} · 饱食 {self.mood.fullness}",
             5200,
+            source="user_action",
         )
         return reply
 
@@ -3820,6 +3918,13 @@ class PetWindow(QWidget):
         source: str = "food_scene",
     ) -> bool:
         """Turn a food item into a real focus/rest/companion scene."""
+        # Every entry into this method comes from the supply dialog or the
+        # shortcut pocket.  The resulting feedback is therefore explicit
+        # user UI and may bypass ordinary game/meeting quiet mode while
+        # retaining the same no-activate/fullscreen safety policy.
+        def show_user_feedback(text: str, duration_ms: int) -> None:
+            self.show_speech(text, duration_ms, source="user_action")
+
         item_key = str(item_key or "").strip()
         if item_key == "cake" and consume_inventory:
             self.show_food_scene_dialog()
@@ -3832,7 +3937,7 @@ class PetWindow(QWidget):
         if start_error == "inventory":
             spec = self.economy.catalog().get(item_key) or {}
             name = str(spec.get("name") or item_key)
-            self.show_speech(
+            show_user_feedback(
                 f"仓库里没有「{name}」。补给站已经按最新库存刷新，请先购买或等待补给。",
                 5200,
             )
@@ -3844,7 +3949,7 @@ class PetWindow(QWidget):
         if start_error == "active_scene":
             current = self.economy.active_food_scene() or {}
             current_name = str(current.get("name") or "上一段补给场景")
-            self.show_speech(
+            show_user_feedback(
                 f"六毛正在{current_name}场景里，先等这一段结束再用新的补给。",
                 5200,
             )
@@ -3854,7 +3959,7 @@ class PetWindow(QWidget):
                 self._food_scene_dialog.raise_()
             return False
         if start_error == "invalid_item":
-            self.show_speech("这个补给暂时不能使用。", 4200)
+            show_user_feedback("这个补给暂时不能使用。", 4200)
             return False
         resume_after_rest = item_key == "milk_tea" and status == "focus"
         if resume_after_rest:
@@ -3891,7 +3996,7 @@ class PetWindow(QWidget):
         if result is None:
             if resume_after_rest:
                 self.start_work_timer()
-            self.show_speech("补给状态刚发生变化，请重新打开仓库后再试。", 4800)
+            show_user_feedback("补给状态刚发生变化，请重新打开仓库后再试。", 4800)
             if self._food_scene_dialog is not None:
                 self._food_scene_dialog.refresh()
                 self._food_scene_dialog.show()
@@ -3909,20 +4014,20 @@ class PetWindow(QWidget):
             self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
             label = "☕ 喝贵的 · 深度工作中" if item_key == "expensive_coffee" else "☕ 咖啡开工"
             detail = f"\n{todo_title[:80]}" if todo_title else "\n无任务开工"
-            self.show_speech(f"{label}{detail}\n{result.get('feedback') or ''}", 6200)
+            show_user_feedback(f"{label}{detail}\n{result.get('feedback') or ''}", 6200)
         elif item_key == "milk_tea":
             minutes = int(scene.get("duration_minutes") or 10)
             self._set_temporary_activity("milk-tea", minutes * 60 * 1000)
             self.food_scene_timer.start(max(1000, minutes * 60 * 1000))
-            self.show_speech(f"🥤 奶茶时间 · {minutes:02d}:00\n{result.get('feedback') or ''}", 5200)
+            show_user_feedback(f"🥤 奶茶时间 · {minutes:02d}:00\n{result.get('feedback') or ''}", 5200)
         elif item_key == "cake":
             self._set_temporary_activity("feast", 20_000)
             self.food_scene_timer.start(20_000)
             title = todo_title or "今天完成的一件事"
-            self.show_speech(f"🍰 今天庆祝过\n{title[:100]}", 6200)
+            show_user_feedback(f"🍰 今天庆祝过\n{title[:100]}", 6200)
         else:
             self._set_temporary_activity("tea", 60_000)
-            self.show_speech("🍵 喝会儿茶\n今天不用赶，六毛陪你待一会儿。", 5600)
+            show_user_feedback("🍵 喝会儿茶\n今天不用赶，六毛陪你待一会儿。", 5600)
         self._refresh_pixmap()
         return True
 
@@ -3972,7 +4077,11 @@ class PetWindow(QWidget):
         if not self.work_timer.is_running:
             self.start_work_timer()
         else:
-            self.show_speech("好，继续工作。", 3200)
+            self.show_speech(
+                "好，继续工作。",
+                3200,
+                source="user_action",
+            )
 
     def _finish_after_coffee_scene(self) -> None:
         self.coffee_scene_prompt.hide()
@@ -10942,9 +11051,14 @@ class PetWindow(QWidget):
                 always_on_top=bool(self.settings.always_on_top),
                 show_window=False,
             )
+            source = str(
+                getattr(self, "_local_effect_display_source", "passive")
+                or "passive"
+            )
             self._show_nonactivating(
                 effect,
                 always_on_top=bool(self.settings.always_on_top),
+                source=source,
             )
             self._raise_local_effect_accessories()
         except Exception:
@@ -11072,16 +11186,55 @@ class PetWindow(QWidget):
             manager.request_event(normalize_effect_kind(kind))
 
     def _start_color_mist_world(self) -> bool:
-        """Start the local double-right-click easter egg without touching app state."""
+        """启动用户明确请求的彩雾，并保证策略状态与渲染窗口一致。"""
 
         if not bool(getattr(self.settings, "color_mist_world_enabled", True)):
             return False
         if not bool(getattr(self.settings, "state_effects_enabled", True)):
             return False
         manager = getattr(self, "_local_effect_manager", None)
-        if manager is not None:
-            return bool(manager.start_color_mist_world())
-        return False
+        effect = getattr(self, "_local_burst_effect", None)
+        if manager is None or effect is None:
+            return False
+        blocked_reason = self._surface_block_reason("user_action")
+        if blocked_reason:
+            lifecycle_log(
+                "color_mist.user_action.suppressed",
+                effect,
+                source="user_action",
+                blocked_reason=blocked_reason,
+            )
+            return False
+        previous_source = str(
+            getattr(self, "_local_effect_display_source", "passive")
+            or "passive"
+        )
+        self._local_effect_display_source = "user_action"
+        try:
+            started = bool(manager.start_color_mist_world())
+        finally:
+            self._local_effect_display_source = previous_source
+        # When a stable work effect already owns the reusable renderer,
+        # LocalEffectManager switches colour instead of calling on_start.
+        # Re-show that existing renderer explicitly if quiet mode had hidden
+        # it before this user gesture.
+        if started and not effect.isVisible() and bool(getattr(effect, "active", False)):
+            self._show_nonactivating(
+                effect,
+                always_on_top=bool(self.settings.always_on_top),
+                source="user_action",
+            )
+        if started and not effect.isVisible():
+            # Never keep logical active=True with no visible renderer.
+            manager.force_stop()
+            lifecycle_log(
+                "color_mist.user_action.rollback",
+                effect,
+                source="user_action",
+                blocked_reason="renderer_hidden",
+            )
+            return False
+        return started
 
     def _toggle_color_mist_world(self) -> bool:
         """Use the hidden double-right-click gesture as an on/off toggle."""
@@ -11093,7 +11246,10 @@ class PetWindow(QWidget):
         manager = getattr(self, "_local_effect_manager", None)
         if manager is None:
             return False
-        return bool(manager.toggle_color_mist_world())
+        if bool(manager.color_mist_world_active):
+            manager.stop_color_mist_world(restore_background=False)
+            return False
+        return self._start_color_mist_world()
 
     def set_state_effects_enabled(self, enabled: bool, *, persist: bool = True) -> None:
         self.settings.state_effects_enabled = bool(enabled)
@@ -11143,10 +11299,14 @@ class PetWindow(QWidget):
                 show_window=False,
                 managed=False,
             )
-            self._show_nonactivating(
+            shown = self._show_nonactivating(
                 effect,
                 always_on_top=bool(self.settings.always_on_top),
+                source="user_action",
             )
+            if not shown:
+                effect.stop()
+                return
             self._raise_local_effect_accessories()
         except Exception:
             LOGGER.exception("[LocalEffect] manual effect trigger failed")
@@ -11657,7 +11817,32 @@ class PetWindow(QWidget):
         # temporarily combined in the wrong order.
         self.quick_panel.prepare_for_show()
         self._position_quick_panel()
-        self._show_nonactivating(self.quick_panel)
+        quiet = detect_quiet_mode()
+        foreground_mode = self._foreground_display_mode()
+        lifecycle_log(
+            "quick_panel.show.request",
+            self.quick_panel,
+            source="user_action",
+            foreground_mode=foreground_mode,
+            quiet_mode=bool(getattr(quiet, "blocked", False)),
+            quiet_reason=str(getattr(quiet, "reason", "") or ""),
+            decision=(
+                "block_fullscreen"
+                if foreground_mode in {
+                    "fullscreen",
+                    "game_fullscreen",
+                    "presentation_fullscreen",
+                }
+                else "allow_explicit"
+            ),
+        )
+        shown = self._show_nonactivating(
+            self.quick_panel,
+            source="user_action",
+        )
+        if not shown:
+            self.quick_panel.hide_timer.stop()
+            return
         self._raise_accessory(self.quick_panel)
         # A newly positioned top-level panel can receive a synthetic
         # enterEvent on headless/offscreen runners when it opens beneath the
@@ -11686,8 +11871,12 @@ class PetWindow(QWidget):
             "本轮 " + duration if snapshot.status in {"focus", "rest"} else "本轮未开始"
         )
         self._position_work_controls()
-        self._show_nonactivating(self.work_controls)
-        self._raise_accessory(self.work_controls)
+        shown = self._show_nonactivating(
+            self.work_controls,
+            source="user_action",
+        )
+        if shown:
+            self._raise_accessory(self.work_controls)
 
     def _start_work_from_control(self) -> None:
         """Start from the IDLE right-click control, then collapse it."""
@@ -12616,9 +12805,17 @@ class PetWindow(QWidget):
             self._record_user_interaction()
             was_active = bool(self._local_effect_manager.color_mist_world_active)
             if self._toggle_color_mist_world():
-                self.show_speech("彩雾世界开始了！", 1500)
+                self.show_speech(
+                    "彩雾世界开始了！",
+                    1500,
+                    source="user_action",
+                )
             elif was_active:
-                self.show_speech("彩雾世界结束了。", 1500)
+                self.show_speech(
+                    "彩雾世界结束了。",
+                    1500,
+                    source="user_action",
+                )
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
