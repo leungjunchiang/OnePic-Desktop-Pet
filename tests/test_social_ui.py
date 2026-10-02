@@ -35,6 +35,7 @@ from onepic_desktop_pet.social_ui import (
     _presence_load_state,
     _presence_status,
     _study_focus_summary_text,
+    _buddy_focus_totals_text,
     _taunt_window_open,
     _unwrap_reaction_payload,
     _unwrap_single_reaction_state,
@@ -846,6 +847,55 @@ def test_destroyed_hub_cancels_bootstrap_callbacks() -> None:
     QTest.qWait(220)
     assert client.dashboard_calls == 0
 
+
+def test_buddy_today_label_shows_beijing_calendar_date(monkeypatch) -> None:
+    import onepic_desktop_pet.social_ui as module
+
+    monkeypatch.setattr(
+        module,
+        "now_beijing",
+        lambda: datetime(2026, 10, 3, 0, 2, tzinfo=timezone(timedelta(hours=8))),
+    )
+    text = _buddy_focus_totals_text({"today_seconds": 120, "week_seconds": 3600})
+    assert "今日（10/03）已专注 2分钟" in text
+
+
+def test_fresh_dashboard_reconciles_cached_leaderboard_week_total() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog._leaderboard_rows = [
+        {"user_id": "buddy-1", "nickname": "胡老师", "week_seconds": 32 * 3600 + 51 * 60}
+    ]
+    dialog._leaderboard_loaded = True
+    data = dialog.client.dashboard()
+    data.pop("leaderboard", None)
+    data["data_source"] = "server"
+    data["buddies"][0]["week_seconds"] = 39 * 3600 + 35 * 60
+    dialog.apply_dashboard(data)
+    app.processEvents()
+
+    assert dialog._leaderboard_rows[0]["week_seconds"] == 39 * 3600 + 35 * 60
+    assert "本周专注 39小时35分钟" in dialog.wealth_leaderboard.item(0).text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_stale_dashboard_cannot_roll_newer_leaderboard_backwards() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog._leaderboard_rows = [
+        {"user_id": "buddy-1", "nickname": "胡老师", "week_seconds": 39 * 3600 + 35 * 60}
+    ]
+    dialog._leaderboard_loaded = True
+    data = dialog.client.dashboard()
+    data.pop("leaderboard", None)
+    data["data_source"] = "local_cache"
+    data["is_stale"] = True
+    data["buddies"][0]["week_seconds"] = 32 * 3600 + 51 * 60
+    dialog.apply_dashboard(data)
+    app.processEvents()
+
+    assert dialog._leaderboard_rows[0]["week_seconds"] == 39 * 3600 + 35 * 60
+    dialog.close(); dialog.deleteLater(); app.processEvents()
 
 def test_private_buddy_note_is_used_for_viewer_only_in_weekly_leaderboard() -> None:
     app = QApplication.instance() or QApplication([])
