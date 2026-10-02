@@ -762,6 +762,8 @@ def test_social_hub_has_four_function_pages_and_compact_auth_tabs() -> None:
     assert [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())] == [
         "首页", "互动", "专注", "我的"
     ]
+    assert dialog.tabs.currentIndex() == 1
+    assert dialog.tabs.tabText(dialog.tabs.currentIndex()) == "互动"
     assert dialog.tabs.tabBar().expanding() is True
     assert dialog.tabs.tabBar().sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
     dialog.show()
@@ -1131,7 +1133,7 @@ def test_social_hub_is_minimizable_and_signed_in_room_refresh_works() -> None:
 
     dialog.refresh()
     app.processEvents()
-    assert dialog.tabs.currentIndex() == 0
+    assert dialog.tabs.currentIndex() == 1
     assert dialog.rooms.count() == 1
     assert "安静工作间" in dialog.rooms.item(0).text()
     assert "AB12CD34" in dialog.identity.text()
