@@ -364,7 +364,7 @@ def _buddy_focus_totals_text(buddy: dict[str, Any]) -> str:
     week = buddy.get("week_seconds")
     day_label = now_beijing().strftime("%m/%d")
     today_text = (
-        f"今日（{day_label}）专注时长已隐藏"
+        "今日专注时长已隐藏"
         if today is None
         else f"今日（{day_label}）已专注 {format_work_duration(today)}"
     )
