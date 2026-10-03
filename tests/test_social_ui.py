@@ -1,4 +1,4 @@
-"""回归北京日期标识、榜单有限频刷新及现有搭子交互。
+"""回归学习与在线分层、在途心跳后退出下线、北京日期和搭子交互。
 
 验证自习室导航、备注身份、搭子卡与榜单统计一致、直接互动及 Presence 安全退出。"""
 
@@ -96,10 +96,10 @@ def test_heartbeat_worker_sends_inactive_presence_without_waiting_for_focus_ack(
     assert worker._shutdown_payload["session_active"] is False
 
 
-def test_heartbeat_shutdown_does_not_queue_second_request_behind_inflight(
+def test_heartbeat_shutdown_serializes_offline_after_inflight_request(
     monkeypatch,
 ) -> None:
-    """退出遇到 TLS 请求进行中时复用该请求并等待，而不是再排一次 heartbeat。"""
+    """退出等待 TLS 完成后发送一次离线；不启动并发请求或重复终结写入。"""
 
     entered = threading.Event()
     release = threading.Event()
@@ -142,10 +142,13 @@ def test_heartbeat_shutdown_does_not_queue_second_request_behind_inflight(
             "session_active": False,
         }
     )
-    assert worker._shutdown_payload is None
+    assert worker._shutdown_payload["presence_state"] == "offline"
+    worker.stop()  # a second cleanup cannot lose the queued offline write
     release.set()
     assert worker.wait(2_000)
-    assert len(client.payloads) == 1
+    assert len(client.payloads) == 2
+    assert client.payloads[-1]["presence_state"] == "offline"
+    assert client.payloads[-1]["working"] is False
 
 
 def test_heartbeat_worker_force_inactive_replaces_retained_active_payload() -> None:

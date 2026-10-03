@@ -1,4 +1,4 @@
-"""验证进程存活、后台心跳、退出下线及 TTL；异步退出使用有界条件等待。"""
+"""验证进程存活、非学习休息、后台心跳、退出下线及 TTL；退出异步等待。"""
 import os
 import threading
 import time
@@ -51,13 +51,13 @@ def test_modern_wire_is_small_and_offline_cannot_retain_a_focus_tuple():
 def test_local_activity_and_window_hiding_keep_liveness():
     app,window=_create_window()
     try:
-        assert window._build_local_liveness_presence(user_id="a")["activity_state"]=="idle"
+        assert window._build_local_liveness_presence(user_id="a")["activity_state"]=="rest"
         window.start_work_timer()
         assert window._build_local_liveness_presence(user_id="a")["activity_state"]=="focus"
         window.pause_work_timer()
         assert window._build_local_liveness_presence(user_id="a")["activity_state"]=="rest"
         window.finish_work_timer()
-        assert window._build_local_liveness_presence(user_id="a")["activity_state"]=="idle"
+        assert window._build_local_liveness_presence(user_id="a")["activity_state"]=="rest"
         window.close_to_tray=True
         window.social_heartbeat_watchdog_timer.start(60_000)
         window.showMinimized(); app.processEvents()
@@ -88,7 +88,7 @@ def test_background_idle_heartbeat_repeats_with_one_worker_and_final_offline():
         # No GUI event loop, focus, visible window or FocusSession is required.
         assert sent.wait(6)
         assert len(client.payloads)>=2
-        assert all(p["presence_state"]=="online" and p["activity_state"]=="idle" for p in client.payloads)
+        assert all(p["presence_state"]=="online" and p["activity_state"]=="rest" for p in client.payloads)
         worker.stop({"user_id":"idle-a","presence_state":"offline","activity_state":"idle","working":False})
         assert worker.wait(2000)
         assert client.payloads[-1]["presence_state"]=="offline"
@@ -113,9 +113,9 @@ def test_self_card_does_not_inherit_remote_offline_or_old_ttl(monkeypatch):
     try:
         dialog.apply_dashboard(data)
         own=next(row for row in captured if row.get("is_self"))
-        assert _presence_status(own)=="online"
+        assert _presence_status(own)=="rest"
         card=BuddyCardWidget(own)
-        assert "在线" in card._headline_label.text()
+        assert "正在休息" in card._headline_label.text()
         assert card._confirmation_label.isHidden()
         card.deleteLater()
     finally:

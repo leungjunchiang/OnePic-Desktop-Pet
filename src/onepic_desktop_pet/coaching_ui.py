@@ -1,4 +1,4 @@
-"""复用一张用户回应卡和一个进度牌；监督者处置与用户输入严格分开，被动层遵守全屏显示门禁。"""
+"""训导卡与紧凑单层进度牌分开；小牌与计时胶囊对齐，被动层遵守全屏显示门禁。"""
 
 from __future__ import annotations
 
@@ -207,17 +207,61 @@ class DesktopCoachingSurface(QFrame):
         self._compact = compact
         if compact:
             layout.removeWidget(self.label); self.label.hide()
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+            self.setStyleSheet(
+                "QFrame{background:transparent;border:0;}"
+                "QPushButton{background:transparent;border:0;color:#24475b;"
+                "padding:3px 8px;font-size:11px;font-weight:400;}"
+                "QPushButton:hover{color:#17546b;}"
+                "QPushButton:pressed{color:#123c50;}"
+            )
+            # Explicit child styling also wins over a study-room ancestor's
+            # action-button rules and Qt's cached pre-reparenting style.
+            self.open_button.setStyleSheet(
+                "QPushButton{background:transparent;border:0;color:#24475b;"
+                "padding:3px 8px;font-size:11px;font-weight:400;}"
+                "QPushButton:hover{background:transparent;color:#17546b;}"
+                "QPushButton:pressed{background:transparent;color:#123c50;}"
+            )
+            font = self.open_button.font(); font.setPixelSize(11)
+            self.open_button.setFont(font)
+            self.setMinimumWidth(100)
+            self.setMaximumWidth(285)
         decorate_buttons(self)
+
+    def paintEvent(self, event):
+        if self._compact:
+            from .controls import paint_pill_surface
+            paint_pill_surface(self, "#f6fbfb", "#287d9e")
+        else:
+            super().paintEvent(event)
+
+    def prepare_compact(self, height=None):
+        """内容驱动宽度，跟随相邻计时牌高度；完整内容保留在悬停提示里。"""
+        if not self._compact:
+            return
+        from PySide6.QtGui import QFontMetrics
+        self.open_button.ensurePolished()
+        metrics = QFontMetrics(self.open_button.font())
+        caption = self.label.text().removeprefix("⚠").lstrip("\ufe0f ")
+        self.setFixedWidth(min(285, max(100, metrics.horizontalAdvance(caption) + 18)))
+        self.open_button.setText(metrics.elidedText(
+            caption, Qt.TextElideMode.ElideRight, self.width()-18))
+        self.open_button.setToolTip(self.label.text())
+        if height is not None and height > 0:
+            self.setFixedHeight(height)
+        self.adjustSize()
 
     def passive_show(self):
         if self._compact:
-            from PySide6.QtGui import QFontMetrics
-            self.open_button.setText(QFontMetrics(self.open_button.font()).elidedText(
-                self.label.text(), Qt.TextElideMode.ElideRight, self.width()-32))
-            self.open_button.setToolTip(self.label.text())
-            self.adjustSize()
+            self.prepare_compact()
         parent = self.parentWidget()
         if hasattr(parent, "_show_nonactivating"):
-            parent._show_nonactivating(self, always_on_top=True)
-        else:
+            if not self.isVisible():
+                parent._show_nonactivating(self, always_on_top=True)
+        elif not self.isVisible():
             self.show()

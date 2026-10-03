@@ -1,4 +1,4 @@
-"""免打扰互动首次处理复用原嘲讽、加油与投喂状态；不新增窗口，不激活前台。
+"""纪律小牌与计时胶囊对齐；进程在线与学习状态分开，非学习显示休息。
 
 显示防回退不改变专注账本；明确离开截止时间和验证后的新区间允许校准。
 
@@ -2837,8 +2837,8 @@ class PetWindow(QWidget):
         # leaves its bounded HTTPS call. v0.23.313 previously stopped waiting
         # after 15 seconds even though BackendRouteManager can still be inside
         # a TLS retry/fallback; interpreter teardown around that daemon thread
-        # produced the native-crash do_handshake stack. stop() now suppresses
-        # a redundant final RPC when a request is already in flight.
+        # produced the native-crash do_handshake stack. The final offline RPC
+        # is serialized after any request in flight, never sent concurrently.
         if (
             isinstance(heartbeat_thread, SocialHeartbeatWorker)
             and heartbeat_thread.isRunning()
@@ -8637,6 +8637,8 @@ class PetWindow(QWidget):
                 count = view.get("card_count", 1)
                 surface.open_button.setText("写说明 / 接受补时" if row.get("required_seconds") else "重新说明" if row.get("state")=="rejected" else "写说明")
                 if count>1: surface.label.setText(surface.label.text()+f"\n还有 {count-1} 项")
+            if key == "badge":
+                surface.prepare_compact(self.work_duration_bubble.height())
             surface.adjustSize()
             x = self.x() + (self.width()-surface.width())//2 if key=="card" else self.work_duration_bubble.x()-surface.width()-6
             y = self.y()-surface.height()-8 if key=="card" else self.work_duration_bubble.y()
@@ -8991,7 +8993,7 @@ class PetWindow(QWidget):
         return {
             "user_id": str(user_id or self._heartbeat_identity_for_local_state() or "").strip(),
             "presence_state": "online",
-            "activity_state": "focus" if active else "rest" if has_active_session else "idle",
+            "activity_state": "focus" if active else "rest",
             "working": active,
             "session_active": active,
             "session_id": session_id if active else None,

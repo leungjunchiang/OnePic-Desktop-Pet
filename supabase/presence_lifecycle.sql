@@ -1,5 +1,6 @@
 -- Presence belongs to the application process; activity belongs to focus.
 -- Extend the existing per-device ledger, preserving sequence and proof guards.
+-- Activity is the user's timer state, not the keyboard-input proof used for rewards.
 alter table public.lili_focus_device_presence add column if not exists presence_state text not null default 'online' check (presence_state in ('online','offline'));
 alter table public.lili_focus_device_presence add column if not exists activity_state text check (activity_state in ('focus','rest','idle'));
 alter table public.lili_focus_presence add column if not exists presence_state text not null default 'online' check (presence_state in ('online','offline'));
@@ -12,7 +13,7 @@ declare state text:=nullif(current_setting('lili.presence_state',true),'');
 begin
   new.presence_state:=coalesce(state,'online');
   new.activity_state:=case when new.presence_state='offline' then 'idle'
-    when new.working and new.session_active then 'focus'
+    when activity='focus' or (new.working and new.session_active) then 'focus'
     when activity='rest' or activity is null then 'rest' else 'idle' end;
   return new;
 end $$;
@@ -25,7 +26,7 @@ create or replace function public.lili_account_lifecycle_fields() returns trigge
 language plpgsql security definer set search_path='' as $$
 declare n integer; active integer; resting integer;
 begin
-  select count(*),count(*) filter(where working and session_active),count(*) filter(where activity_state='rest')
+  select count(*),count(*) filter(where activity_state='focus'),count(*) filter(where activity_state='rest')
   into n,active,resting from public.lili_focus_device_presence
   where user_id=new.user_id and presence_state='online' and last_seen>now()-interval '2 minutes';
   new.presence_state:=case when n>0 then 'online' else 'offline' end;
@@ -301,7 +302,10 @@ begin
      or p_activity_state is null or p_activity_state not in ('focus','rest','idle')
      or nullif(btrim(p_device_id),'') is null then raise exception 'invalid presence state'; end if;
   perform set_config('lili.presence_state',p_presence_state,true);
-  perform set_config('lili.activity_state',p_activity_state,true);
+  perform set_config('lili.activity_state',case
+    when p_activity_state='focus' and not (coalesce(p_working,false) and coalesce(p_session_active,false)
+      and nullif(btrim(p_session_id),'') is not null and p_session_started_at is not null) then 'rest'
+    else p_activity_state end,true);
   result:=public.lili_upsert_focus_presence_v2(
     p_presence_state='online' and p_activity_state='focus' and coalesce(p_working,false),
     p_presence_state='online' and p_activity_state='focus' and coalesce(p_session_active,false),
@@ -322,7 +326,8 @@ with items as (
 ), live as (
   select d.user_id,max(d.last_seen) last_seen,
     count(*) filter(where d.presence_state='online' and d.last_seen>now()-interval '2 minutes') n,
-    count(*) filter(where d.presence_state='online' and d.last_seen>now()-interval '2 minutes' and d.working and d.session_active) focused,
+    count(*) filter(where d.presence_state='online' and d.last_seen>now()-interval '2 minutes' and
+      coalesce(d.activity_state,case when d.working and d.session_active then 'focus' else 'rest' end)='focus') focused,
     count(*) filter(where d.presence_state='online' and d.last_seen>now()-interval '2 minutes' and
       coalesce(d.activity_state,case when d.working then 'focus' else 'rest' end)='rest') resting
   from public.lili_focus_device_presence d

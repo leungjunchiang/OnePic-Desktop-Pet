@@ -1,4 +1,4 @@
-"""验证双向训导投影、真实区间补时、角色按钮、草稿恢复和跨设备版本边界。"""
+"""验证紧凑纪律胶囊、被动显示门禁、双向训导投影与跨设备版本边界。"""
 
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -188,6 +188,46 @@ def test_desktop_surface_does_not_activate_window(qt):
     surface.passive_show(); qt.processEvents(); assert not calls
     surface.open_button.click(); assert calls == [True]
     dispose(qt, surface)
+
+
+def test_compact_badge_matches_clock_height_and_has_no_rectangular_backfill(qt):
+    from onepic_desktop_pet.controls import WorkDurationBubble
+    clock = WorkDurationBubble()
+    clock.set_session("rest", 8044, True)
+    surface = DesktopCoachingSurface(None, lambda: None, compact=True)
+    surface.label.setText("⚠ 今天迟到了 · 再认真一会")
+    surface.prepare_compact(clock.height())
+    surface.passive_show(); qt.processEvents()
+    assert surface.height() == clock.height()
+    assert surface.layout().contentsMargins().left() == 0
+    assert surface.layout().contentsMargins().top() == 0
+    image = surface.grab().toImage()
+    assert image.pixelColor(0, 0).alpha() == 0
+    assert image.pixelColor(5, image.height() // 2).name() == "#f6fbfb"
+    assert surface.open_button.toolTip() == surface.label.text()
+    assert surface.open_button.text().startswith("今天迟到了")
+    width = surface.width()
+    surface.label.setText("✓ 已完成")
+    surface.prepare_compact(clock.height())
+    assert surface.width() < width
+    assert surface.height() == clock.height()
+    dispose(qt, surface, clock)
+
+
+def test_visible_badge_refresh_does_not_reopen_a_native_window(qt):
+    from PySide6.QtWidgets import QWidget
+    parent = QWidget()
+    shows = []
+    parent._show_nonactivating = lambda widget, **kwargs: (shows.append(widget), widget.show())
+    surface = DesktopCoachingSurface(parent, lambda: None, compact=True)
+    surface.label.setText("⚠ 今天迟到了 · 再认真一会")
+    surface.passive_show(); qt.processEvents()
+    surface.passive_show(); surface.passive_show()
+    assert shows == [surface]
+    assert surface.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+    surface.hide(); surface.passive_show()
+    assert len(shows) == 2
+    dispose(qt, surface, parent)
 
 def test_supervisor_controls_only_appear_in_strict_mode_and_follow_case_state(qt):
     client = SimpleNamespace(signed_in=False, session=SimpleNamespace(user_id="coach"), backend_name="Supabase Direct", backend_endpoint="https://example.invalid")

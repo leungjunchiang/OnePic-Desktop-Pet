@@ -1,4 +1,4 @@
-"""搭子互动始终接收；免打扰消息首次处理通过服务端事件锁启用效果，已读不算处理。
+"""进程在线独立于学习状态；非学习显示休息，退出按顺序发送最终离线状态。
 
 搭子今日标明北京日期；榜单按五分钟刷新资格，复用已有卡片的权威周统计。
 
@@ -1119,23 +1119,17 @@ class SocialHeartbeatWorker:
 
     def stop(self, final_presence: dict[str, Any] | None = None) -> None:
         with self._condition:
-            # last_attempt_at advances immediately before the blocking HTTPS
-            # call; success/failure timestamps advance only after it returns.
-            # If shutdown catches that interval, do not enqueue a second final
-            # request behind the already-running TLS handshake. The existing
-            # server freshness TTL remains the fallback.
-            request_inflight = self._last_attempt_at > max(
-                self._last_success_at,
-                self._last_failure_at,
-            )
-            if isinstance(final_presence, dict) and not request_inflight:
+            # One final offline write must follow any online request already
+            # in TLS. The existing non-daemon transport and asynchronous Qt
+            # close drain keep both requests alive safely; no second worker
+            # or concurrent TLS call is started. Repeated stop calls cannot
+            # duplicate or discard this terminal write.
+            if isinstance(final_presence, dict) and not self._stopped:
                 raw = dict(final_presence)
                 raw.pop("_defer_inactive_until_focus_ack", None)
                 self._shutdown_payload = _heartbeat_payload(raw)
-            elif request_inflight:
-                self._shutdown_payload = None
                 lifecycle_log(
-                    "social.heartbeat.shutdown_reuses_inflight",
+                    "social.heartbeat.shutdown_offline_queued",
                     user_id=str((final_presence or {}).get("user_id") or ""),
                 )
             self._stopped = True
@@ -7119,8 +7113,7 @@ class SocialHubDialog(QDialog):
         local_presence.update({
             "presence_state": "online", "online": True,
             "presence_load_state": "ready",
-            "activity_state": "focus" if local_presence.get("working") else
-                "rest" if str(local_presence.get("status")) in {"paused", "rest", "resting", "break"} else "idle",
+            "activity_state": "focus" if local_presence.get("working") else "rest",
             "last_seen_at": now_beijing().isoformat(),
             "last_confirmed_at": now_beijing().isoformat(),
             "stale_presence": False, "presence_uncertain": False,

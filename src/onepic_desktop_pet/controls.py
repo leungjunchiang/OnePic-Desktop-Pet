@@ -5,6 +5,7 @@
 快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
 独立宠物图层继续使用透明窗口；工作控制、状态和提示框使用实色窗口承载圆角样式，确保在深色桌面上边框与文字始终可见。
 工作报告二级按钮使用短暂悬停停留确认，快速扫过工作入口时不会闪出错误的整行按钮。
+计时与纪律小牌共用单层圆角绘制，不叠加矩形底框。
 """
 
 from __future__ import annotations
@@ -83,6 +84,17 @@ border: none; }
 """
 
 
+def paint_pill_surface(widget, fill, border, radius=10.0):
+    """统一绘制轻量胶囊，透明角落不残留原生窗口矩形底色。"""
+    painter = QPainter(widget)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    rect = QRectF(widget.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+    painter.setBrush(QBrush(QColor(fill)))
+    painter.setPen(QPen(QColor(border), 1.0))
+    painter.drawRoundedRect(rect, radius, radius)
+    painter.end()
+
+
 class RoundedSurfaceLabel(QLabel):
     """Translucent top-level label with an explicitly painted card surface.
 
@@ -125,13 +137,7 @@ class RoundedSurfaceLabel(QLabel):
         return QColor(self._surface_fill)
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        painter.setBrush(QBrush(self._surface_fill))
-        painter.setPen(QPen(self._surface_border, 1.0))
-        painter.drawRoundedRect(rect, self._surface_radius, self._surface_radius)
-        painter.end()
+        paint_pill_surface(self, self._surface_fill, self._surface_border, self._surface_radius)
         # QLabel draws the text/content only; all stylesheet backgrounds are
         # transparent, so it cannot introduce a rectangular halo afterwards.
         super().paintEvent(event)
