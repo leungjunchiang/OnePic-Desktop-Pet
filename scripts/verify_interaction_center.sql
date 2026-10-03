@@ -57,9 +57,12 @@ begin
   if jsonb_array_length(result->'interaction_events')<>2 then
     raise exception 'Seven Beijing dates range boundary failed'; end if;
   for key in select jsonb_object_keys(result->'interaction_events'->0) loop
-    if key not in ('event_id','sender_id','event_type','created_at','source_id','source','requires_action','payload','nickname','unread') then
+    if key not in ('event_id','sender_id','event_type','created_at','source_id','source','requires_action','payload','nickname','unread','received_silent','handled_at') then
       raise exception 'Unexpected heavy inbox field: %',key; end if;
   end loop;
+  if jsonb_typeof(result->'interaction_events'->0->'received_silent')<>'boolean'
+     or jsonb_typeof(result->'interaction_events'->0->'handled_at') not in ('null','string') then
+    raise exception 'Delivery markers are not bounded scalar fields'; end if;
   key:=result->'interaction_events'->0->>'event_id';
   perform set_config('request.jwt.claim.sub',outsider::text,true);
   result:=public.lili_interaction_inbox(jsonb_build_array(key));
