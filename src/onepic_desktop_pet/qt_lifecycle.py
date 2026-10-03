@@ -1,4 +1,4 @@
-"""Qt 线程销毁门禁：等待原生线程/TLS 清理完成，不能只依据 isRunning。
+"""Qt 线程销毁门禁：零等待异步轮询保持关机查询可响应，不把尚在清理误报为错误。
 
 Qt owns the native ``QThread`` object separately from the Python wrapper.  A
 running thread must not be destroyed while its native work is still active;
@@ -121,7 +121,7 @@ def wait_for_thread(thread: QThread | None, timeout_ms: int) -> bool:
             stopper()
         thread.quit()
         stopped = bool(thread.wait(max(0, int(timeout_ms))))
-        if not stopped:
+        if not stopped and int(timeout_ms) > 0:
             LOGGER.error(
                 "[Lifecycle] QThread did not stop within %sms: %s",
                 timeout_ms,

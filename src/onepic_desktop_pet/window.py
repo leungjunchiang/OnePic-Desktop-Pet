@@ -1,4 +1,4 @@
-"""纪律小牌与计时胶囊对齐；进程在线与学习状态分开，非学习显示休息。
+"""系统重启仅本地封口专注，不等待网络、不触发托盘隐藏；纪律小牌与计时胶囊对齐。
 
 显示防回退不改变专注账本；明确离开截止时间和验证后的新区间允许校准。
 
@@ -2793,6 +2793,11 @@ class PetWindow(QWidget):
     def closeEvent(self, event: QCloseEvent) -> None:
         """关闭宠物时保存计时并停止 Agent、音乐控制及独立气泡窗口。"""
 
+        if getattr(self, "_system_shutdown_confirmed", False):
+            # The application owns local persistence and the OS deadline.
+            # Never veto a subsequent WM_CLOSE or destroy live Qt workers.
+            event.accept()
+            return
         if self.close_to_tray and not self.application_exit_requested:
             event.ignore()
             self.hide_pet()
@@ -6008,13 +6013,14 @@ class PetWindow(QWidget):
             self.mood.receive_focus_reward(new_blocks)
             self._rewarded_focus_blocks = completed_blocks
 
-    def _record_economy_focus(self, seconds: int, started_at: datetime) -> None:
+    def _record_economy_focus(self, seconds: int, started_at: datetime, *, sync_remote: bool = True) -> None:
         """Credit a real focus segment locally and sync only its safe ledger rows."""
 
         result = self.economy.record_focus(seconds, started_at=started_at)
         events = list(result.get("events") or [])
-        self._sync_economy_events(events)
-        if self._food_scene_dialog is not None:
+        if sync_remote:
+            self._sync_economy_events(events)
+        if sync_remote and self._food_scene_dialog is not None:
             self._food_scene_dialog.refresh()
 
     def _record_focus_segment(
@@ -6025,6 +6031,7 @@ class PetWindow(QWidget):
         session_id: str | None = None,
         started_at: datetime | None = None,
         update_daily_stats: bool = True,
+        sync_remote: bool = True,
     ) -> int:
         """Credit only newly completed WORKING seconds in this session.
 
@@ -6099,7 +6106,7 @@ class PetWindow(QWidget):
                     started_at=started_at,
                 ),
             ),
-            ("economy", lambda: self._record_economy_focus(seconds, started_at)),
+            ("economy", lambda: self._record_economy_focus(seconds, started_at, sync_remote=sync_remote)),
             (
                 "task_progress",
                 lambda: self.focus_analytics.update_current_task_progress(seconds),
@@ -6131,7 +6138,8 @@ class PetWindow(QWidget):
         # delta sync.  The existing single-shot social timer coalesces this
         # with a nearby heartbeat; no canonical end_at is updated while the
         # session is live.
-        self._schedule_social_tick()
+        if sync_remote:
+            self._schedule_social_tick()
         lifecycle_log(
             "focus.segment.sealed",
             self,
@@ -6142,7 +6150,7 @@ class PetWindow(QWidget):
             end_at=end_at.isoformat(),
             seconds=seconds,
             completed=bool(completed),
-            sync_requested=True,
+            sync_requested=sync_remote,
         )
         return seconds
 
@@ -7167,8 +7175,8 @@ class PetWindow(QWidget):
 
         threading.Thread(target=sync, name="lili-economy-sync", daemon=True).start()
 
-    def shutdown_work_timer(self) -> None:
-        """自然退出前暂停计时并更新当天工作卡，不把关机时间计入工作。"""
+    def shutdown_work_timer(self, *, system_shutdown: bool = False) -> None:
+        """退出封口计时；系统重启仅本地持久化，不发 UI 信号或等待网络。"""
 
         self._reset_idle_episode()
         if hasattr(self, "work_timer"):
@@ -7180,11 +7188,22 @@ class PetWindow(QWidget):
                 # store before the shared timer is paused.  Without this, a
                 # normal app close could update the legacy daily card while
                 # losing the Todo attribution and daily check-in record.
+                if system_shutdown:
+                    try:
+                        self._record_focus_segment(
+                            session_seconds, completed=False,
+                            session_id=session_id, started_at=segment_started_at,
+                            sync_remote=False,
+                        )
+                    finally:
+                        # Even a secondary store failure must not persist a
+                        # running timer that credits the reboot downtime.
+                        self.work_timer.pause(reason="shutdown")
+                    self.focus_analytics.pause_focus_session()
+                    return
                 self._record_focus_segment(
-                    session_seconds,
-                    completed=False,
-                    session_id=session_id,
-                    started_at=segment_started_at,
+                    session_seconds, completed=False,
+                    session_id=session_id, started_at=segment_started_at,
                 )
                 paused = self.focus_session.pause(reason="shutdown")
                 if paused:

@@ -1,5 +1,5 @@
 """
-主动快捷操作不受后台通知门禁影响；记录 Qt 原生错误，退出先等待音频线程完整清理。
+系统更新重启走独立的本地落盘、限时退出路径；普通退出等待音频与 TLS 完整清理。
 
 本模块（区分关闭窗口与真正退出应用）管理 Lili 应用生命周期、精简系统托盘菜单和退出时的位置保存。
 
@@ -80,6 +80,7 @@ from .program_updates import (
     UpdateState,
 )
 from .qt_lifecycle import wait_for_thread
+from .system_shutdown import ConfirmedShutdownDeadline, WindowsSessionShutdownBridge
 from .lifecycle_log import configure_lifecycle_logging, lifecycle_log
 from .resources import resource_path
 from .update_worker import (
@@ -403,6 +404,13 @@ class DesktopPetApplication(QObject):
         self._quit_started = False
         self._quit_prepared = False
         self._quit_retry_scheduled = False
+        self._system_shutdown_confirmed = False
+        self._system_shutdown_bridge = None
+        if sys.platform == "win32":
+            self._system_shutdown_bridge = WindowsSessionShutdownBridge(
+                self._confirm_system_shutdown
+            )
+            self.qt_app.installNativeEventFilter(self._system_shutdown_bridge)
         self.program_update_state = UpdateState.IDLE
         self.window.set_menu_external_callbacks(
             {
@@ -428,6 +436,38 @@ class DesktopPetApplication(QObject):
             self.qt_app,
             quit_started=self._quit_started,
         )
+
+    def _confirm_system_shutdown(self) -> None:
+        """Save local facts without waiting for TLS, audio or Qt worker teardown."""
+
+        if self._system_shutdown_confirmed:
+            return
+        self._system_shutdown_confirmed = True
+        self.window._system_shutdown_confirmed = True
+        self._quit_started = True
+        self.window.application_exit_requested = True
+        self.window._close_in_progress = True
+        # Arm before disk I/O: even a stuck filesystem must not veto reboot.
+        self._system_shutdown_deadline = ConfirmedShutdownDeadline()
+        try:
+            for timer in self.window.findChildren(QTimer):
+                timer.stop()
+            heartbeat = getattr(self.window, "_social_heartbeat_thread", None)
+            if heartbeat is not None:
+                # Do not enqueue an extra HTTPS offline call at OS shutdown.
+                # Other clients use the existing presence TTL if necessary.
+                heartbeat.stop()
+            self.window.shutdown_work_timer(system_shutdown=True)
+        except Exception:
+            LOGGER.exception("[SystemShutdown] local focus save failed; retain last durable checkpoint")
+        finally:
+            try:
+                self.settings.start_x = self.window.x()
+                self.settings.start_y = self.window.y()
+                save_settings(self.settings)
+            except Exception:
+                LOGGER.exception("[SystemShutdown] settings save failed")
+            self._system_shutdown_deadline.local_save_finished()
 
     def _create_tray(self) -> QSystemTrayIcon:
         """创建系统托盘图标及其操作菜单。"""
@@ -587,7 +627,9 @@ class DesktopPetApplication(QObject):
             exit_code=exit_code,
             quit_started=self._quit_started,
         )
-        if not self._quit_started and not QCoreApplication.closingDown():
+        if (not self._quit_started
+                and not self._system_shutdown_confirmed
+                and not QCoreApplication.closingDown()):
             LOGGER.error(
                 "[Lifecycle] Qt event loop returned unexpectedly; restoring the pet"
             )
@@ -620,17 +662,21 @@ class DesktopPetApplication(QObject):
         """Advance one idempotent graceful-shutdown pass."""
 
         self._quit_retry_scheduled = False
+        if getattr(self, "_system_shutdown_confirmed", False):
+            return
         if not self._quit_started:
             return
         shutdown_ready = True
         try:
-            if not wait_for_thread(self._content_update_worker, 6000):
+            # Poll completion without blocking the GUI: Windows must still be
+            # able to deliver a shutdown query during an ordinary quit retry.
+            if not wait_for_thread(self._content_update_worker, 0):
                 shutdown_ready = False
             for worker in (
                 self._program_update_check_worker,
                 self._program_update_download_worker,
             ):
-                if not wait_for_thread(worker, 6000):
+                if not wait_for_thread(worker, 0):
                     shutdown_ready = False
             if not self._quit_prepared:
                 self.settings.start_x = self.window.x()
@@ -699,6 +745,10 @@ class DesktopPetApplication(QObject):
                 self._instance_lock.unlock()
             except Exception:
                 LOGGER.exception("[Lifecycle] failed to release instance lock")
+        bridge = getattr(self, "_system_shutdown_bridge", None)
+        if bridge is not None:
+            self.qt_app.removeNativeEventFilter(bridge)
+            self._system_shutdown_bridge = None
         lifecycle_log("qapplication.quit.call", self.qt_app)
         self.qt_app.quit()
 
