@@ -1,4 +1,6 @@
-"""显示防回退不改变专注账本；明确离开截止时间和验证后的新区间允许校准。
+"""免打扰互动首次处理复用原嘲讽、加油与投喂状态；不新增窗口，不激活前台。
+
+显示防回退不改变专注账本；明确离开截止时间和验证后的新区间允许校准。
 
 主动交互与被动窗口分流；隐藏口袋不重显提示，Qt退出等待原生清理。
 
@@ -4260,6 +4262,35 @@ class PetWindow(QWidget):
         }
         self.show_speech(f"{labels[item_key]}，六毛继续陪你专注。", 4800)
 
+    def _handle_silent_interaction(self, event: dict) -> None:
+        """只消费服务端首次处理回执；当前免打扰不拦截用户主动处理。"""
+        if event.get("first_handled") is not True:
+            return
+        # A sync worker already in flight may have read the pre-handling
+        # inactive reaction. Its late result must not undo the explicit claim.
+        self._silent_reaction_generation_floor = getattr(self, "_social_request_generation", 0)
+        manager = getattr(self, "notification_manager", None)
+        if manager is not None:
+            manager.shown_event_ids.add(str(event.get("event_id") or ""))
+            for field, prefix in (("taunt_state", "taunt"), ("encouragement_state", "cheer")):
+                state = event.get(field)
+                if isinstance(state, dict) and state.get("id"):
+                    manager.shown_event_ids.add(prefix + ":" + str(state["id"]))
+        kind = str(event.get("event_type") or "")
+        if isinstance(event.get("taunt_state"), dict):
+            self._apply_taunt_state(event["taunt_state"])
+        if isinstance(event.get("encouragement_state"), dict):
+            active = self._apply_encouragement_state(event["encouragement_state"])
+            if not active and not self._taunt_active:
+                self._set_temporary_activity("work-cheer", 4000)
+        if kind.startswith("food_"):
+            self._handle_food_interaction_accepted({**event, "kind": kind})
+        # The ordinary hint uses the existing pet window; all fullscreen and
+        # manual-hidden gates remain in effect. No force-show or new Toast.
+        if not self._passive_surfaces_blocked():
+            from .interaction_center import LABELS
+            self._show_interaction_hint(LABELS.get(kind, "收到搭子互动"), 4000)
+
     def talk_to_pet(self, message: str) -> CompanionReply:
         """在本地处理一条对话，并显示 Lili 的回复。"""
 
@@ -8042,6 +8073,7 @@ class PetWindow(QWidget):
             self._social_dialog.login_streak_updated.connect(self._login_streak_updated)
             self._social_dialog.food_interaction_requested.connect(self._send_food_interaction)
             self._social_dialog.food_interaction_accepted.connect(self._handle_food_interaction_accepted)
+            self._social_dialog.silent_interaction_handled.connect(self._handle_silent_interaction)
             self._social_dialog.buddy_request_received.connect(self._buddy_request_received)
             self._social_dialog.room_event_received.connect(self._room_event_received)
             self._social_dialog.finished.connect(self._social_dialog_finished)
@@ -8238,6 +8270,8 @@ class PetWindow(QWidget):
 
     def _room_event_received(self, event: dict) -> None:
         """Play a received room interaction on this desktop pet."""
+        if getattr(self, "_social_notification_dnd", False) or event.get("received_silent"):
+            return
 
         if event.get("created_at") and not self.notification_manager.is_fresh(event["created_at"]):
             lifecycle_log("notification.suppressed", event_id=str(event.get("id") or ""), event_type="room", reason="history_or_expired")
@@ -9383,6 +9417,10 @@ class PetWindow(QWidget):
         if reminder_store is not None:
             reminder_store.acknowledge(data.get("_work_event_acked") or [])
         generation = max(0, int(data.get("_request_generation") or 0))
+        if generation and generation <= getattr(self, "_silent_reaction_generation_floor", -1):
+            data = dict(data)
+            data.pop("_taunt_state", None)
+            data.pop("_encouragement_state", None)
         if generation and generation < self._last_applied_social_generation:
             lifecycle_log(
                 "social.dashboard.stale_response_ignored",
@@ -10824,6 +10862,8 @@ class PetWindow(QWidget):
 
     def _show_buddy_visit(self, peer: dict) -> None:
         """普通串门只播一次四秒本体提示；不恢复独立长期访客气泡。"""
+        if peer.get("received_silent") and not peer.get("_handled_explicitly"):
+            return
         if self._taunt_active:
             return
         visit_id = str(peer.get("id") or peer.get("visit_id")
@@ -10859,6 +10899,8 @@ class PetWindow(QWidget):
         """Show each new pending interaction once and queue simultaneous ones."""
 
         if not isinstance(event, dict):
+            return
+        if getattr(self, "_social_notification_dnd", False) or event.get("received_silent") or (event.get("payload") or {}).get("received_silent"):
             return
         if str(event.get("sender_id") or event.get("user_id") or "") in self._muted_buddy_ids:
             return
@@ -10935,7 +10977,7 @@ class PetWindow(QWidget):
             if kind.startswith("food_"):
                 self._handle_food_interaction_accepted(event)
             else:
-                self._show_buddy_visit(event)
+                self._show_buddy_visit({**event, "_handled_explicitly": True})
             self.show_speech(f"已接受 {nickname} 的互动。", 4200)
         else:
             self.show_speech(f"已拒绝 {nickname} 的互动。", 3200)

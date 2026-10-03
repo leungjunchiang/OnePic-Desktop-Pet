@@ -1,4 +1,6 @@
-"""搭子今日标明北京日期；榜单按五分钟刷新资格，复用已有卡片的权威周统计。
+"""搭子互动始终接收；免打扰消息首次处理通过服务端事件锁启用效果，已读不算处理。
+
+搭子今日标明北京日期；榜单按五分钟刷新资格，复用已有卡片的权威周统计。
 
 搭子互动默认欢迎；只提交主动修改的接收选项，避免旧设备保存资料时关闭互动。
 
@@ -3353,6 +3355,7 @@ class SocialHubDialog(QDialog):
     quick_action_requested = Signal(str)
     food_interaction_requested = Signal(dict, str)
     food_interaction_accepted = Signal(dict)
+    silent_interaction_handled = Signal(dict)
     buddy_request_received = Signal(dict)
     account_state_changed = Signal(bool)
     login_streak_updated = Signal(dict)
@@ -5164,6 +5167,8 @@ class SocialHubDialog(QDialog):
             return
         for visit in self.data.get("visits") or []:
             kind = str(visit.get("kind") or "")
+            if visit.get("received_silent") or (visit.get("payload") or {}).get("received_silent"):
+                continue  # Switching to welcome must not auto-play silent history.
             if kind not in {"food_tea", "food_cake"}:
                 continue
             event_id = str(visit.get("id") or "")
@@ -5751,10 +5756,10 @@ class SocialHubDialog(QDialog):
         layout.addLayout(owner_name_row)
         self.hidden = QCheckBox("隐身")
         self.exact = QCheckBox("显示准确时长")
-        self.visits_allowed = QCheckBox("接收搭子互动（默认开启）")
+        self.visits_allowed = QCheckBox("搭子互动始终接收")
         self.visits_allowed.setChecked(True)
-        self.visits_allowed.setToolTip("接收串门、加油、嘲讽与投喂；专注、后台运行或全屏不会关闭此开关。")
-        self.visits_allowed.toggled.connect(lambda _checked: self._interaction_preference_edited("allow_visits"))
+        self.visits_allowed.setEnabled(False)
+        self.visits_allowed.setToolTip("互动不会被拒收。需要安静时选择免打扰，消息仍保留在互动收件箱。")
         self.wealth_opt_in = QCheckBox("参加本周专注排行榜")
         self.wealth_opt_in.setChecked(True)
         self.wealth_opt_in.setToolTip("默认参加；仅已接受的搭子可见，可随时关闭。")
@@ -5763,13 +5768,13 @@ class SocialHubDialog(QDialog):
         self.interaction_mode = QComboBox()
         self.interaction_mode.addItem("欢迎互动（默认）", "welcome")
         self.interaction_mode.addItem("专注优先（仍接收互动）", "focus_priority")
-        self.interaction_mode.addItem("暂停接收互动（手动关闭）", "do_not_disturb")
+        self.interaction_mode.addItem("消息免打扰（只进入收件箱）", "do_not_disturb")
         self.interaction_mode.currentIndexChanged.connect(lambda _index: self._interaction_preference_edited("buddy_interaction_mode"))
         self.interaction_mode.setMinimumWidth(0)
         self.interaction_mode.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.interaction_mode.setToolTip("决定好友敬茶、请吃蛋糕、请奶茶或邀请开工时如何到达你的六毛。")
         layout.addWidget(self.interaction_mode)
-        hint = QLabel("建议保持欢迎互动。全屏或游戏时仅隐藏即时提示，互动仍保留在收件箱。")
+        hint = QLabel("搭子互动始终接收。消息免打扰时只进入收件箱，首次回应再启用互动效果；全屏或游戏时不弹出提示。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.restore_interactions_button = QPushButton("恢复欢迎互动")
@@ -5808,7 +5813,7 @@ class SocialHubDialog(QDialog):
             )
 
     def _restore_interactions(self) -> None:
-        """恢复接收是用户明确操作；不替其他搭子修改权限。"""
+        """用户主动退出消息免打扰；不覆盖其他搭子或另一账号的设置。"""
         self.visits_allowed.setChecked(True)
         self.interaction_mode.setCurrentIndex(self.interaction_mode.findData("welcome"))
         self._save_profile()
@@ -5830,6 +5835,11 @@ class SocialHubDialog(QDialog):
 
     def _render_interaction_preferences(self, me: dict[str, Any]) -> None:
         """刷新只读取服务端配置，不覆盖正在编辑的选项或立即回滚刚保存的值。"""
+        # Old reception opt-outs have the same semantics as message DND. Never
+        # upload a default welcome mode over another device's explicit choice.
+        if me.get("allow_visits") is False:
+            me["buddy_interaction_mode"] = "do_not_disturb"
+        me["allow_visits"] = True
         for field, widget in (("allow_visits", self.visits_allowed), ("buddy_interaction_mode", self.interaction_mode)):
             if field not in me or me[field] is None:
                 # Keep the acknowledged configuration in the data projection
@@ -6584,18 +6594,88 @@ class SocialHubDialog(QDialog):
         thread.start()
 
     def _interaction_response(self, row, action):
+        """只有收件时静默且未处理的消息，首次主动回应才启用原互动效果。"""
+        deferred_action = action != "home" and not (action == "handle" and row.get("source") == "visit")
+        if (deferred_action and row.get("received_silent") is True
+                and not row.get("handled_at")):
+            self._handle_silent_interaction(row, action)
+            return
+        self._perform_interaction_response(row, action)
+
+    def _handle_silent_interaction(self, row, action):
+        if not self._require_login():
+            callback = row.get("_response_done")
+            if callable(callback): callback(False)
+            return
+        account = _session_user_id(self.client)
+        event_id = str(row.get("event_id") or "")
+        pending = getattr(self, "_silent_interaction_pending", None)
+        if pending is None:
+            pending = self._silent_interaction_pending = set()
+        key = (account, event_id)
+        if key in pending:
+            callback = row.get("_response_done")
+            if callable(callback): callback(False)
+            return
+        pending.add(key)
+        thread = SocialBuddyRpcThread(self.client, "lili_handle_silent_interaction", {"p_event_id": event_id}, self)
+        self._buddy_rpc_threads.append(thread)
+        dispatched = False
+        def done(payload):
+            nonlocal dispatched
+            if account != _session_user_id(self.client) or not isinstance(payload, dict) or payload.get("event_id") != event_id or not isinstance(payload.get("first_handled"), bool):
+                return
+            # Even a stale second computer gets first_handled=false from the
+            # atomic server claim. It may reply, but cannot replay the effect.
+            for current in self._interaction_rows:
+                if current.get("event_id") == event_id:
+                    current["handled_at"] = payload.get("handled_at") or "handled"
+            self._interaction_revision += 1
+            if payload.get("first_handled") is True:
+                LOGGER.info("silent interaction handled account=%s event_id=%s", account, event_id)
+                self.silent_interaction_handled.emit({**row, **payload})
+            dispatched = True
+            try:
+                self._perform_interaction_response({**row, "handled_at": "handled"}, action)
+            except Exception:
+                LOGGER.exception("reply failed after silent interaction handling event_id=%s", event_id)
+                callback = row.get("_response_done")
+                if callable(callback): callback(False)
+                self._set_status("互动效果已启用，回应未送出，请重试。", error=True)
+        thread.completed.connect(done, Qt.ConnectionType.QueuedConnection)
+        thread.failed.connect(lambda error: self._set_status("互动尚未处理，请重试：" + social_user_message(error), error=True), Qt.ConnectionType.QueuedConnection)
+        def finish():
+            pending.discard(key)
+            self._buddy_rpc_finished(thread)
+            if not dispatched:
+                callback = row.get("_response_done")
+                if callable(callback): callback(False)
+        thread.finished.connect(finish, Qt.ConnectionType.QueuedConnection)
+        try:
+            thread.start()
+        except Exception:
+            finish()
+            self._set_status("互动尚未处理，请重试。", error=True)
+
+    def _perform_interaction_response(self, row, action):
+        def settled():
+            callback = row.get("_response_done")
+            if callable(callback): callback(True)
         if action == "home":
             self.tabs.setCurrentIndex(0)
             return
         if action in {"focus", "handle"}:
             if row.get("source") in {"buddy", "visit"}:
                 self.inbox.setFocus()
+                settled()
                 return
             if (row.get("payload") or {}).get("state") == "explained":
                 peer = next((b for b in self.data.get("buddies", []) if str(b.get("user_id"))==str(row.get("sender_id"))), {})
                 self.open_buddy_study({**peer,"user_id":row.get("sender_id"),"nickname":row.get("display_name") or row.get("nickname")})
+                settled()
                 return
             self.open_focus_section(0)
+            settled()
             return
         peer = next((b for b in self.data.get("buddies", []) if str(b.get("user_id"))==str(row.get("sender_id"))), {})
         peer = {**peer, "user_id": row.get("sender_id"), "nickname": row.get("display_name") or row.get("nickname"),
@@ -6609,6 +6689,7 @@ class SocialHubDialog(QDialog):
             self._send_direct_interaction(peer, action, row.get("event_id"))
         else:
             self._set_status("✓ 知道了")
+            settled()
 
     def apply_dashboard(self, data: dict[str, Any] | None) -> None:
         """Render a dashboard already fetched by the background sync thread.
@@ -6938,6 +7019,7 @@ class SocialHubDialog(QDialog):
                   for key in ("requests","outgoing_requests","visits","activity","room_activity")}
         source.update({key:{field:(self.data.get(key) or {}).get(field) for field in ("id","active","created_at")}
                        for key in ("_taunt_state","_encouragement_state")})
+        source["delivery_revision"] = self.data.get("interaction_delivery_revision")
         signature = json.dumps(source,sort_keys=True,default=str)
         if self._interaction_source_signature is not None and signature != self._interaction_source_signature:
             self._interaction_dirty = True
@@ -7212,8 +7294,7 @@ class SocialHubDialog(QDialog):
             ).replace("\x00", "").strip()[:24] or "搭子"
             owner_nickname = clean_owner_nickname(self.owner_name_edit.text())
             interaction_update = {}
-            if "allow_visits" in self._interaction_preferences_dirty:
-                interaction_update["allow_visits"] = self.visits_allowed.isChecked()
+            # Reception is mandatory; only the presentation mode is editable.
             self.client.update_profile(nickname=account_nickname,visibility="hidden" if self.hidden.isChecked() else "friends",show_exact_time=self.exact.isChecked(),outfit_key=self.outfit_key,wealth_leaderboard_enabled=self.wealth_opt_in.isChecked(),wealth_leaderboard_preference_set=True,owner_nickname=owner_nickname, **interaction_update)
             if "allow_visits" in interaction_update:
                 self._interaction_preference_saved("allow_visits", interaction_update["allow_visits"])

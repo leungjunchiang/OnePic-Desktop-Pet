@@ -1,4 +1,4 @@
-"""验证默认欢迎、跨设备部分更新、明确关闭与恢复，以及刷新期间的互动设置编辑。"""
+"""验证默认欢迎、跨设备部分更新、消息免打扰与恢复，以及刷新期间的互动设置编辑。"""
 
 from copy import deepcopy
 from types import SimpleNamespace
@@ -78,21 +78,20 @@ def test_stale_computer_saving_owner_name_cannot_disable_remote_interactions(pro
     assert client.me["buddy_interaction_mode"] == "welcome"
 
 
-def test_refresh_preserves_edits_and_explicit_opt_out_is_saved_once(profile_dialog):
+def test_refresh_preserves_message_dnd_without_disabling_reception(profile_dialog):
     dialog, client = profile_dialog
     client.me.update(allow_visits=True, buddy_interaction_mode="welcome")
     old_snapshot = client.dashboard()
     dialog.apply_dashboard(old_snapshot)
-    dialog.visits_allowed.setChecked(False)
     dialog.interaction_mode.setCurrentIndex(dialog.interaction_mode.findData("do_not_disturb"))
     dialog.apply_dashboard(old_snapshot)
-    assert not dialog.visits_allowed.isChecked()
+    assert dialog.visits_allowed.isChecked() and not dialog.visits_allowed.isEnabled()
     assert dialog.interaction_mode.currentData() == "do_not_disturb"
     dialog._save_profile()
-    assert client.writes[-1]["allow_visits"] is False
+    assert "allow_visits" not in client.writes[-1]
     assert client.calls == [("lili_set_buddy_interaction_mode", {"p_mode": "do_not_disturb"})]
     dialog.apply_dashboard(old_snapshot)  # An in-flight response must not roll back the save.
-    assert not dialog.visits_allowed.isChecked()
+    assert dialog.visits_allowed.isChecked() and not dialog.visits_allowed.isEnabled()
     dialog.apply_dashboard(client.dashboard())
     dialog._save_profile()
     assert "allow_visits" not in client.writes[-1]
@@ -106,10 +105,10 @@ def test_partial_refresh_cannot_reset_an_opt_out(profile_dialog):
     client.me.pop("allow_visits")
     client.me.pop("buddy_interaction_mode")
     dialog.apply_dashboard(client.dashboard())
-    assert not dialog.visits_allowed.isChecked()
+    assert dialog.visits_allowed.isChecked() and not dialog.visits_allowed.isEnabled()
     assert dialog.interaction_mode.currentData() == "do_not_disturb"
     assert not dialog._interaction_preferences_dirty
-    assert dialog.data["me"]["allow_visits"] is False
+    assert dialog.data["me"]["allow_visits"] is True
     assert dialog.data["me"]["buddy_interaction_mode"] == "do_not_disturb"
 
 
@@ -117,10 +116,10 @@ def test_single_field_change_does_not_submit_other_interaction_field(profile_dia
     dialog, client = profile_dialog
     client.me.update(allow_visits=False, buddy_interaction_mode="focus_priority")
     dialog.apply_dashboard(client.dashboard())
-    dialog.visits_allowed.setChecked(True)
+    dialog.interaction_mode.setCurrentIndex(dialog.interaction_mode.findData("focus_priority"))
     dialog._save_profile()
-    assert client.writes[-1]["allow_visits"] is True
-    assert client.calls == []
+    assert "allow_visits" not in client.writes[-1]
+    assert client.calls == [("lili_set_buddy_interaction_mode", {"p_mode": "focus_priority"})]
     assert client.me["buddy_interaction_mode"] == "focus_priority"
 
 
@@ -142,7 +141,6 @@ def test_failed_mode_save_keeps_edits_and_restores_button_for_retry(profile_dial
 def test_account_switch_does_not_submit_previous_accounts_edits(profile_dialog):
     dialog, client = profile_dialog
     dialog.apply_dashboard(client.dashboard())
-    dialog.visits_allowed.setChecked(False)
     client.session.user_id = "account-b"
     client.me = {"user_id": "account-b", "nickname": "另一个搭子"}
     dialog.apply_dashboard(client.dashboard())
@@ -157,7 +155,8 @@ def test_restore_interactions_is_explicit_and_restores_both_switches(profile_dia
     client.me.update(allow_visits=False, buddy_interaction_mode="do_not_disturb")
     dialog.apply_dashboard(client.dashboard())
     dialog._restore_interactions()
-    assert client.me["allow_visits"] is True
+    assert dialog.visits_allowed.isChecked()
+    assert "allow_visits" not in client.writes[-1]
     assert client.me["buddy_interaction_mode"] == "welcome"
     assert not dialog._interaction_preferences_dirty
 

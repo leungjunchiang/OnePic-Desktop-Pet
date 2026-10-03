@@ -110,7 +110,7 @@ create or replace view public.lili_interaction_feed as
 select 'visit:'||v.id as event_id,v.receiver_id,v.sender_id,v.kind as event_type,
   v.created_at,v.id as source_id,'visit'::text as source,
   v.status='pending' and v.expires_at>now() and (v.kind='visit' or v.kind like 'food_%') as requires_action,
-  jsonb_build_object('status',v.status) as payload
+  jsonb_build_object('status',v.status,'duration_minutes',v.payload->'duration_minutes') as payload
 from public.lili_visit_events v
 union all
 select 'nudge:'||n.id,n.owner_id,n.supervisor_id,n.kind,n.created_at,n.id,'nudge',false,'{}'::jsonb
@@ -162,11 +162,13 @@ begin
   select coalesce(jsonb_agg(to_jsonb(x) order by x.created_at desc),'[]') into result from (
     select f.event_id,f.sender_id,f.event_type,f.created_at,f.source_id,f.source,f.requires_action,f.payload,
       coalesce(p.nickname,'搭子') as nickname,
-      f.source<>'buddy_outgoing' and f.created_at>baseline and r.event_id is null as unread
+      f.source<>'buddy_outgoing' and f.created_at>baseline and r.event_id is null as unread,
+      coalesce(d.received_silent,false) as received_silent,d.handled_at
     from public.lili_interaction_feed f
     left join public.lili_profiles p on p.user_id=f.sender_id
     left join public.lili_interaction_reads r on r.user_id=me and r.event_id=f.event_id
-    where f.receiver_id=me and ((f.created_at >= (((now() at time zone 'Asia/Shanghai')::date-6)::timestamp at time zone 'Asia/Shanghai')
+    left join public.lili_interaction_delivery d on d.receiver_id=me and d.event_id=f.event_id
+    where f.receiver_id=me and d.parent_event_id is null and ((f.created_at >= (((now() at time zone 'Asia/Shanghai')::date-6)::timestamp at time zone 'Asia/Shanghai')
       and f.created_at < (((now() at time zone 'Asia/Shanghai')::date+1)::timestamp at time zone 'Asia/Shanghai')) or f.requires_action)
     order by f.created_at desc,f.event_id desc limit 30
   ) x;

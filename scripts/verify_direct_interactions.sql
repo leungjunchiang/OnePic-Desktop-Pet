@@ -12,8 +12,8 @@ declare a uuid:=gen_random_uuid(); b uuid:=gen_random_uuid(); c uuid:=gen_random
   origin uuid; sent uuid; again uuid; item text; key text; denied boolean; n integer;
 begin
   if not exists(select 1 from public.lili_profiles where user_id in(select id from interaction_opt_out_fixture)
-    and not allow_visits and buddy_interaction_mode='do_not_disturb') then
-    raise exception 'Default upgrade overwrote an explicit opt-out'; end if;
+    and allow_visits and buddy_interaction_mode='do_not_disturb') then
+    raise exception 'Legacy opt-out was not converted to silent delivery'; end if;
   insert into auth.users(id,raw_user_meta_data) values(a,'{}'),(b,'{}'),(c,'{}');
   if (select count(*) from public.lili_profiles where user_id in(a,b,c)
     and allow_visits and buddy_interaction_mode='welcome')<>3 then
@@ -69,13 +69,9 @@ begin
     exception when others then denied:=true; end;
   if not denied then raise exception 'Operation key rebound to another action'; end if;
   update public.lili_profiles set allow_visits=false where user_id=b;
-  denied:=false;
-  begin perform public.lili_send_interaction(b,'cheer',null,'{}'); exception when others then denied:=true; end;
-  if not denied then raise exception 'Interaction opt-out bypassed'; end if;
+  perform public.lili_send_interaction(b,'cheer',null,'{}');
   update public.lili_profiles set allow_visits=true,buddy_interaction_mode='do_not_disturb' where user_id=b;
-  denied:=false;
-  begin perform public.lili_send_interaction(b,'flower',null,'{}'); exception when others then denied:=true; end;
-  if not denied then raise exception 'Do-not-disturb bypassed'; end if;
+  perform public.lili_send_interaction(b,'flower',null,'{}');
   update public.lili_profiles set buddy_interaction_mode='welcome' where user_id=b;
   if to_char(now() at time zone 'Asia/Shanghai','HH24:MI') between '08:00' and '22:30' then
     perform public.lili_send_interaction(b,'tease',null,jsonb_build_object('reply_to_event_id',key));

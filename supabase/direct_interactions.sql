@@ -31,8 +31,8 @@ begin
   if k not in ('visit','cheer','tease','praise','knock','poke','start','return','flower',
                'food_coffee','food_milk_tea','food_tea') then raise exception '不支持这种直接互动'; end if;
   if not public.lili_are_buddies(me,p_target) then raise exception '搭子关系不存在，无法送出互动'; end if;
-  if not exists(select 1 from public.lili_profiles where user_id=p_target and allow_visits
-    and buddy_interaction_mode<>'do_not_disturb') then raise exception '对方暂时不接受搭子互动'; end if;
+  -- DND means silent inbox delivery, never rejection of a buddy's message.
+  if not exists(select 1 from public.lili_profiles where user_id=p_target) then raise exception '互动对象不存在'; end if;
   -- Validate original ownership and sender INSIDE this write RPC, never by a
   -- client lookup or current shared-room membership. No coaching reply bypass.
   if reply is not null and (length(reply)>160 or not exists(

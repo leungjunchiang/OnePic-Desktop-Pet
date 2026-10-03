@@ -1,5 +1,5 @@
 """
-本模块还验证有效离开截止时间可校准显示，不被普通暂停防回退掩盖。
+本模块还验证免打扰首次处理不被在途旧反应覆盖；有效离开截止时间可校准显示，不被普通暂停防回退掩盖。
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
 喂食、离线对话、陪伴动作、工作计时、专注导航、备注提醒和自拍成片；手动监视器用例隔离周期轮询。
 
@@ -4761,4 +4761,18 @@ def test_restored_encouragement_is_silent_and_fresh_event_is_deduplicated(monkey
     window._social_dashboard_received({'_encouragement_state':fresh})
     assert window._interaction_hint_text=='💪 加油 · +1'
     assert 'cheer:new' in window.notification_manager.shown_event_ids
+    window.close();window.deleteLater();app.processEvents()
+
+
+def test_silent_handling_reaction_survives_late_prehandling_sync(monkeypatch):
+    app,window=_create_window()
+    window._social_request_generation=7
+    monkeypatch.setattr(window,'_passive_surfaces_blocked',lambda:True)
+    window._handle_silent_interaction({'first_handled':True,'event_id':'taunt:original',
+        'event_type':'tease','taunt_state':{'active':True,'id':'original','sender_nickname':'搭子'}})
+    assert window._taunt_active and window._taunt_id=='original'
+    window._social_dashboard_received({'_request_generation':7,'_taunt_state':{'active':False}})
+    assert window._taunt_active
+    window._social_dashboard_received({'_request_generation':8,'_taunt_state':{'active':False}})
+    assert not window._taunt_active
     window.close();window.deleteLater();app.processEvents()

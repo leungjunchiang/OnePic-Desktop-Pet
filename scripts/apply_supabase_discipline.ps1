@@ -41,7 +41,8 @@ if ($MigrationPath -like '*lili_supervision_policy.sql' -or $MigrationPath -like
         (Get-Content -Raw -LiteralPath 'supabase/beijing_time_contract.sql') + "`n" +
         (Get-Content -Raw -LiteralPath 'supabase/interaction_center.sql') + "`n" +
         (Get-Content -Raw -LiteralPath 'supabase/presence_lifecycle.sql') + "`n" +
-        (Get-Content -Raw -LiteralPath 'supabase/direct_interactions.sql')
+        (Get-Content -Raw -LiteralPath 'supabase/direct_interactions.sql') + "`n" +
+        (Get-Content -Raw -LiteralPath 'supabase/interaction_delivery.sql')
     } else { '' }
     $sql = "begin;`n$projectionSql`n$baseSql`n$viewSql`n$policySql`n$sql`n$coachingSql`ncommit;"
 }
@@ -118,8 +119,13 @@ if ($MigrationPath -like '*lili_study_plan_semantics.sql') {
     $inboxBody = @{ query = $inboxTest } | ConvertTo-Json -Compress
     $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $inboxBody
     Write-Host 'Beijing distinct-day quota, ninth-day legacy rejection, cancellation/re-enable, monthly reset, inbox baseline, read receipts and receiver isolation verified; fixtures rolled back.'
+    $silentTest = Get-Content -Raw -LiteralPath 'scripts/verify_silent_interactions.sql'
+    $silentBody = @{ query = $silentTest } | ConvertTo-Json -Compress
+    $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $silentBody
+    Write-Host 'Silent delivery, first handling, read independence, cross-device idempotency, legacy reception and ownership verified; synthetic fixtures rolled back.'
     $directTest = Get-Content -Raw -LiteralPath 'scripts/verify_direct_interactions.sql'
-    $directTest = $directTest.Replace('-- REPLAY_DIRECT_HERE', (Get-Content -Raw -LiteralPath 'supabase/direct_interactions.sql'))
+    $directTest = $directTest.Replace('-- REPLAY_DIRECT_HERE', (Get-Content -Raw -LiteralPath 'supabase/direct_interactions.sql') + "`n" +
+        (Get-Content -Raw -LiteralPath 'supabase/interaction_delivery.sql'))
     $directBody = @{ query = $directTest } | ConvertTo-Json -Compress
     $null = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json' -Body $directBody
     Write-Host 'Direct replies, original sender/receiver authorization, no-room operation, idempotent retry, food reuse, privacy, non-buddy denial and legacy replay verified; fixtures rolled back.'

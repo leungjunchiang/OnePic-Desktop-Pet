@@ -386,12 +386,12 @@ revoke all on function public.lili_room_dashboard_lifecycle_base(uuid) from publ
 create or replace function public.lili_dashboard() returns jsonb language plpgsql security definer set search_path='' as $$
 begin
   if auth.uid() is null then raise exception 'authentication required'; end if;
-  return public.lili_presence_display_dashboard(public.lili_dashboard_lifecycle_base());
+  return public.lili_delivery_dashboard(public.lili_presence_display_dashboard(public.lili_dashboard_lifecycle_base()));
 end $$;
 create or replace function public.lili_room_dashboard(p_room_id uuid) returns jsonb language plpgsql security definer set search_path='' as $$
 begin
   if auth.uid() is null then raise exception 'authentication required'; end if;
-  return public.lili_presence_display_dashboard(public.lili_room_dashboard_lifecycle_base(p_room_id));
+  return public.lili_delivery_dashboard(public.lili_presence_display_dashboard(public.lili_room_dashboard_lifecycle_base(p_room_id)));
 end $$;
 revoke all on function public.lili_dashboard() from public,anon;
 revoke all on function public.lili_room_dashboard(uuid) from public,anon;

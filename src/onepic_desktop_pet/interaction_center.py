@@ -1,4 +1,4 @@
-"""搭子互动收件箱：北京日期 Feed、直接回应按钮生命周期与四秒即时反馈。"""
+"""搭子互动收件箱：北京日期 Feed、静默消息首次处理、回应按钮生命周期与四秒即时反馈。"""
 from __future__ import annotations
 from datetime import timedelta
 from time import monotonic
@@ -147,6 +147,11 @@ class InteractionFeed(QWidget):
                 body.setTextFormat(Qt.TextFormat.PlainText)
                 body.setWordWrap(True)
                 layout.addWidget(body)
+                if row.get("received_silent") and not row.get("handled_at"):
+                    hint = QLabel("免打扰收到 · 首次回应后启用互动效果")
+                    hint.setWordWrap(True)
+                    hint.setStyleSheet("color: #52645d;")
+                    layout.addWidget(hint)
                 actions = QHBoxLayout()
                 actions.addStretch()
                 for label,action in response_actions(row):
@@ -162,7 +167,8 @@ class InteractionFeed(QWidget):
         decorate_buttons(self)
 
     def _respond(self, row, action, button):
-        if action not in {"cheer", "taunt", "food", "flower", "visit"}:
+        deferred = row.get("received_silent") is True and not row.get("handled_at")
+        if action not in {"cheer", "taunt", "food", "flower", "visit"} and not deferred:
             return self.respond(row, action)
         key = (str(row.get("event_id")), action)
         if key in self._responses:
@@ -176,7 +182,7 @@ class InteractionFeed(QWidget):
                 return
             if success:
                 text = {"taunt":"✓ 已回击", "food":"✓ 已回请", "cheer":"✓ 已加油",
-                        "flower":"✓ 已回一朵", "visit":"✓ 已串门"}[action]
+                        "flower":"✓ 已回一朵", "visit":"✓ 已串门"}.get(action, "✓ 已处理")
                 self._responses[key] = (token, text)
                 current = self._response_buttons.get(key)
                 if current is not None and isValid(current): current.setText(text)
