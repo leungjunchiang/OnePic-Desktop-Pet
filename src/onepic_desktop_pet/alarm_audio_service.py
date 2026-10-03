@@ -1,8 +1,9 @@
-"""试听与闹钟共用播放状态机；退出保持事件循环直到所有音频线程原生清理完成。"""
+"""线程内连续播放、有限断点恢复与本地诊断；显式停止及退出不允许重新起播。"""
 from __future__ import annotations
 
 from collections import deque
-from PySide6.QtCore import QObject, QTimer, QThread, Signal, Slot
+from time import monotonic
+from PySide6.QtCore import QObject, QTimer, QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import QApplication
 from .lifecycle_log import lifecycle_log
 
@@ -23,22 +24,102 @@ class _QtAudioWorker(QObject):
         self.output.setVolume(0)
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(self.output)
-        self.player.playbackStateChanged.connect(self.state_changed.emit)
-        self.player.mediaStatusChanged.connect(self.status_changed.emit)
-        self.player.errorOccurred.connect(self.error.emit)
-        self.player.positionChanged.connect(self.position_changed.emit)
+        self._want_play = False
+        self._loops = 1
+        self._position = 0
+        self._last_progress = monotonic()
+        self._last_diagnostic = self._last_progress
+        self._recoveries = deque()
+        self._monitor = QTimer(self)
+        self._monitor.setInterval(250)
+        self._monitor.timeout.connect(self._check_playback)
+        self.player.playbackStateChanged.connect(self._state_changed)
+        self.player.mediaStatusChanged.connect(self._status_changed)
+        self.player.errorOccurred.connect(self._error)
+        self.player.positionChanged.connect(self._position_changed)
+
+    def _state_changed(self, state):
+        lifecycle_log("media.alarm.worker.state", state=str(state),
+                      position_ms=self._position, requested_play=self._want_play)
+        self.state_changed.emit(state)
+
+    def _status_changed(self, status):
+        self.status_changed.emit(status)
+
+    def _position_changed(self, position):
+        # stop() 会发出 position=0；保留最后有效位置用于意外停止的断点恢复。
+        from PySide6.QtMultimedia import QMediaPlayer
+        # Qt 在 stop 的 state_changed 之前就可能先发 position=0。
+        if position > 0 and self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            if position != self._position:
+                self._last_progress = monotonic()
+            self._position = position
+        self.position_changed.emit(position)
+
+    def _error(self, code, message):
+        self._want_play = False
+        self._monitor.stop()
+        self.error.emit(code, message)
+
+    def _check_playback(self):
+        """仅恢复无错误的意外停止，播放和缓冲中绝不重复加载/重启歌曲。"""
+        from PySide6.QtMultimedia import QMediaPlayer
+        if not self._want_play:
+            return
+        now = monotonic()
+        state, status = self.player.playbackState(), self.player.mediaStatus()
+        if now - self._last_diagnostic >= 5:
+            lifecycle_log("media.alarm.worker.progress", state=str(state), status=str(status),
+                          position_ms=self._position, duration_ms=self.player.duration(),
+                          buffer_progress=self.player.bufferProgress())
+            self._last_diagnostic = now
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            return
+        if status not in (QMediaPlayer.MediaStatus.LoadedMedia,
+                          QMediaPlayer.MediaStatus.EndOfMedia):
+            return
+        if status == QMediaPlayer.MediaStatus.EndOfMedia and self._loops != -1:
+            self._want_play = False
+            self._monitor.stop()
+            return
+        if now - self._last_progress < .75:
+            return
+        while self._recoveries and now - self._recoveries[0] > 30:
+            self._recoveries.popleft()
+        if len(self._recoveries) >= 3:
+            lifecycle_log("media.alarm.worker.recovery_exhausted", position_ms=self._position)
+            self._error(QMediaPlayer.Error.ResourceError, "自定义铃声无法持续播放，改用系统提示音")
+            return
+        self._recoveries.append(now)
+        position = 0 if status == QMediaPlayer.MediaStatus.EndOfMedia else self._position
+        lifecycle_log("media.alarm.worker.resume", state=str(state), status=str(status),
+                      position_ms=position, attempt=len(self._recoveries))
+        self.player.setPosition(position)
+        self._last_progress = now
+        self.player.play()
 
     @Slot(object, object)
     def command(self, name, value):
         if name == "source":
+            self._want_play = False
+            self._monitor.stop()
+            self._position = 0
+            self._recoveries.clear()
             self.player.setSource(value)
         elif name == "loops":
+            self._loops = value
             self.player.setLoops(value)
         elif name == "volume":
             self.output.setVolume(value)
         elif name == "play":
+            self._want_play = True
+            self._last_progress = monotonic()
+            self._monitor.start()
             self.player.play()
         elif name == "stop":
+            self._want_play = False
+            self._monitor.stop()
+            lifecycle_log("media.alarm.worker.stop", position_ms=self._position)
             self.output.setVolume(0)
             self.player.stop()
             self.thread().quit()
@@ -65,8 +146,9 @@ class QtThreadAudio(QObject):
         self.thread_owner = QThread()
         self.worker = _QtAudioWorker()
         self.worker.moveToThread(self.thread_owner)
-        self.thread_owner.started.connect(self.worker.initialize)
-        self.command.connect(self.worker.command)
+        # started 在新线程发出；初始化必须先于事件队列中的 source/play/stop。
+        self.thread_owner.started.connect(self.worker.initialize, Qt.ConnectionType.DirectConnection)
+        self.command.connect(self.worker.command, Qt.ConnectionType.QueuedConnection)
         self.worker.state_changed.connect(self._state_changed)
         self.worker.status_changed.connect(self.mediaStatusChanged)
         self.worker.error.connect(self.errorOccurred)
@@ -116,6 +198,7 @@ class QtThreadAudio(QObject):
 
     def stop(self):
         if not self.closed and not self._stopping:
+            lifecycle_log("media.alarm.bridge.stop_requested")
             self._stopping = True
             self.command.emit("stop", None)
 
@@ -186,6 +269,7 @@ class AlarmAudioService(QObject):
         entry, self.current = self.current, None
         if entry is None:
             return
+        lifecycle_log("alarm.audio.retire", occurrence_id=entry[1])
         owner = entry[0]
         # 捕获旧原生后端：UI 清理会清空字段，不能误把 None 当停止确认。
         backend = getattr(owner, "_windows_audio", None) or getattr(owner, "_windows_preview_audio", None)
