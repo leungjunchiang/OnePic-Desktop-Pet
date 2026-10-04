@@ -1,4 +1,6 @@
-"""进程在线独立于学习状态；非学习显示休息，退出按顺序发送最终离线状态。
+"""搭子卡片先建立父级再切换可见性，后台刷新不创建临时独立标签窗口。
+
+进程在线独立于学习状态；非学习显示休息，退出按顺序发送最终离线状态。
 
 搭子今日标明北京日期；榜单按五分钟刷新资格，复用已有卡片的权威周统计。
 
@@ -2542,18 +2544,20 @@ class BuddyCardWidget(QWidget):
             status_text = {"focus": "正在工作", "rest": "正在休息", "online": "在线", "offline": "已离线", "exempt": "🏳️ 高挂免战牌 · 今日休息"}[status]
         headline = QLabel(
             f"{'⚫' if status == 'offline' else '🟡' if uncertain or status == 'rest' else '🟢' if online else '⚪'}  {_owner_label(buddy)}"
-            f" · {status_text}{'（我）' if is_self else ''}"
+            f" · {status_text}{'（我）' if is_self else ''}", self
         )
         self._headline_label = headline
         headline.setWordWrap(False)
         headline.setStyleSheet("font-size:14px;font-weight:600;color:#203847;")
         root.addWidget(headline)
-        self._identity_detail = QLabel(_public_owner_nickname(buddy))
+        # 尚未加入布局的无父 QLabel 调用 setVisible(True) 会先显示为顶级窗口。
+        # 刷新重建卡片时必须从创建起就属于卡片，不能依靠稍后的布局收养。
+        self._identity_detail = QLabel(_public_owner_nickname(buddy), self)
         self._identity_detail.setStyleSheet("color:#61727d;font-size:11px;")
         self._identity_detail.setVisible(_owner_nickname(buddy) != _public_owner_nickname(buddy))
         identity_row = QHBoxLayout()
         identity_row.addWidget(self._identity_detail)
-        self.reminder_summary = QLabel(self._reminder_text(buddy))
+        self.reminder_summary = QLabel(self._reminder_text(buddy), self)
         self.reminder_summary.setObjectName("buddyReminderBadge")
         self.reminder_summary.setStyleSheet(
             "background:#fff0d3;color:#60451e;border:1px solid #e4cc96;"
@@ -2568,12 +2572,12 @@ class BuddyCardWidget(QWidget):
         # uncertain or timed out. The confirmation label below communicates
         # freshness separately, so it must not replace these totals.
         time_text = _buddy_focus_totals_text(buddy)
-        focus = QLabel(time_text)
+        focus = QLabel(time_text, self)
         self._focus_label = focus
         focus.setStyleSheet("font-size:14px;font-weight:700;color:#087f74;")
         root.addWidget(focus)
         confirmation = QLabel(
-            _format_last_confirmed_age_seconds(_presence_last_seen_age_seconds(buddy))
+            _format_last_confirmed_age_seconds(_presence_last_seen_age_seconds(buddy)), self
         )
         self._confirmation_label = confirmation
         confirmation.setStyleSheet("color:#61727d;font-size:11px;")
@@ -2584,11 +2588,11 @@ class BuddyCardWidget(QWidget):
         expires = str(buddy.get("quick_status_expires_at") or "")
         expiry = parse_server_datetime(expires)
         if quick_status and (not expires or (expiry is not None and expiry > now_beijing())):
-            quick = QLabel(f"状态：{quick_status[:40]}")
+            quick = QLabel(f"状态：{quick_status[:40]}", self)
             quick.setStyleSheet("color:#b36b2c;font-size:11px;font-weight:600;")
             root.addWidget(quick)
         outfit = str(buddy.get("outfit_key") or "经典六毛")
-        footer = QLabel(f"娃衣：{outfit}")
+        footer = QLabel(f"娃衣：{outfit}", self)
         self._footer_label = footer
         footer.setStyleSheet("color:#61727d;font-size:11px;")
         footer.setWordWrap(False)
@@ -2597,7 +2601,7 @@ class BuddyCardWidget(QWidget):
         actions = QHBoxLayout()
         actions.setSpacing(6)
         def make_button(label, background, hover):
-            button = QPushButton(label)
+            button = QPushButton(label, self)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setMinimumHeight(32)
             button.setMinimumWidth(0)

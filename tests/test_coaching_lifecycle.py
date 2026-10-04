@@ -1,4 +1,4 @@
-"""验证紧凑纪律胶囊、被动显示门禁、双向训导投影与跨设备版本边界。"""
+"""验证训导牌的页面归属、紧凑胶囊、被动显示门禁及双向训导版本边界。"""
 
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 from onepic_desktop_pet.coaching import projection, remaining_seconds, closed_case_lines, completion_feedback
 from onepic_desktop_pet.coaching_ui import CoachingPanel, DesktopCoachingSurface
 from onepic_desktop_pet.discipline import DisciplineEngine, DisciplineStore, BEIJING_TIMEZONE
@@ -135,8 +135,12 @@ def test_completion_feedback_distinguishes_approval_makeup_and_forgiveness():
 
 def make_panel(qt, value, callbacks):
     def rpc(name, body, done, fail): callbacks.append((name, body, done, fail))
-    panel = CoachingPanel(lambda: value, lambda: (0, 0), rpc, lambda _: "论文搭子", lambda: None)
-    panel.show(); qt.processEvents(); return panel
+    host = QWidget()
+    panel = CoachingPanel(lambda: value, lambda: (0, 0), rpc, lambda _: "论文搭子", lambda: None, host)
+    # 真实页面中的进度牌属于页面而非可折叠的训导卡，测试同样保留这一层级。
+    panel._test_host = host
+    panel.destroyed.connect(host.deleteLater)
+    host.show(); panel.show(); qt.processEvents(); return panel
 
 def test_owner_responds_inline_then_card_collapses_to_review_badge(qt):
     value = engine(); value.store.coaching_cases = [case(required_seconds=0)]

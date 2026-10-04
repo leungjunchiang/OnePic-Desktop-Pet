@@ -1,4 +1,4 @@
-"""训导卡与紧凑单层进度牌分开；小牌与计时胶囊对齐，被动层遵守全屏显示门禁。"""
+"""训导卡与进度牌从创建起属于页面，恢复状态不闪出独立按钮；桌面层遵守全屏门禁。"""
 
 from __future__ import annotations
 
@@ -54,7 +54,9 @@ class CoachingPanel(QFrame):
         self.message = QLabel(); self.message.setWordWrap(True); self.message.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.message)
         # Inserted by the caller to the LEFT of today's focus total.
-        self.badge = QPushButton(); self.badge.clicked.connect(self._details)
+        # badge 会由调用者插到计时旁，首次 refresh 早于布局收养。
+        # 先归属页面，防止恢复已有事项时 setVisible(True) 闪出独立窗口。
+        self.badge = QPushButton(parent or self); self.badge.clicked.connect(self._details)
         self.badge.setStyleSheet(ACTION_BUTTON_STYLE)
         self.badge.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh()
