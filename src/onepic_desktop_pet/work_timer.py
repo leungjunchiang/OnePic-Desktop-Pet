@@ -103,9 +103,9 @@ class SmoothDurationDisplay:
     remain unchanged while the local focus session is still running.  Anchor
     the display to monotonic time instead of allowing a stale value to freeze
     it.  A delayed GUI callback therefore catches up in one update, while a
-    newer authoritative value is applied immediately.  Running displays are
-    monotonic; pause/account/day transitions deliberately snap to the value
-    supplied by the owner.
+    newer authoritative value is applied immediately. Running displays and
+    same-day pause/resume transitions are monotonic; only account/day identity
+    changes may reset the cumulative value.
     """
 
     def __init__(
@@ -136,20 +136,40 @@ class SmoothDurationDisplay:
         authoritative = max(0, int(authoritative_seconds or 0))
         now = self._monotonic()
         clean_identity = str(identity or "")
-        must_snap = (
+        hard_snap = (
             self._value is None
             or clean_identity != self._identity
-            or not active
-            or not self._active
             or now < self._anchor_monotonic
         )
-        if must_snap:
+        if hard_snap:
             self._identity = clean_identity
             self._value = authoritative
             self._active = bool(active)
             self._anchor_seconds = authoritative
             self._anchor_monotonic = now
             return authoritative
+
+        if not active or not self._active:
+            # A Pause/Resume transition is still the same Beijing-day
+            # cumulative counter.  The authoritative account projection can
+            # lag the just-sealed local segment by one sync turn; snapping
+            # down here produced the observed 9h59 -> 9h57 regression.
+            # Only an identity change (account/day) is allowed to reset the
+            # visible cumulative duration.
+            previous_value = int(self._value or 0)
+            stable = max(previous_value, authoritative)
+            if authoritative < previous_value:
+                LOGGER.info(
+                    "retained cumulative duration across same-day transition "
+                    "identity=%s authoritative=%s visible=%s active=%s",
+                    clean_identity, authoritative, previous_value, bool(active),
+                )
+            self._identity = clean_identity
+            self._value = stable
+            self._active = bool(active)
+            self._anchor_seconds = stable
+            self._anchor_monotonic = now
+            return stable
 
         self._active = True
         local_projection = self._anchor_seconds + max(

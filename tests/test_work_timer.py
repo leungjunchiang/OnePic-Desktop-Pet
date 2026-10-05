@@ -57,8 +57,10 @@ def test_smooth_duration_display_uses_monotonic_anchor_and_immediate_calibration
     clock.advance(3)
     assert display.project(404, active=True, identity="account:day") == 407
 
-    # Pausing and a new day must show the authoritative value immediately.
-    assert display.project(405, active=False, identity="account:day") == 405
+    # Pausing within the same Beijing day must never make the cumulative
+    # display run backward just because the sealed/account projection is one
+    # sync turn behind. A new calendar identity may still reset normally.
+    assert display.project(405, active=False, identity="account:day") == 407
     assert display.project(2, active=True, identity="account:next-day") == 2
 
 
