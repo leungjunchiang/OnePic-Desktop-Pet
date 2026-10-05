@@ -785,11 +785,36 @@ def test_local_effect_uses_visible_duration_pill_and_clears_when_hidden() -> Non
     window.focus_session.finish()
     window._update_work_duration_bubble()
     app.processEvents()
+    # Finishing a session must not remove the persistent account-wide
+    # "今日已工作" pill.  Only the user setting hides that surface.
+    assert window.work_duration_bubble.isVisible()
+    assert "今日已工作" in window.work_duration_bubble.text()
+    assert len(window._local_burst_exclusions()) == 1
+    window.settings.show_work_duration = False
+    window._update_work_duration_bubble()
+    app.processEvents()
+    assert not window.work_duration_bubble.isVisible()
     assert window._local_burst_exclusions() == ()
     window.close()
     window.deleteLater()
     app.processEvents()
 
+
+def test_today_work_pill_remains_visible_when_session_returns_to_idle() -> None:
+    app, window = _create_window()
+    window.start_work_timer()
+    app.processEvents()
+    assert window.work_duration_bubble.isVisible()
+
+    window.finish_work_timer(_skip_review=True)
+    window._update_work_duration_bubble()
+    app.processEvents()
+
+    assert window.focus_session.snapshot(include_projection=False).status == "idle"
+    assert window.work_duration_bubble.isVisible()
+    assert "今日已工作" in window.work_duration_bubble.text()
+    assert "已暂停" not in window.work_duration_bubble.text()
+    window.close(); window.deleteLater(); app.processEvents()
 
 def test_duration_bubble_content_refresh_does_not_bypass_owner_visibility_policy(monkeypatch) -> None:
     """Detached duration visibility is restored by PetWindow, not the label."""
