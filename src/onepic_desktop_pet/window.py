@@ -1,4 +1,6 @@
-"""系统重启仅本地封口专注，不等待网络、不触发托盘隐藏；纪律小牌与计时胶囊对齐。
+"""今日累计胶囊结束本轮仍保留；训导牌在累计框关闭时重新锚定六毛下方。
+
+系统重启仅本地封口专注，不等待网络、不触发托盘隐藏；纪律小牌与计时胶囊对齐。
 
 显示防回退不改变专注账本；明确离开截止时间和验证后的新区间允许校准。
 
@@ -8657,10 +8659,20 @@ class PetWindow(QWidget):
                 surface.open_button.setText("写说明 / 接受补时" if row.get("required_seconds") else "重新说明" if row.get("state")=="rejected" else "写说明")
                 if count>1: surface.label.setText(surface.label.text()+f"\n还有 {count-1} 项")
             if key == "badge":
-                surface.prepare_compact(self.work_duration_bubble.height())
+                duration_visible = self.work_duration_bubble.isVisible()
+                surface.prepare_compact(self.work_duration_bubble.height() if duration_visible else None)
             surface.adjustSize()
-            x = self.x() + (self.width()-surface.width())//2 if key=="card" else self.work_duration_bubble.x()-surface.width()-6
-            y = self.y()-surface.height()-8 if key=="card" else self.work_duration_bubble.y()
+            if key == "card":
+                x = self.x() + (self.width()-surface.width())//2
+                y = self.y()-surface.height()-8
+            elif duration_visible:
+                x = self.work_duration_bubble.x()-surface.width()-6
+                y = self.work_duration_bubble.y()
+            else:
+                # A disabled/hidden daily pill has stale native coordinates.
+                # Keep the independent discipline badge attached to the pet.
+                x = self.x() + (self.width()-surface.width())//2
+                y = self.y()+self.height()+5
             area = self._screen_geometry()
             if area is not None:
                 x = min(max(x, area.left()), area.right()-surface.width()+1)
@@ -11056,14 +11068,14 @@ class PetWindow(QWidget):
         self.show_speech("偶尔发牢骚已开启。" if enabled else "偶尔发牢骚已关闭。", 3000)
 
     def set_work_duration_display(self, enabled: bool) -> None:
-        """Persist whether the floating work-control bubble shows live duration."""
+        """Persist whether the pet shows today's cumulative work duration."""
 
         self.settings.show_work_duration = bool(enabled)
         save_settings(self.settings)
         self.work_controls.set_duration_visible(self.settings.show_work_duration)
         self._update_work_duration_bubble()
         self.show_speech(
-            "本轮工作时长显示已开启。" if enabled else "本轮工作时长显示已关闭。",
+            "今日工作时长显示已开启。" if enabled else "今日工作时长显示已关闭。",
             3000,
         )
 
@@ -11838,7 +11850,6 @@ class PetWindow(QWidget):
         show_duration = bool(getattr(self.settings, "show_work_duration", True))
         should_show = bool(
             show_duration
-            and status in {"focus", "rest"}
             and self.isVisible()
             and not getattr(self, "_manually_hidden", False)
             and not getattr(self, "_fullscreen_hidden", False)
@@ -11868,11 +11879,10 @@ class PetWindow(QWidget):
         if needs_position:
             self._position_work_duration_bubble()
         self._duration_bubble_pet_anchor = pet_anchor if visible else None
-        if getattr(self, "_coaching_surfaces", None) and (not should_show or needs_position):
-            if not should_show:
-                for surface in self._coaching_surfaces.values(): surface.hide()
-            else:
-                self._refresh_desktop_coaching()
+        if getattr(self, "_coaching_surfaces", None) and (not should_show or visible != was_visible or needs_position):
+            # Coaching owns its suppression policy and can outlive the daily
+            # duration preference; refresh to use its visible/fallback anchor.
+            self._refresh_desktop_coaching()
         # A changing clock label can cross a width boundary (mm:ss ->
         # h:mm:ss, or add the paused suffix).  Refresh the local effect's
         # visible-pill path only when visibility/geometry actually changed;

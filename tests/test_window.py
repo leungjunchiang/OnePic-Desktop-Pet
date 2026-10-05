@@ -1,4 +1,5 @@
 """
+今日累计框结束本轮不消失，特效避让只在显示设置关闭时清除。
 本模块还验证免打扰首次处理不被在途旧反应覆盖；有效离开截止时间可校准显示，不被普通暂停防回退掩盖。
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
 喂食、离线对话、陪伴动作、工作计时、专注导航、备注提醒和自拍成片；手动监视器用例隔离周期轮询。
@@ -763,9 +764,7 @@ def test_pet_and_ambient_bubbles_never_accept_keyboard_focus() -> None:
 
 def test_local_effect_uses_visible_duration_pill_and_clears_when_hidden() -> None:
     app, window = _create_window()
-    # The owner/watchdog derives visibility from the real session. An idle
-    # model with a hand-shown focus label is contradictory, and a slow Intel
-    # CI event loop legitimately hides that fake label during processEvents.
+    # Exercise the real owner so the effect uses the daily cumulative pill.
     window.focus_session.start()
     bubble = window.work_duration_bubble
     bubble.set_session("focus", 6 * 60 * 60 + 10, True)
@@ -786,6 +785,10 @@ def test_local_effect_uses_visible_duration_pill_and_clears_when_hidden() -> Non
     window.focus_session.finish()
     window._update_work_duration_bubble()
     app.processEvents()
+    assert bubble.isVisible()
+    assert len(window._local_burst_exclusions()) == 1
+    window.settings.show_work_duration = False
+    window._update_work_duration_bubble()
     assert window._local_burst_exclusions() == ()
     window.close()
     window.deleteLater()
@@ -2353,10 +2356,7 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
 
     app, window = _create_window()
     window.quick_panel.show()
-    # The duration bubble is a projection of an active focus session.  Showing
-    # it by hand leaves the model idle, so the restore refresh can correctly
-    # hide it on some Qt/offscreen backends (notably macOS Intel).  Start the
-    # smallest real session state instead of testing an impossible surface.
+    # Fullscreen suppression applies while the daily cumulative pill is live.
     window.focus_session.start()
     window._update_work_duration_bubble()
     app.processEvents()
@@ -3345,7 +3345,7 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     ]
     display = next(action for action in menu.actions() if action.text() == "显示与窗口")
     assert [action.text() for action in display.menu().actions()] == [
-        "六毛大小…", "显示本轮工作时长", "六毛特效", "始终置顶", "桌面模式"
+        "六毛大小…", "显示今日工作时长", "六毛特效", "始终置顶", "桌面模式"
     ]
     burst = next(action for action in display.menu().actions() if action.text() == "六毛特效")
     assert [action.text() for action in burst.menu().actions()] == [

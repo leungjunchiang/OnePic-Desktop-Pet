@@ -1,3 +1,4 @@
+"""统一菜单的今日累计显示偏好与专注会话状态分离。"""
 from __future__ import annotations
 
 from onepic_desktop_pet.menu_model import UnifiedMenuModel
@@ -95,7 +96,7 @@ def test_unified_menu_model_is_shared_by_all_lili_entry_points() -> None:
     display = next(item for item in model.items() if item.title == "显示与窗口")
     assert [item.title for item in display.children] == [
         "六毛大小…",
-        "显示本轮工作时长",
+        "显示今日工作时长",
         "始终置顶",
         "桌面模式",
     ]
@@ -166,7 +167,7 @@ def test_unified_menu_model_exposes_optional_duration_in_display_menu() -> None:
     )
     display = next(item for item in model.items() if item.title == "显示与窗口")
     duration = next(item for item in display.children if item.command == "show_work_duration")
-    assert duration.title == "显示本轮工作时长"
+    assert duration.title == "显示今日工作时长"
     assert duration.checkable is True
     assert duration.checked is False
 

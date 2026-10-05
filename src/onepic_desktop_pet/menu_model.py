@@ -5,6 +5,7 @@ Windows and Qt render the same specs as ``QMenu`` actions, while the macOS
 status item can render them as ``NSMenu`` items without maintaining another
 command list. The macOS Dock menu is another projection of this same model.
 
+工作时长入口明确表示今日累计，结束本轮不改变显示偏好。
 氛围特效入口也只作为本地菜单命令投影，不在菜单模型中执行网络或计时逻辑。
 """
 
@@ -176,7 +177,7 @@ class UnifiedMenuModel:
         update_children = [item for item in update_children if item is not None]
         duration_item = (
             MenuItemSpec(
-                "显示本轮工作时长",
+                "显示今日工作时长",
                 "show_work_duration",
                 checkable=True,
                 checked=bool(state.get("show_work_duration", True)),

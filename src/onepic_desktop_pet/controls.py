@@ -1,4 +1,6 @@
-"""六毛控制与持续状态气泡；内容更新经显示入口拦截全屏，不自行抢前台。
+"""六毛控制与持续状态气泡；今日累计在 idle 仍保留，仅休息标注已暂停。
+
+内容更新经显示入口拦截全屏，不自行抢前台。
 
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
 播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
@@ -316,7 +318,7 @@ class WorkDurationBubble(RoundedSurfaceLabel):
         return min(self._surface_radius, self.height() / 2.0)
 
     def set_session(self, status: str, seconds: int, visible: bool) -> bool:
-        """Render session content; the PetWindow owns top-level visibility.
+        """Render daily cumulative content; PetWindow owns visibility.
 
         This widget is a detached native window.  It must not decide its own
         ``show``/``hide`` state during a timer refresh because that bypasses
@@ -324,13 +326,13 @@ class WorkDurationBubble(RoundedSurfaceLabel):
         """
 
         normalized = status if status in {"focus", "rest"} else "idle"
-        active = bool(visible) and normalized in {"focus", "rest"}
+        active = bool(visible)
         old_visible = self.isVisible()
         old_text = self._last_text
         geometry_changed = False
         if active:
             paused = normalized == "rest"
-            if self._last_status != normalized:
+            if self._last_status != normalized or bool(self.property("paused")) != paused:
                 self.setProperty("paused", paused)
                 self.set_surface_colors(
                     "#fff0ee" if paused else "#f6fbfb",
@@ -342,7 +344,9 @@ class WorkDurationBubble(RoundedSurfaceLabel):
             if self._last_text != text:
                 self.setText(text)
                 self._last_text = text
-            tooltip = "当前工作计时" + ("已暂停" if paused else "正在计时")
+            tooltip = "今日累计工作时间"
+            if normalized != "idle":
+                tooltip += " · 已暂停" if paused else " · 正在计时"
             if self.toolTip() != tooltip:
                 self.setToolTip(tooltip)
             # The live value changes every second, but its rendered width is
