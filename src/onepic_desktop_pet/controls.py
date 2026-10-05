@@ -318,7 +318,12 @@ class WorkDurationBubble(RoundedSurfaceLabel):
         """
 
         normalized = status if status in {"focus", "rest"} else "idle"
-        active = bool(visible) and normalized in {"focus", "rest"}
+        # This pill is the account-wide *today total*, not merely a live-session
+        # indicator. Once work is finished the session becomes idle, but the
+        # user still needs the small "今日已工作" box under the pet. PetWindow
+        # owns whether the feature is enabled/visible; idle is a valid content
+        # state and must not erase the pill.
+        active = bool(visible)
         old_visible = self.isVisible()
         old_text = self._last_text
         geometry_changed = False
@@ -336,7 +341,11 @@ class WorkDurationBubble(RoundedSurfaceLabel):
             if self._last_text != text:
                 self.setText(text)
                 self._last_text = text
-            tooltip = "当前工作计时" + ("已暂停" if paused else "正在计时")
+            tooltip = {
+                "focus": "今日累计工作时长 · 正在计时",
+                "rest": "今日累计工作时长 · 已暂停",
+                "idle": "今日累计工作时长",
+            }[normalized]
             if self.toolTip() != tooltip:
                 self.setToolTip(tooltip)
             # The live value changes every second, but its rendered width is
