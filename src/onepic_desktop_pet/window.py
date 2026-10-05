@@ -8591,8 +8591,20 @@ class PetWindow(QWidget):
                 surface.open_button.setText("写说明 / 接受补时" if row.get("required_seconds") else "重新说明" if row.get("state")=="rejected" else "写说明")
                 if count>1: surface.label.setText(surface.label.text()+f"\n还有 {count-1} 项")
             surface.adjustSize()
-            x = self.x() + (self.width()-surface.width())//2 if key=="card" else self.work_duration_bubble.x()-surface.width()-6
-            y = self.y()-surface.height()-8 if key=="card" else self.work_duration_bubble.y()
+            if key == "card":
+                x = self.x() + (self.width() - surface.width()) // 2
+                y = self.y() - surface.height() - 8
+            elif self.work_duration_bubble.isVisible():
+                # The compact discipline badge shares the same reserved row
+                # and sits immediately left of the persistent today-work pill.
+                x = self.work_duration_bubble.x() - surface.width() - 6
+                y = self.work_duration_bubble.y()
+            else:
+                # Users may explicitly disable the today-work pill. Never
+                # anchor to a hidden widget's stale geometry; fall back to the
+                # pet's lower edge instead.
+                x = self.x() + (self.width() - surface.width()) // 2
+                y = self.y() + self.height() + 5
             area = self._screen_geometry()
             if area is not None:
                 x = min(max(x, area.left()), area.right()-surface.width()+1)
@@ -11746,7 +11758,7 @@ class PetWindow(QWidget):
         *,
         display_seconds: int | None = None,
     ) -> None:
-        """Render the one account-wide display value and own visibility."""
+        """Render the persistent account-wide today-total pill and visibility."""
 
         if not hasattr(self, "work_duration_bubble"):
             return
@@ -11757,7 +11769,6 @@ class PetWindow(QWidget):
         show_duration = bool(getattr(self.settings, "show_work_duration", True))
         should_show = bool(
             show_duration
-            and status in {"focus", "rest"}
             and self.isVisible()
             and not getattr(self, "_manually_hidden", False)
             and not getattr(self, "_fullscreen_hidden", False)
