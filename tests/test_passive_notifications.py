@@ -1,4 +1,4 @@
-"""游戏期间的被动展示、线程分发、单窗上限、历史静默与闹钟音频隔离回归。"""
+"""游戏期间普通通知不重播；尚未处理的闹钟退出全屏后恢复控制、音频不中断。"""
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from datetime import datetime, timedelta
@@ -154,8 +154,12 @@ def test_fullscreen_alarm_audio_has_no_native_window_and_no_replay(pet, monkeypa
     assert audio == ['game-alarm'] and card._ui_deferred
     assert not card.isVisible() and not card.testAttribute(Qt.WidgetAttribute.WA_WState_Created)
     monkeypatch.setattr(window, '_foreground_display_mode', lambda: 'normal')
+    # The pending alarm is unlike an expired interaction. Verify the owner
+    # requests its controls, without constructing a native Mac headless dialog.
+    restored = []
+    monkeypatch.setattr(card, 'show_alarm_foreground', lambda: restored.append(card.alarm.id))
     window._sync_fullscreen_visibility()
-    assert not card.isVisible()  # 由用户主动打开闹钟中心才展开。
+    assert restored == ['game-alarm'] and audio == ['game-alarm']
 
 
 def test_game_snapshot_consumed_without_replay_after_exit(pet, monkeypatch):

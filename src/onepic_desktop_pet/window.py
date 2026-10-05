@@ -1,4 +1,6 @@
-"""今日累计胶囊结束本轮仍保留；训导牌在累计框关闭时重新锚定六毛下方。
+"""闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
+
+今日累计胶囊结束本轮仍保留；训导牌在累计框关闭时重新锚定六毛下方。
 
 系统重启仅本地封口专注，不等待网络、不触发托盘隐藏；纪律小牌与计时胶囊对齐。
 
@@ -2643,7 +2645,6 @@ class PetWindow(QWidget):
         surfaces.extend(getattr(self, "_coaching_surfaces", {}).values())
         for optional in (
             self._compact_todo_panel,
-            self._alarm_card,
             self._idle_recovery_dialog,
             self._away_recovery_card,
         ):
@@ -2665,14 +2666,18 @@ class PetWindow(QWidget):
     def _poll_fullscreen_visibility(self) -> None:
         """750ms 本地几何采样，连续两次相同结果才切换，减少边界闪烁。"""
         mode = self._foreground_display_mode()
-        suppressed = mode == DISPLAY_MODE_FULLSCREEN
+        suppressed = mode in {DISPLAY_MODE_FULLSCREEN, "game_fullscreen", "presentation_fullscreen"}
         if suppressed == self._fullscreen_poll_candidate:
             self._fullscreen_poll_samples += 1
         else:
             self._fullscreen_poll_candidate = suppressed
             self._fullscreen_poll_samples = 1
-        if self._fullscreen_poll_samples >= 2 and suppressed != self._fullscreen_hidden:
-            self._sync_fullscreen_visibility(mode=mode)
+        if self._fullscreen_poll_samples >= 2:
+            # A due card may be deferred before the pet's debounce hides it.
+            # Recover that pending control even if pet visibility never changed.
+            self._sync_alarm_card_visibility(mode=mode)
+            if suppressed != self._fullscreen_hidden:
+                self._sync_fullscreen_visibility(mode=mode)
 
     @_guard_qt_callback
     def _sync_fullscreen_visibility(self, *, mode: str | None = None) -> None:
@@ -2689,11 +2694,12 @@ class PetWindow(QWidget):
         """
 
         mode = self._foreground_display_mode() if mode is None else mode
+        self._sync_alarm_card_visibility(mode=mode)
         # Maximized desktop applications are not display takeovers.  Keep the
         # pet visible above them without activation or focus stealing.  Only
         # true fullscreen surfaces (PPT slideshow, video fullscreen, games)
         # are allowed to suppress the pet.
-        suppressed = mode == DISPLAY_MODE_FULLSCREEN
+        suppressed = mode in {DISPLAY_MODE_FULLSCREEN, "game_fullscreen", "presentation_fullscreen"}
         if suppressed:
             if not self._fullscreen_hidden:
                 self._fullscreen_restore_visible = {
@@ -5451,10 +5457,13 @@ class PetWindow(QWidget):
         """Open the local alarm editor without creating a second reminder system."""
 
         self._record_user_interaction()
-        # 只有用户主动切回闹钟中心，才展开全屏期间延后的控制。
-        if self._alarm_card is not None and getattr(self._alarm_card, "_ui_deferred", False):
-            self._alarm_card.center_on_current_screen()
+        # A ringing/pending alarm is the first thing this entry should handle.
+        # Do not cover its controls with the schedule editor immediately after.
+        if self._alarm_card is not None and not self._alarm_card._action_requested:
+            if not self._alarm_card._presented_once:
+                self._alarm_card.center_on_current_screen()
             self._alarm_card.show_alarm_foreground()
+            return
         todos = list(self.time_memory.todos.items)
         if self._alarm_center_dialog is None:
             self._alarm_center_dialog = AlarmCenterDialog(
@@ -5817,6 +5826,8 @@ class PetWindow(QWidget):
     def _show_alarm_card(self, alarm) -> None:
         """Show one alarm window; queued alarms remain persisted/local."""
 
+        if self._close_in_progress:
+            return
         if self._alarm_card is not None:
             # There is exactly one owner for the foreground card.  Do not
             # close and replace it from a timer callback; that race was able
@@ -5855,12 +5866,34 @@ class PetWindow(QWidget):
         )
         # Center only once.  After the user drags or minimizes the native
         # window, accessory reflows must never move it back to the pet.
-        if self._passive_surfaces_blocked():
-            card.start_alarm_suppressed()
+        blocked_reason = self._alarm_ui_block_reason()
+        if blocked_reason:
+            card.start_alarm_suppressed(reason=blocked_reason)
         else:
             card.center_on_current_screen()
             card.show_alarm_foreground()
         lifecycle_log("alarm.popup.owner_show", self._alarm_card)
+
+    def _alarm_ui_block_reason(self, *, mode: str | None = None) -> str:
+        """预设闹钟只因真正全屏/退出延后 UI，不套用消息 quiet 或宠物隐藏。"""
+        if self._close_in_progress:
+            return "closing"
+        mode = self._foreground_display_mode() if mode is None else mode
+        return str(mode) if mode in {DISPLAY_MODE_FULLSCREEN, "game_fullscreen", "presentation_fullscreen"} else ""
+
+    def _sync_alarm_card_visibility(self, *, mode: str) -> None:
+        """复用现有全屏采样恢复待处理卡；不补弹历史、不新建卡、不重播铃声。"""
+        card = getattr(self, "_alarm_card", None)
+        if card is None or card._close_requested or card._action_requested or self._close_in_progress:
+            return
+        reason = self._alarm_ui_block_reason(mode=mode)
+        if reason:
+            if card.isVisible() and not card.isMinimized():
+                card.defer_alarm_ui(reason=reason)
+        elif card._ui_deferred:
+            if not card._presented_once:
+                card.center_on_current_screen()
+            card.show_alarm_foreground()
 
     def _close_alarm_card(self) -> None:
         card = self._alarm_card

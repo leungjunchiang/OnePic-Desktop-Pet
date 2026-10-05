@@ -1,4 +1,4 @@
-"""无焦点闹钟卡、共享试听链、重复回调与本地编辑草稿回归。"""
+"""无焦点闹钟卡恢复不重播、不重置已确认状态；共享试听链与本地编辑草稿回归。"""
 
 from __future__ import annotations
 
@@ -38,6 +38,60 @@ from onepic_desktop_pet import alarm_ui
 
 def _app() -> QApplication:
     return QApplication.instance() or QApplication([])
+
+
+def test_deferred_alarm_restores_controls_without_replaying_or_resetting_ack(monkeypatch):
+    app = _app()
+    card = AlarmCard(Alarm(id='restore-audio', title='待处理', trigger_at='2026-10-05T12:00:00', sound_enabled=False))
+    started = []
+    def owned_audio():
+        card._audio_started = True
+        started.append(card.alarm.id)
+    monkeypatch.setattr(card, '_start_owned_alarm_audio', owned_audio)
+    try:
+        card.start_alarm_suppressed()
+        assert not card.isVisible()
+        card.show_alarm_foreground()
+        card._acknowledge_alarm()
+        card.defer_alarm_ui(reason='fullscreen')
+        assert not card.isVisible()
+        card.show_alarm_foreground()
+        app.processEvents()
+        assert card.isVisible() and started == ['restore-audio']
+        assert card.popup_state is AlarmPopupState.ACKNOWLEDGED
+        card.close_from_app()
+        card.show_alarm_foreground()
+        assert not card.isVisible() and started == ['restore-audio']
+    finally:
+        card.close_from_app()
+        card.deleteLater()
+        app.processEvents()
+
+
+@pytest.mark.skipif(sys.platform != 'win32' or os.environ.get('QT_QPA_PLATFORM') in {'offscreen', 'minimal'},
+                    reason='原生 HWND 焦点检查需要 Windows 插件')
+def test_native_alarm_show_and_restore_do_not_change_foreground():
+    import ctypes
+    app = _app()
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    card = AlarmCard(Alarm(id='native-focus', title='六毛闹钟不抢焦点验证',
+                          trigger_at='2026-10-05T12:00:00', sound_enabled=False))
+    card.center_on_current_screen()
+    foreground = user32.GetForegroundWindow()
+    try:
+        for _ in range(2):
+            card.show_alarm_foreground()
+            app.processEvents()
+            assert card.isVisible()
+            assert user32.GetForegroundWindow() == foreground
+            card.defer_alarm_ui(reason='fullscreen')
+            app.processEvents()
+            assert user32.GetForegroundWindow() == foreground
+    finally:
+        card.close_from_app()
+        card.deleteLater()
+        app.processEvents()
 
 
 def test_alarm_card_changes_native_z_order_without_mutating_qt_flags() -> None:

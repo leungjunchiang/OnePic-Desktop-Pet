@@ -1,4 +1,6 @@
-"""闹钟音频与被动展示分离；线程播放及停止诊断，意外停播有限恢复。
+"""未处理闹钟全屏后恢复控制卡，保留已确认状态与音频播放位置。
+
+闹钟音频与被动展示分离；线程播放及停止诊断，意外停播有限恢复。
 
 本地闹钟与试听共用播放状态机，原生循环避免重复加载；被动显示不抢焦点。
 
@@ -716,11 +718,10 @@ class _WindowsAlarmAudio:
 class AlarmCard(QDialog):
     """A frameless, movable, non-modal top-level alarm card.
 
-    The card keeps the QuickAction visual language instead of showing a
-    second native title bar. A newly fired card is brought to the foreground
-    once with a temporary topmost flag so a reminder cannot ring behind Word
-    or a browser. The first real interaction acknowledges it and immediately
-    restores normal window ordering; snoozing creates a new ``UNSEEN`` card.
+    A newly fired card is shown without activation at a temporary floating
+    level so it remains visible above Word/browser windows without taking
+    their keyboard focus. Fullscreen defers only its presentation. The first
+    interaction restores normal ordering; snoozing creates a new UNSEEN card.
     """
 
     start_requested = Signal(str)
@@ -775,6 +776,8 @@ class AlarmCard(QDialog):
         self._custom_audio_path = None
         self._drag_offset = None
         self._pending_topmost = None
+        self._ui_deferred = False
+        self._presented_once = False
         self.setObjectName("alarmCard")
         self.setWindowFlags(
             Qt.WindowType.Window
@@ -986,25 +989,37 @@ class AlarmCard(QDialog):
         """显示用户预设的闹钟，但不激活窗口；响铃继续按原设置执行。"""
 
         lifecycle_log("alarm.popup.show.request", self, alarm_id=str(self.alarm.id))
-        self._state = AlarmPopupState.UNSEEN
+        if self._close_requested or self._action_requested or self._state == AlarmPopupState.DISMISSED:
+            return
         from .buddy_reminder_toast import BuddyReminderToast
         BuddyReminderToast._set_windows_no_activate(self, tool_window=False)
         self._ui_deferred = False
-        self.show()
-        self._queue_temporary_topmost(True)
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self._presented_once = True
+        self._queue_temporary_topmost(self._state == AlarmPopupState.UNSEEN)
         # Start immediately after the first foreground presentation.  The
         # media backends do their native work asynchronously, so this does
         # not block the Qt event loop or require an artificial delay.
         self._start_alarm_audio()
         lifecycle_log("alarm.popup.show.complete", self, alarm_id=str(self.alarm.id))
 
-    def start_alarm_suppressed(self) -> None:
+    def start_alarm_suppressed(self, *, reason="fullscreen") -> None:
         """仍启动原有 occurrence 音频；隐藏 QDialog 不调用 winId/show/topmost。"""
         self._ui_deferred = True
-        self._state = AlarmPopupState.UNSEEN
         self._start_alarm_audio()
         lifecycle_log("alarm.popup.suppressed", self, alarm_id=str(self.alarm.id),
-                      creator="AlarmCard.start_alarm_suppressed", reason="fullscreen_game_or_dnd")
+                      creator="AlarmCard.start_alarm_suppressed", reason=str(reason))
+
+    def defer_alarm_ui(self, *, reason="fullscreen") -> None:
+        """只暂时隐藏仍待处理的控制卡，不确认、不停止音频、不重置播放。"""
+        self._ui_deferred = True
+        self._topmost_timer.stop()
+        self._pending_topmost = None
+        self.hide()
+        lifecycle_log("alarm.popup.defer", self, alarm_id=str(self.alarm.id), reason=str(reason))
 
     def _acknowledge_alarm(self) -> None:
         """Release temporary topmost as soon as the user touches the card."""
@@ -1065,7 +1080,16 @@ class AlarmCard(QDialog):
                 pass
             return
 
-        # 其他平台保留被动 show，不在显示后修改窗口标志或激活窗口。
+        if sys.platform == "darwin":
+            # Reuse the supported Cocoa bridge: change floating level without
+            # becoming key or hiding when another application is active.
+            from .native_window_policy import apply_macos_window_policy
+            apply_macos_window_policy(
+                self, topmost=bool(enabled),
+                qt_stays_on_top=bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint),
+                force_topmost=bool(enabled),
+            )
+        # 其余平台保留被动 show，不在显示后修改 Qt 窗口标志或激活窗口。
 
     @staticmethod
     def _display_trigger(value: str) -> str:
