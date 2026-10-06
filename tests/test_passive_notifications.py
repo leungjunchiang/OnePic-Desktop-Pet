@@ -1,4 +1,4 @@
-"""游戏期间普通通知不重播；尚未处理的闹钟退出全屏后恢复控制、音频不中断。"""
+"""消息门禁不隐藏常驻今日计时；普通通知不重播，闹钟恢复不重启音频。"""
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from datetime import datetime, timedelta
@@ -57,6 +57,56 @@ def test_live_status_countdown_cannot_reshow_hidden_accessory(pet, monkeypatch):
     assert not window.visit_status_bubble.isVisible()
     window._show_buddy_visit({'id': 'new', 'nickname': '搭子'})
     assert not window.visit_status_bubble.isVisible()
+
+
+@pytest.mark.parametrize('status', ['idle', 'focus', 'rest'])
+def test_daily_clock_ignores_message_quiet_mode(pet, monkeypatch, status):
+    app, window = pet
+    monkeypatch.setattr('onepic_desktop_pet.window.detect_quiet_mode',
+                        lambda: SimpleNamespace(blocked=True, reason='会议中'))
+    snapshot = SimpleNamespace(status=status, today_seconds=0, session_started_at=None)
+    bubble = window.work_duration_bubble
+    bubble.hide()
+    window._update_work_duration_bubble(snapshot, display_seconds=0)
+    assert bubble.isVisible() and '今日已工作' in bubble.text()
+    assert bubble.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    # Other passive messages retain the same suppression policy.
+    assert not window._notify_instant_interaction('cheer:quiet', 'cheer', '加油', '正文')
+    window.set_always_on_top(False, persist=False)
+    assert bubble.isVisible()
+    window.set_always_on_top(True, persist=False)
+    assert bubble.isVisible()
+    window.settings.show_work_duration = False
+    window._update_work_duration_bubble(snapshot, display_seconds=0)
+    assert not bubble.isVisible()
+    assert not window._show_nonactivating(bubble)
+    window.settings.show_work_duration = True
+    window._update_work_duration_bubble(snapshot, display_seconds=0)
+    assert bubble.isVisible()
+    window.hide_pet()
+    window._update_work_duration_bubble(snapshot, display_seconds=0)
+    assert not bubble.isVisible()
+    window.show_pet()
+    assert window.isVisible() and bubble.isVisible()
+
+
+def test_daily_clock_restores_with_pet_into_message_quiet_mode(pet, monkeypatch):
+    app, window = pet
+    monkeypatch.setattr('onepic_desktop_pet.window.detect_quiet_mode',
+                        lambda: SimpleNamespace(blocked=True, reason='游戏中'))
+    window._update_work_duration_bubble(display_seconds=123)
+    assert window.isVisible() and window.work_duration_bubble.isVisible()
+    window._sync_fullscreen_visibility(mode='game_fullscreen')
+    assert not window.isVisible() and not window.work_duration_bubble.isVisible()
+    window._update_work_duration_bubble(display_seconds=123)
+    assert not window.work_duration_bubble.isVisible()
+    window._sync_fullscreen_visibility(mode='normal')
+    assert window.isVisible() and window.work_duration_bubble.isVisible()
+    window.hide()  # A direct owner hide also hides the detached daily clock.
+    window._update_work_duration_bubble(display_seconds=123)
+    assert not window.work_duration_bubble.isVisible()
+    window.show()
+    assert window.work_duration_bubble.isVisible()
 
 
 def test_instant_interaction_is_painted_without_another_native_window(pet):

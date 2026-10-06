@@ -1,6 +1,6 @@
 """闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
 
-今日累计胶囊结束本轮仍保留；训导牌在累计框关闭时重新锚定六毛下方。
+今日累计胶囊只跟随设置和六毛可见状态，不受消息免打扰拦截；训导牌在累计框关闭时重新锚定六毛下方。
 
 系统重启仅本地封口专注，不等待网络、不触发托盘隐藏；纪律小牌与计时胶囊对齐。
 
@@ -2343,18 +2343,22 @@ class PetWindow(QWidget):
     def _surface_block_reason(self, source: str = "passive") -> str:
         """返回显示拦截原因，并严格区分主动操作与被动打扰。
 
-        真正全屏、手动隐藏和退出对所有窗口都有效；进程名、会议、游戏
-        等 quiet mode 只拦软件主动展示。整个判断只读取本地窗口状态，
-        不触发网络或 Supabase 请求。
+        手动隐藏、全屏隐藏和退出对所有窗口都有效；六毛及常驻计时框
+        跟随六毛可见状态，消息的实时全屏预检和 quiet mode 只影响其他
+        浮层。整个判断只读取本地窗口状态，不触发网络请求。
         """
 
-        normalized = "user_action" if str(source) == "user_action" else "passive"
+        normalized = str(source) if str(source) in {"user_action", "pet_status"} else "passive"
         if getattr(self, "_close_in_progress", False):
             return "closing"
         if getattr(self, "_manually_hidden", False):
             return "manual_hidden"
         if getattr(self, "_fullscreen_hidden", False):
             return "fullscreen_hidden"
+        if normalized == "pet_status":
+            # The pet and its daily clock share one visibility lifecycle.
+            # Fullscreen hides both through the owner, not a message preflight.
+            return ""
         mode = self._foreground_display_mode()
         if mode in {"fullscreen", "game_fullscreen", "presentation_fullscreen"}:
             return str(mode)
@@ -2402,8 +2406,18 @@ class PetWindow(QWidget):
     ) -> bool:
         """先判显示资格，再设置 no-activate，最后显示并返回是否成功。"""
 
+        duration = getattr(self, "work_duration_bubble", None)
+        if widget is duration and (
+            not bool(getattr(self.settings, "show_work_duration", True))
+            or not self.isVisible()
+        ):
+            widget.hide()
+            return False
+        # Apply this at the common display entry so topmost flag recreation
+        # and fullscreen restoration cannot accidentally use message quiet mode.
         normalized_source = (
-            "user_action" if str(source) == "user_action" else "passive"
+            "pet_status" if widget is self or widget is duration
+            else "user_action" if str(source) == "user_action" else "passive"
         )
         blocked_reason = self._surface_block_reason(normalized_source)
         if blocked_reason:
