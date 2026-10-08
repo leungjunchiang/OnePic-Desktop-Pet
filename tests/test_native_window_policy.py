@@ -1,4 +1,4 @@
-"""验证六毛原生窗口层级修复只改层级、不激活窗口。"""
+"""原生策略只校验非激活层级；透明标志丢失可恢复，阴影策略只按句柄设置一次。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,31 @@ import sys
 from types import SimpleNamespace
 
 from onepic_desktop_pet import native_window_policy
+
+
+def test_windows_translucent_repair_preserves_alpha_and_disables_shadow_once(monkeypatch):
+    class User32:
+        style = 0x08000088
+        def GetWindowLongPtrW(self, _hwnd, _index): return self.style
+        GetWindowLongW = GetWindowLongPtrW
+        def SetWindowLongPtrW(self, _hwnd, _index, value): self.style = value; return value
+        SetWindowLongW = SetWindowLongPtrW
+        def SetWindowPos(self, *args): raise AssertionError('level already correct')
+    calls = []
+    class Setter:
+        def __call__(self, hwnd, attribute, value, size):
+            calls.append((hwnd, attribute, ctypes.cast(value, ctypes.POINTER(ctypes.c_int)).contents.value))
+            return 0
+    user32 = User32()
+    monkeypatch.setattr(ctypes, 'windll', SimpleNamespace(user32=user32,
+        dwmapi=SimpleNamespace(DwmSetWindowAttribute=Setter())), raising=False)
+    widget = SimpleNamespace(winId=lambda:123, testAttribute=lambda _attr:True)
+    for _ in range(2):
+        user32.style &= ~0x00080000  # Simulate an external/native style reset.
+        result = native_window_policy.apply_windows_window_policy(widget, topmost=True, qt_stays_on_top=True)
+        assert result['native_layered'] and result['qt_translucent']
+        assert user32.style & 0x08000000  # NOACTIVATE remains intact.
+    assert calls == [(123, 2, 1)]  # DWMWA_NCRENDERING_POLICY = DISABLED
 
 
 def test_macos_policy_uses_safe_pyobjc_window_bridge(monkeypatch) -> None:

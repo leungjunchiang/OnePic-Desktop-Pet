@@ -1,4 +1,6 @@
-"""Read-only cross-device focus display projection.
+"""完整历史先验证再准备当天只读区间；实时计时不重复扫描历史，不修改原始事实。
+
+Read-only cross-device focus display projection.
 
 This module is deliberately separate from the existing focus statistics and
 sync paths.  It accepts the immutable interval facts that are already present
@@ -16,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Any
 
 from .focus_segments import (
@@ -78,6 +80,7 @@ def _normalise_rows(
     session_rows: Any,
     *,
     now: datetime,
+    clip_future_ends: bool = True,
 ) -> list[FocusSegment]:
     """Validate without mutating the supplied rows or FocusSegment objects."""
 
@@ -89,7 +92,8 @@ def _normalise_rows(
         if isinstance(raw, FocusSegment):
             # FocusSegment.normalized() returns a new immutable value.
             try:
-                rows.append(_display_safe_segment(raw.normalized(), now))
+                normalized = raw.normalized()
+                rows.append(_display_safe_segment(normalized, now) if clip_future_ends else normalized)
             except (TypeError, ValueError, OverflowError) as exc:
                 raise CrossDeviceDisplayDataError(
                     f"invalid focus display interval:{index}"
@@ -103,8 +107,29 @@ def _normalise_rows(
         parsed = segment_from_record(dict(raw), index)
         if parsed is None:
             raise CrossDeviceDisplayDataError(f"invalid focus display interval:{index}")
-        rows.append(_display_safe_segment(parsed, now))
+        rows.append(_display_safe_segment(parsed, now) if clip_future_ends else parsed)
     return rows
+
+
+def prepare_today_display_rows(
+    user_id: str, now: datetime, session_rows: Iterable[FocusSegment | Mapping[str, Any]],
+) -> list[FocusSegment]:
+    """Validate ALL history before retaining only today's overlapping rows.
+
+    Keep future end timestamps intact: the existing per-tick projection clips
+    them at each new moment instead of permanently freezing them at preparation.
+    Foreign or invalid old rows must not be hidden by date filtering.
+    """
+    moment = as_beijing(now)
+    rows = _normalise_rows(user_id, session_rows, now=moment, clip_future_ends=False)
+    for segment in rows:
+        error = segment.validation_error(moment)
+        if error and error != "future_end":
+            raise CrossDeviceDisplayDataError(f"focus display interval validation failed: {error}")
+    start = datetime.combine(moment.date(), time.min, tzinfo=BEIJING_TIMEZONE)
+    end = start + timedelta(days=1)
+    return [segment for segment in rows if segment.start_at < end
+            and (segment.end_at is None or segment.end_at > start)]
 
 
 def live_projection_rows(
@@ -215,6 +240,7 @@ def get_cross_device_today_display_seconds(
 
 __all__ = [
     "CrossDeviceDisplayDataError",
+    "prepare_today_display_rows",
     "get_cross_device_today_display_seconds",
     "live_projection_rows",
 ]

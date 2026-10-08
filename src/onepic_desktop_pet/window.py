@@ -1,4 +1,4 @@
-"""透明六毛与附属气泡禁用系统阴影；跨设备计时合并按 ID 索引，避免卡住动画。
+"""先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
 
 闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
 
@@ -613,6 +613,13 @@ class PetWindow(QWidget):
             )
         )
         self.settings = settings
+        # Account restoration can request winId() before construction ends.
+        # Qt must choose an alpha backing store BEFORE that native HWND exists.
+        self.setWindowFlags(self._pet_window_flags())
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self._menu_external_callbacks: dict[str, Callable[[bool], object]] = {}
         self.behavior = BehaviorModel(settings)
         self.companion_behavior = CompanionBehaviorController()
@@ -1040,11 +1047,7 @@ class PetWindow(QWidget):
             )
 
         self.ensure_pet_window_policy(event="Construct")
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setWindowTitle(f"{APP_DISPLAY_NAME} · {self._pet_name()}")
         self.setMouseTracking(True)
 
@@ -2330,6 +2333,9 @@ class PetWindow(QWidget):
                 qt_stays_on_top=qt_stays_on_top,
                 native_level=result.get("native_level"),
                 hwnd_topmost=result.get("native_topmost"),
+                qt_translucent=result.get("qt_translucent"),
+                native_layered=result.get("native_layered"),
+                shadow_policy_applied=result.get("shadow_policy_applied"),
                 action=result.get("action"),
                 available=result.get("available"),
                 error=result.get("error", ""),
@@ -6303,6 +6309,8 @@ class PetWindow(QWidget):
         self._cross_device_today_display_projection_cache_key = None
         self._cross_device_today_display_projection_cache_value = None
         self._cross_device_today_display_projection_cache_at = 0.0
+        self._cross_device_today_display_prepared_key = None
+        self._cross_device_today_display_prepared_rows = None
 
     def _freeze_cached_live_display_until_refresh(self) -> None:
         """Stop old open device rows from advancing after this device pauses.
@@ -6834,8 +6842,21 @@ class PetWindow(QWidget):
             # account's closed facts and normally contains only a few devices.
             try:
                 moment = self.focus_analytics.current_time()
-                rows = list(self._cross_device_today_display_remote_rows or [])
-                rows.extend(segment.to_dict() for segment in self.focus_analytics.focus_segments())
+                from .focus_display import prepare_today_display_rows
+                prepared_key = (
+                    account_id, display_date,
+                    int(getattr(self, "_focus_projection_revision", 0)),
+                    id(self._cross_device_today_display_remote_rows),
+                )
+                if getattr(self, "_cross_device_today_display_prepared_key", None) != prepared_key:
+                    history = list(self._cross_device_today_display_remote_rows or [])
+                    history.extend(self.focus_analytics.focus_segments())
+                    prepared = prepare_today_display_rows(account_id, moment, history)
+                    self._cross_device_today_display_prepared_rows = prepared
+                    self._cross_device_today_display_prepared_key = prepared_key
+                # Immutable closed history is validated once per facts revision.
+                # Live device rows are still evaluated every tick and obey TTL.
+                rows = list(self._cross_device_today_display_prepared_rows or [])
                 local_device_id = str(
                     getattr(self.focus_analytics, "_device_id", "") or ""
                 )

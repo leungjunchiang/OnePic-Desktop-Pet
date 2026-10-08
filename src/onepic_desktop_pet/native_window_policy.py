@@ -1,4 +1,4 @@
-"""桌宠原生窗口层级的低频、非激活平台桥；64 位 HWND 类型绑定避免句柄截断。
+"""原生桥保留逐像素透明、禁止窗口阴影并校验非激活层级；64 位 HWND 不截断。
 
 Qt flags 是唯一的窗口策略来源；本模块只在 Show、WinIdChange、屏幕、
 应用生命周期节点或低频 watchdog 中校验已经存在的 native handle。Windows 使用
@@ -87,8 +87,33 @@ def apply_windows_window_policy(
         # WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE. These are compatible with
         # Qt::Tool and WindowDoesNotAcceptFocus and do not activate the HWND.
         desired_extended = extended | 0x00000080 | 0x08000000
+        translucent = False
+        test_attribute = getattr(widget, "testAttribute", None)
+        if callable(test_attribute):
+            from PySide6.QtCore import Qt
+            translucent = bool(test_attribute(Qt.WidgetAttribute.WA_TranslucentBackground))
+        if translucent:
+            # Preserve Qt's per-pixel alpha surface across native style repair.
+            # NOACTIVATE alone cannot render antialiased transparent edges.
+            desired_extended |= 0x00080000  # WS_EX_LAYERED
         if desired_extended != extended:
             set_style(native_id, -20, desired_extended)
+        result["qt_translucent"] = translucent
+        result["native_layered"] = bool(int(get_style(native_id, -20)) & 0x00080000)
+        if translucent and getattr(widget, "_no_shadow_policy_hwnd", None) != native_id:
+            # DWM is optional; failure here must never prevent the pet showing.
+            try:
+                dwm = ctypes.windll.dwmapi
+                setter = dwm.DwmSetWindowAttribute
+                setter.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+                setter.restype = ctypes.c_long
+                disabled = ctypes.c_int(1)  # DWMNCRP_DISABLED
+                applied = setter(native_id, 2, ctypes.byref(disabled), ctypes.sizeof(disabled)) == 0
+                result["shadow_policy_applied"] = applied
+                if applied:
+                    widget._no_shadow_policy_hwnd = native_id
+            except (AttributeError, OSError):
+                result["shadow_policy_applied"] = False
 
         hwnd_topmost = bool(extended & 0x00000008)  # WS_EX_TOPMOST
         result["native_topmost"] = hwnd_topmost
