@@ -1,4 +1,4 @@
-"""验证长时间计时的保存精度、缓存推进及北京时间跨午夜口径，不访问网络。"""
+"""验证轻量累计投影下的保存精度、缓存推进及北京时间跨午夜口径，不访问网络。"""
 
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -43,7 +43,7 @@ def test_account_projection_keeps_advancing_across_disk_checkpoints_and_midnight
     timer.start()
     reads = []
 
-    def summary(period, moment):
+    def summary(period, moment, **_kwargs):
         reads.append(period)
         midnight = moment.replace(hour=0, minute=0, second=0, microsecond=0)
         elapsed = int((moment - max(start, midnight)).total_seconds())

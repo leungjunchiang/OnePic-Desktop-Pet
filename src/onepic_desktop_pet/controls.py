@@ -1,4 +1,4 @@
-"""六毛控制与持续状态气泡；今日累计在 idle 仍保留，仅休息标注已暂停。
+"""六毛控制与持续状态气泡禁用原生阴影；今日累计在 idle 仍保留，仅休息标注已暂停。
 
 内容更新经显示入口拦截全屏，不自行抢前台。
 
@@ -161,6 +161,7 @@ class WorkControlBubble(QWidget):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -275,6 +276,7 @@ class WorkDurationBubble(RoundedSurfaceLabel):
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.NoDropShadowWindowHint
         )
         if always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
@@ -388,6 +390,7 @@ class VisitStatusBubble(RoundedSurfaceLabel):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -497,6 +500,7 @@ class CoffeeScenePrompt(QWidget):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -656,6 +660,7 @@ class QuickControlPanel(QWidget):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -667,6 +672,7 @@ class QuickControlPanel(QWidget):
             Qt.WindowType.ToolTip
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.NoDropShadowWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.hover_hint.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)

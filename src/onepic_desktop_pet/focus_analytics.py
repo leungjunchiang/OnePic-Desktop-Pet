@@ -1,4 +1,6 @@
-"""Local focus continuity, quality and lightweight review data.
+"""计时只投影日历累计，完整报告按需生成；同一次统计复用已解析的专注区间。
+
+Local focus continuity, quality and lightweight review data.
 
 Only coarse metrics are stored: duration, round count, away count and
 application *categories*.  Window titles, document names, keystrokes and
@@ -2014,13 +2016,14 @@ class FocusAnalyticsStore:
         at: datetime | None = None,
         *,
         extra_segments: list[FocusSegment] | None = None,
+        _segments: list[FocusSegment] | None = None,
     ) -> FocusAggregate:
         """Aggregate raw facts with one interval implementation."""
 
         moment = _as_beijing(at or self._now())
         validation_moment = _as_beijing(self._now())
         range_start, range_end, _ = calendar_window(period, moment)
-        segments = self._projection_segments(extra_segments)
+        segments = self._projection_segments(extra_segments) if _segments is None else _segments
         # Legacy cumulative checkpoint rows are retained for diagnostics but
         # are marked untrusted by ``_rebuild_days_from_records``.  Exclude all
         # records on those dates from user-visible aggregates.
@@ -2461,7 +2464,9 @@ class FocusAnalyticsStore:
             dates.update(self._segment_dates(segment))
         return self._rebuild_daily_focus_projection(dates)
 
-    def period_summary(self, period: str = "day", at: datetime | None = None) -> dict[str, Any]:
+    def period_summary(
+        self, period: str = "day", at: datetime | None = None, *, include_details: bool = True,
+    ) -> dict[str, Any]:
         """Calculate a day/week/month/year report from account-local history.
 
         This is deliberately a read-only, on-demand projection.  The current
@@ -2499,13 +2504,13 @@ class FocusAnalyticsStore:
             period_end = start.replace(year=start.year + 1) - timedelta(days=1)
         range_start = datetime.combine(start, time.min, tzinfo=BEIJING_TIMEZONE)
         range_end = datetime.combine(today + timedelta(days=1), time.min, tzinfo=BEIJING_TIMEZONE)
-        aggregate = self.focus_aggregate(key, moment)
+        raw_segments = self._projection_segments()
+        aggregate = self.focus_aggregate(key, moment, _segments=raw_segments)
         # ``source_segment_count`` also includes facts outside the requested
         # window.  A positive projection (or an explicit invalid-interval
         # error) is the precise signal that this period has interval evidence.
         # This matters for a segment crossing midnight: its start date can be
         # yesterday while its overlap belongs to today's report.
-        raw_segments = self._projection_segments()
         raw_period_evidence = any(
             segment.start_at < range_end
             and segment.effective_end(moment) > range_start
@@ -2614,6 +2619,24 @@ class FocusAnalyticsStore:
         # hourly buckets, and session metrics remain canonical-only.
         local_period_evidence = raw_period_evidence or period_has_legacy
         total_seconds = sum(int(item.get("seconds") or 0) for item in daily)
+
+        if not include_details:
+            # The clock does not need quality, session groups, strongest
+            # hours or a second report. Keep exactly the same calendar union
+            # and legacy/quarantine rules as the full report above.
+            return {
+                "total_seconds": total_seconds,
+                "local_record_count": sum(
+                    1 for raw in self._state.get("records", [])
+                    if isinstance(raw, dict)
+                    and (record_date := self._record_date(raw)) is not None
+                    and start <= record_date <= today
+                ),
+                "raw_period_evidence": raw_period_evidence,
+                "raw_source_active": has_raw_facts,
+                "local_evidence": local_period_evidence,
+                "legacy_compatibility_active": period_has_legacy,
+            }
 
         trusted_days = {
             str(item.get("date") or "")

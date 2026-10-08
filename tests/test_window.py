@@ -1,5 +1,5 @@
 """
-今日累计框结束本轮不消失，特效避让只在显示设置关闭时清除。
+透明窗禁用阴影，累计投影省略报告细节；今日累计框结束本轮不消失，特效避让只在显示设置关闭时清除。
 本模块还验证免打扰首次处理不被在途旧反应覆盖；有效离开截止时间可校准显示，不被普通暂停防回退掩盖。
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
 喂食、离线对话、陪伴动作、工作计时、专注导航、备注提醒和自拍成片；手动监视器用例隔离周期轮询。
@@ -370,7 +370,7 @@ def test_unsealed_overnight_session_uses_only_today_in_day_projection(monkeypatc
     moment = datetime(2026, 9, 24, 0, 10, tzinfo=timezone(timedelta(hours=8)))
     monkeypatch.setattr(window.focus_analytics, "current_time", lambda: moment)
     monkeypatch.setattr(
-        window.focus_analytics, "period_summary", lambda *_args: {"total_seconds": 0}
+        window.focus_analytics, "period_summary", lambda *_args, **_kwargs: {"total_seconds": 0}
     )
     monkeypatch.setattr(window.work_timer, "session_seconds", lambda: 8 * 3600 + 600)
     monkeypatch.setattr(window.work_timer, "today_seconds", lambda: 600)
@@ -3668,7 +3668,7 @@ def test_shared_focus_totals_include_checkpointed_current_session(monkeypatch) -
     assert window.work_timer.checkpoint(minimum_interval_seconds=1)
     window._recorded_focus_session_seconds = 30 * 60
 
-    def period_summary(period, _moment=None):
+    def period_summary(period, _moment=None, **_kwargs):
         return {
             "total_seconds": 30 * 60,
             "local_record_count": 1,
@@ -3741,7 +3741,7 @@ def test_shared_focus_totals_refresh_when_server_effective_projection_arrives(mo
     moment = window.focus_analytics.current_time()
     week_start = moment.date() - timedelta(days=moment.date().weekday())
 
-    def period_summary(_period, _moment=None):
+    def period_summary(_period, _moment=None, **_kwargs):
         return {
             "total_seconds": 2 * 3600 + 19 * 60,
             "local_record_count": 1,
@@ -3848,7 +3848,7 @@ def test_shared_focus_totals_prefer_local_day_when_remote_max_is_stale(monkeypat
     # device may still have left a five-hour server snapshot for today/week.
     window.work_timer._running_since -= 35 * 60
 
-    def period_summary(period, _moment=None):
+    def period_summary(period, _moment=None, **_kwargs):
         return {
             "total_seconds": 5 * 3600 if period == "day" else 8 * 3600,
             "local_record_count": 0,
@@ -3877,7 +3877,7 @@ def test_shared_focus_totals_ignore_legacy_remote_timer_bucket_during_session(mo
     monkeypatch.setattr(
         window.focus_analytics,
         "period_summary",
-        lambda _period, _moment=None: {"total_seconds": 5 * 3600, "local_record_count": 0},
+        lambda _period, _moment=None, **_kwargs: {"total_seconds": 5 * 3600, "local_record_count": 0},
     )
     totals = window._shared_focus_period_seconds()
 

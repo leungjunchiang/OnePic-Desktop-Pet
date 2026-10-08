@@ -1,4 +1,6 @@
-"""闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
+"""透明六毛与附属气泡禁用系统阴影；跨设备计时合并按 ID 索引，避免卡住动画。
+
+闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
 
 今日累计胶囊只跟随设置和六毛可见状态，不受消息免打扰拦截；训导牌在累计框关闭时重新锚定六毛下方。
 
@@ -1406,6 +1408,7 @@ class PetWindow(QWidget):
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.NoDropShadowWindowHint
         )
         if self.settings.always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
@@ -1466,6 +1469,7 @@ class PetWindow(QWidget):
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.NoDropShadowWindowHint
         )
         if self.settings.always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
@@ -6399,6 +6403,23 @@ class PetWindow(QWidget):
         return merged
 
     @staticmethod
+    def _append_missing_display_segments(
+        remote_rows: list[object], local_segments: list[FocusSegment],
+    ) -> list[object]:
+        """线性合并显示区间，保留远端优先级、无效行验证及本地原始事实。"""
+        rows = list(remote_rows)
+        known = {
+            str(row.get("segment_id") or row.get("record_id") or "")
+            for row in rows if isinstance(row, dict)
+        }
+        for segment in local_segments:
+            key = str(getattr(segment, "segment_id", "") or "")
+            if key not in known:
+                rows.append(segment.to_dict())
+                known.add(key)
+        return rows
+
+    @staticmethod
     def _account_presence_live_fallback(
         account_id: str,
         data: dict[str, object] | None,
@@ -6638,16 +6659,9 @@ class PetWindow(QWidget):
         # The account store owns both merged sealed facts and the validated
         # live-device projection. The old display lists remain only for
         # compatibility with lifecycle retention and are not a second source.
-        rows_list = list(remote_rows or []) if remote_rows is not None else []
-        rows_list.extend(
-            segment.to_dict()
-            for segment in self.focus_analytics._projection_segments()
-            if not any(
-                str(existing.get("segment_id") or existing.get("record_id") or "")
-                == str(getattr(segment, "segment_id", "") or "")
-                for existing in rows_list
-                if isinstance(existing, dict)
-            )
+        rows_list = self._append_missing_display_segments(
+            list(remote_rows or []) if remote_rows is not None else [],
+            self.focus_analytics._projection_segments(),
         )
         rows: object = rows_list
 
@@ -6950,8 +6964,8 @@ class PetWindow(QWidget):
         )
         cached = self._focus_projection_cache
         if not isinstance(cached, dict) or cached.get("key") != cache_key:
-            day_projection = self.focus_analytics.period_summary("day", moment)
-            week_projection = self.focus_analytics.period_summary("week", moment)
+            day_projection = self.focus_analytics.period_summary("day", moment, include_details=False)
+            week_projection = self.focus_analytics.period_summary("week", moment, include_details=False)
             raw_day_seconds = max(0, int(day_projection.get("total_seconds", 0) or 0))
             raw_week_seconds = max(0, int(week_projection.get("total_seconds", 0) or 0))
             effective_day_seconds = raw_day_seconds
@@ -10341,7 +10355,7 @@ class PetWindow(QWidget):
             report_dialog = self._work_report_dialog
             if report_dialog is not None and report_dialog.isVisible():
                 report_dialog.request_refresh(force=True)
-        local_day = self.focus_analytics.period_summary("day")
+        local_day = self.focus_analytics.period_summary("day", include_details=False)
         if (
             bool(local_day.get("raw_period_evidence"))
             and not self.work_timer.has_active_session
