@@ -1,4 +1,4 @@
-"""验证八日硬额度、取消不退额、收件箱分组与新事件通知边界。"""
+"""验证八日硬额度、取消不退额、收件箱分组与通知边界；固定样例日期不随运行日过期。"""
 import os
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from datetime import datetime, timedelta, timezone
@@ -65,7 +65,9 @@ def test_unread_independent_of_required_action():
     assert response_actions(rows[1])==[('去处理','handle')]
     assert ('去开工','focus') in response_actions({'event_type':'start'})
 
-def test_feed_is_compact_and_responses_reuse_callback(app):
+def test_feed_is_compact_and_responses_reuse_callback(app, monkeypatch):
+    monkeypatch.setattr('onepic_desktop_pet.interaction_center.now_beijing',
+                        lambda: datetime(2026, 10, 1, 12, tzinfo=BEIJING_TIMEZONE))
     calls=[]
     feed=InteractionFeed(lambda row,action:calls.append(action))
     assert feed.sizeHint().height()<160
