@@ -1,4 +1,5 @@
-"""主动快捷入口与被动通知隔离，Qt 清理门禁和原生错误诊断回归。"""
+"""音频退出门禁同时覆盖线程和进程后端。
+主动快捷入口与被动通知隔离，Qt 清理门禁和原生错误诊断回归。"""
 from types import SimpleNamespace
 from threading import Event
 import io
@@ -69,6 +70,8 @@ def test_audio_exit_gate_keeps_live_worker_until_native_drain(pet,monkeypatch):
     thread=Worker();thread.start();assert entered.wait(1)
     class Job:
         thread_owner=thread
+        @property
+        def closed(self):return not self.thread_owner.isRunning()
         def stop(self):pass
     monkeypatch.setattr(module,'_QT_AUDIO_JOBS',{Job()})
     try:

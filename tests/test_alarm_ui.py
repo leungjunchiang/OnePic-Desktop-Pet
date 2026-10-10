@@ -1,10 +1,11 @@
-"""无焦点闹钟卡恢复不重播、不重置已确认状态；共享试听链与本地编辑草稿回归。"""
+"""无焦点闹钟卡与异步音频进程限时清理；共享试听链与本地编辑草稿回归。"""
 
 from __future__ import annotations
 
 import os
 import sys
 import wave
+import time
 
 import pytest
 
@@ -226,11 +227,12 @@ def test_custom_audio_button_queues_player_stop_before_card_cleanup(tmp_path) ->
     # The custom backend is intentionally drained instead of synchronously
     # stopped.  The short fixture should finish and release the card without
     # ever blocking the GUI thread.
-    for _ in range(20):
+    # Isolated decoder startup/stop is asynchronous. The stop deadline is
+    # two seconds; keep pumping GUI while awaiting its completion ACK.
+    deadline = time.monotonic() + 4
+    while not card.audio_cleanup_ready and time.monotonic() < deadline:
         app.processEvents()
-        if card.audio_cleanup_ready:
-            break
-        QTest.qWait(50)
+        time.sleep(.01)
     assert card.audio_cleanup_ready is True
 
 

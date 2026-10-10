@@ -93,6 +93,9 @@ jobs:
       - name: Build public Windows package
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
+      - name: Verify frozen audio helper (no main window)
+        shell: powershell
+        run: .\.venv\Scripts\python.exe .\scripts\verify_packaged_alarm_audio.py .\dist\Lili\Lili.exe
       - name: Install Windows installer compiler
         shell: powershell
         run: choco install innosetup --no-progress -y

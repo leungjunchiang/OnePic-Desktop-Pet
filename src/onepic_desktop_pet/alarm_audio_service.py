@@ -1,4 +1,4 @@
-"""线程内连续播放、有限断点恢复与本地诊断；显式停止及退出不允许重新起播。"""
+"""共用播放所有权及断点恢复；Windows Qt 回退进程隔离，其他平台线程播放。"""
 from __future__ import annotations
 
 from collections import deque
@@ -216,7 +216,12 @@ class QtThreadAudio(QObject):
 
 
 def create_qt_alarm_audio():
-    backend = QtThreadAudio()
+    import sys
+    if sys.platform == "win32":
+        from .alarm_audio_process import QtProcessAudio
+        backend = QtProcessAudio()
+    else:
+        backend = QtThreadAudio()
     return backend, backend
 
 
@@ -341,7 +346,7 @@ def prepare_audio_shutdown() -> bool:
     ready = True
     for job in tuple(_QT_AUDIO_JOBS):
         job.stop()
-        if not job.thread_owner.wait(0):
+        if not job.closed:
             ready = False
-            lifecycle_log("alarm.audio.shutdown.pending", job, thread_class="QtThreadAudio")
+            lifecycle_log("alarm.audio.shutdown.pending", job, backend_class=type(job).__name__)
     return ready
