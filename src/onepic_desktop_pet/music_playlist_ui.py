@@ -1,4 +1,4 @@
-"""展示六毛保存的三十首陈楚生在线歌单，共用实际播放线程和位置。"""
+"""展示陈楚生三十首连续轮播歌单，支持选曲及处理中优先暂停。"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QListWidget, QPushButton, QVBoxLayout
@@ -13,10 +13,12 @@ class MusicPlaylistDialog(QDialog):
         layout = QVBoxLayout(self)
         self.summary = QLabel(self)
         layout.addWidget(self.summary)
-        hint = QLabel('六毛保存这 30 首歌的顺序，上一首 / 下一首按此列表播放。\n在线音源由 QQ 音乐提供，需登录并具备相应播放权限。', self)
+        hint = QLabel('每轮随机 30 首，播完自动生成下一轮；可随时暂停。\n双击选曲，上一首 / 下一首按此列表播放。音源由 QQ 音乐在线提供。', self)
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.songs = QListWidget(self)
+        self.songs.itemDoubleClicked.connect(
+            lambda item: controller.play_qq_playlist_index(self.songs.row(item)))
         layout.addWidget(self.songs)
         row = QHBoxLayout()
         self.buttons = []
@@ -40,7 +42,7 @@ class MusicPlaylistDialog(QDialog):
 
     def refresh(self):
         queue = self.controller.manager.qq_playlist
-        self.summary.setText(f'陈楚生 · {len(queue.entries)} 首 · 当前第 {queue.index + 1} 首'
+        self.summary.setText(f'陈楚生 · 第 {queue.round_number} 轮 · {len(queue.entries)} 首 · 当前第 {queue.index + 1} 首'
                              if queue.entries else '还没有歌单，点击“重新随机 30 首”开始。')
         self.songs.clear()
         for index, song in enumerate(queue.entries):
@@ -54,5 +56,6 @@ class MusicPlaylistDialog(QDialog):
         self.feedback.setText(result.message)
 
     def _busy(self, busy):
-        for button in self.buttons:
-            button.setEnabled(not busy)
+        for index, button in enumerate(self.buttons):
+            # 即使正在查询或切歌，播放/暂停仍可提交优先暂停。
+            button.setEnabled(index == 1 or not busy)

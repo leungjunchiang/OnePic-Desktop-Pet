@@ -26,6 +26,19 @@ jobs:
       - name: Verify frozen audio helper
         shell: powershell
         run: .\.venv\Scripts\python.exe scripts/verify_packaged_alarm_audio.py dist/Lili/Lili.exe
+      - name: Verify isolated frozen application startup and exit
+        shell: powershell
+        run: |
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'lili-playlist-smoke'
+          $env:ONEPIC_USE_DEMO_ASSETS = '1'
+          $app = Start-Process -FilePath (Join-Path $PWD 'dist\Lili\Lili.exe') -ArgumentList '--smoke-test-ms 2000' -WindowStyle Hidden -PassThru
+          if (-not $app.WaitForExit(45000)) {
+            Stop-Process -Id $app.Id
+            throw 'Frozen application failed to exit within 45 seconds.'
+          }
+          if ($app.ExitCode -ne 0) { throw "Frozen application returned $($app.ExitCode)." }
+          if (Test-Path dist/Lili/_internal/user_assets) { throw 'Private assets found in public package.' }
       - name: Prepare installer compiler
         shell: powershell
         run: |

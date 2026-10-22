@@ -1,4 +1,4 @@
-"""统一管理本机播放器检测、QQ 三十首歌单、原生 Transport 控制和真实状态。
+"""统一管理本机播放器检测、QQ 三十首连续轮播、优先暂停和真实播放状态。
 
 QQ 在线点歌复用音乐工作线程，后续控制只使用唯一 QQMusic.exe Session，禁止全局媒体键回退。
 已经暂停或播放时，幂等控制先确认状态，不因客户端禁用重复按钮而误报失败。
@@ -982,6 +982,13 @@ class MusicProviderManager:
                 )
                 return MusicControlResult(False, "auto", action, status.message, status)
         if normalized == "qq" and self._online_qq_selected:
+            if action == 'play' and self.qq_playlist.entries:
+                try:
+                    current = self._qq_online_track()
+                except Exception:
+                    current = None
+                if not self.qq_playlist.matches(current):
+                    return self.qq_playlist.select(self.qq_playlist.index)
             return self._control_qq_online(action)
         if action == "status":
             status = self.inspect(normalized, probe_control=True)
@@ -1010,6 +1017,8 @@ class MusicProviderManager:
             return SongPlaybackResult(False, 'qq', title, artist,
                                       'QQ 一键在线点歌目前仅支持 Windows。',
                                       MusicPlaybackError.PLAY_ACTION_FAILED)
+        # 首次查询尚未完成时也让优先暂停锁定 QQ，绝不误控其他播放器。
+        self.active_provider, self._online_qq_selected = 'qq', True
         if title:
             result = self.qq_online_player.play(title, artist)
             if result.success:
@@ -1032,9 +1041,21 @@ class MusicProviderManager:
             return None
         self.qq_playlist.auto_advance = False
         if self.qq_playlist.index + 1 < len(self.qq_playlist.entries):
-            return self.qq_playlist.move(1)
-        self.qq_playlist.auto_advance = False
-        return self._control_qq_online('pause')
+            result = self.qq_playlist.move(1)
+        else:
+            # 自动轮换更新现有列表，不像用户点击随机入口那样反复弹窗。
+            result = replace(self.qq_playlist.create(), playlist_created=False)
+        if not self.qq_playlist.auto_advance:
+            # 切歌或新一轮未获确认时停止旧 QQ 队列，避免错误曲目继续播放。
+            self._control_qq_online('pause')
+            result = replace(result, message=result.message + ' 自动续播未获确认，已停止连续轮播。')
+        return result
+
+    def play_qq_playlist_index(self, index: int):
+        result = self.qq_playlist.select(index)
+        if result.success:
+            self.active_provider, self._online_qq_selected = 'qq', True
+        return result
 
     def _control_qq_online(self, action: str) -> MusicControlResult:
         """确认目标后置状态；QQ 会话不可用时不向其他应用发送媒体键。"""
@@ -1632,6 +1653,7 @@ class MusicCommandThread(QThread):
         title: str = "",
         artist: str = "",
         random_artist: bool = False,
+        playlist_index: int = -1,
     ) -> None:
         super().__init__(parent)
         self.manager = manager
@@ -1640,11 +1662,14 @@ class MusicCommandThread(QThread):
         self.title = title
         self.artist = artist
         self.random_artist = random_artist
+        self.playlist_index = playlist_index
 
     def run(self) -> None:
         try:
             if self.action == "play_qq_online":
                 result = self.manager.play_qq_online_song(self.title, self.artist)
+            elif self.action == 'playlist_select':
+                result = self.manager.play_qq_playlist_index(self.playlist_index)
             elif self.action == "play_song":
                 if self.random_artist:
                     result = self.manager.play_catalog_random_song(self.artist)
@@ -1689,6 +1714,8 @@ class MusicController(QObject):
         self.settings = settings
         self.manager = manager
         self._thread: MusicCommandThread | None = None
+        self._pause_pending = False
+        self._shutting_down = False
         self._playlist_timer = QTimer(self)
         self._playlist_timer.setInterval(1000)
         self._playlist_timer.timeout.connect(self._playlist_poll)
@@ -1705,7 +1732,21 @@ class MusicController(QObject):
         return self._thread is not None
 
     def perform(self, action: str) -> bool:
-        if self.busy:
+        if self._shutting_down:
+            return False
+        if self.busy and action == 'toggle':
+            action = 'pause'
+        if action == 'pause':
+            playlist = getattr(self.manager, 'qq_playlist', None)
+            if playlist is not None:
+                playlist.auto_advance = False
+            self._playlist_timer.stop()
+            if self.busy:
+                if self._thread.action != 'pause':
+                    self._pause_pending = True
+                    self._thread.requestInterruption()
+                return True
+        if self.busy or self._shutting_down:
             return False
         self._thread = MusicCommandThread(
             self.manager,
@@ -1748,7 +1789,7 @@ class MusicController(QObject):
     def play_qq_song(self, title: str = '', artist: str = '陈楚生') -> bool:
         """从菜单和聊天共用串行的在线 QQ 点歌线程。"""
 
-        if self.busy:
+        if self.busy or self._shutting_down:
             return False
         self._thread = MusicCommandThread(
             self.manager, 'qq', 'play_qq_online', self, title=title, artist=artist)
@@ -1758,7 +1799,25 @@ class MusicController(QObject):
         self._thread.start()
         return True
 
+    def play_qq_playlist_index(self, index: int) -> bool:
+        """歌单双击选择确定曲目，不改变该轮顺序。"""
+        if self.busy or self._shutting_down:
+            return False
+        self._thread = MusicCommandThread(
+            self.manager, 'qq', 'playlist_select', self, playlist_index=index)
+        self._thread.completed.connect(self._completed)
+        self._thread.finished.connect(self._finished)
+        self.busy_changed.emit(True)
+        self._thread.start()
+        return True
+
     def _completed(self, result: MusicControlResult | SongPlaybackResult | None) -> None:
+        if self._pause_pending or self._shutting_down:
+            playlist = getattr(self.manager, 'qq_playlist', None)
+            if playlist is not None:
+                playlist.auto_advance = False
+            self._playlist_timer.stop()
+            return
         if getattr(getattr(self.manager, 'qq_playlist', None), 'auto_advance', False) and not self._playlist_timer.isActive():
             self._playlist_timer.start()
         if result is None:
@@ -1774,14 +1833,23 @@ class MusicController(QObject):
     def _finished(self) -> None:
         thread = self._thread
         self._thread = None
-        self.busy_changed.emit(False)
         if thread is not None:
             thread.deleteLater()
+        if self._pause_pending and not self._shutting_down:
+            self._pause_pending = False
+            self.perform('pause')
+        else:
+            self.busy_changed.emit(False)
 
     def shutdown(self) -> None:
         """退出时等待最长 5.5 秒，避免仍在执行的系统线程被直接销毁。"""
 
         self._playlist_timer.stop()
+        self._shutting_down = True
+        self._pause_pending = False
+        playlist = getattr(self.manager, 'qq_playlist', None)
+        if playlist is not None:
+            playlist.auto_advance = False
         if self._thread is not None and self._thread.isRunning():
             self._thread.requestInterruption()
             self._thread.wait(5500)

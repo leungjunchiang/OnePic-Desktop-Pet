@@ -5,7 +5,7 @@
 Adapter 使用 UI Automation 定位“歌曲”结果；网易云 3.x 不公开 Chromium 控件树时，
 使用绑定用户 Default 桌面的 DPI-aware 本机交互回退。macOS 优先使用 Apple Events，
 并在需要时使用已授权的 Accessibility。严格点歌返回明确失败码；随机歌手播放在播放
-动作已执行但媒体 Session 暂不可读时标记为未验证启动；结果同时携带六毛歌单位置。
+动作已执行但媒体 Session 暂不可读时标记为未验证启动；结果携带六毛歌单位置及轮次。
 """
 
 from __future__ import annotations
@@ -86,6 +86,7 @@ class SongPlaybackResult:
     playlist_size: int = 0
     playlist_index: int = -1
     playlist_created: bool = False
+    playlist_round: int = 0
 
 
 class ProviderSearchError(RuntimeError):

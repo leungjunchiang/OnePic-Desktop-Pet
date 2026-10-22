@@ -1,4 +1,4 @@
-"""查询 QQ 在线歌曲目录，以数字 songid 投递原生客户端并核对媒体状态。
+"""查询 QQ 在线目录并投递客户端；暂停取消在投递与确认阶段均有检查。
 
 仅传递歌曲元数据与客户端命令，不下载音频。目录属于可变化的客户端接口；错误、
 登录和会员限制交给客户端处理。命令只投递一次；元数据匹配不等于精确 ID 或完整
@@ -229,7 +229,7 @@ class QQMusicOnlinePlayer:
                 latest = self.track_reader()
             except Exception:
                 latest = None
-            if (latest and str(latest.playback_status).casefold() == 'playing'
+            if (not self.cancelled() and latest and str(latest.playback_status).casefold() == 'playing'
                     and candidate_matches(selected, latest)):
                 return SongPlaybackResult(
                     True, 'qq', title, artist,
@@ -240,6 +240,8 @@ class QQMusicOnlinePlayer:
             if remaining <= 0:
                 break
             self.sleep(min(self.poll_interval, remaining))
+        if self.cancelled():
+            return failed('音乐操作已取消，正在执行暂停。', MusicPlaybackError.PLAY_ACTION_FAILED)
         return SongPlaybackResult(
             True, 'qq', title, artist,
             f'已向 QQ 音乐请求《{selected.title}》，尚未读到匹配的播放状态。'

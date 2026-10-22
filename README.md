@@ -1,4 +1,4 @@
-Windows 新增陈楚生 30 首在线歌单，列表内按顺序切歌并保存位置。使用与验证记录见 [QQ 音乐歌单说明](docs/qqmusic-playlist.md)。
+Windows 新增陈楚生 30 首在线连续轮播：每次点击重新生成，按序续播，整轮播完再随机新一轮，可随时暂停并保留位置。使用与验证记录见 [QQ 音乐歌单说明](docs/qqmusic-playlist.md)。
 
 # Lili 桌面工作搭子
 

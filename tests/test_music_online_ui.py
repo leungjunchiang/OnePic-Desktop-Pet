@@ -1,4 +1,4 @@
-"""验证聊天和菜单确实走后台点歌入口，未确认投递不触发六毛听歌动作。"""
+"""验证菜单后台点歌、未确认反馈及换轮处理中优先暂停不重新续播。"""
 
 import os
 from types import SimpleNamespace
@@ -106,4 +106,48 @@ def test_real_qt_worker_is_serial_and_delivers_final_result():
         assert received == [result]
     finally:
         release.set()
+        controller.shutdown()
+
+
+def test_pause_interrupts_busy_round_and_is_delivered_after_worker_finishes():
+    import time
+    from threading import Event
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    entered = Event()
+    queue = SimpleNamespace(auto_advance=True)
+    commands = []
+    paused = MusicControlResult(True, 'qq', 'pause', '已暂停',
+        MusicProviderStatus('qq', MusicControlState.CONTROL_READY, '',
+                            track=TrackInfo('', '', '', 'paused')))
+    def play(*_):
+        entered.set()
+        deadline = time.monotonic() + 2
+        while not QThread.currentThread().isInterruptionRequested() and time.monotonic() < deadline:
+            time.sleep(.005)
+        # 模拟一个晚返回的确认；优先暂停不能被该结果重新激活。
+        queue.auto_advance = True
+        return SongPlaybackResult(True, 'qq', '', '陈楚生', 'late success',
+            outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
+    def control(_provider, action):
+        commands.append(action)
+        queue.auto_advance = False
+        return paused
+    manager = SimpleNamespace(play_qq_online_song=play, qq_playlist=queue, control=control)
+    controller = MusicController(PetSettings(), manager)
+    received = []
+    controller.result_ready.connect(received.append)
+    try:
+        assert controller.play_qq_song() and entered.wait(1)
+        assert controller.perform('pause')
+        assert not queue.auto_advance
+        deadline = time.monotonic() + 3
+        while controller.busy and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.005)
+        assert not controller.busy and commands == ['pause']
+        assert received == [paused]
+        assert not queue.auto_advance and not controller._playlist_timer.isActive()
+    finally:
         controller.shutdown()

@@ -1,4 +1,4 @@
-"""验证在线目录筛选、单次原生投递、真实播放确认及失败时不误控其他应用。"""
+"""验证在线目录、原生投递、取消竞态和真实播放确认，不误控其他应用。"""
 
 from pathlib import Path
 from threading import Event
@@ -126,6 +126,18 @@ def test_missing_client_does_not_query_the_network():
     service.catalog.search = lambda *_: pytest.fail('must not search without a client')
     assert not service.play().success
     assert sent == []
+
+
+def test_pause_cancellation_during_media_read_cannot_return_late_playing_success():
+    cancelled = [False]
+    service, _, sent = player(cancelled=lambda: cancelled[0])
+    def read():
+        cancelled[0] = True
+        return TrackInfo('山楂花', '陈楚生', '冬去春来', 'playing')
+    service.track_reader = read
+    result = service.play()
+    assert not result.success and result.outcome is None
+    assert len(sent) == 1
 
 
 def test_native_dispatch_uses_numeric_id_without_shell_or_wait(tmp_path):

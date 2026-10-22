@@ -1,4 +1,4 @@
-"""保存六毛的三十首在线歌单，按固定顺序指定 QQ 曲目并识别自然播完。
+"""保存六毛的三十首在线歌单，按序续播并在每轮结束后重新生成下一轮。
 
 只存歌曲元数据，不下载音频或保存登录信息。歌单属于六毛，不写入 QQ 云端收藏。
 所有修改和媒体查询复用串行音乐线程；持久化失败不会丢失内存中的队列。
@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import random
 import re
+import time
 
 from .music_playback import MusicPlaybackError, MusicPlaybackOutcome, SongCandidate, SongPlaybackResult
 from .qqmusic_online import QQCatalogError, artist_names, canonical, candidate_matches
@@ -38,13 +39,17 @@ def bundled_candidates():
 class QQPlaylist:
     SIZE = 30
 
-    def __init__(self, player, *, store_path: Path | None = None, shuffle=None, fallback_loader=None):
+    def __init__(self, player, *, store_path: Path | None = None, shuffle=None, fallback_loader=None,
+                 clock=time.monotonic):
         self.player = player
         self.store_path = store_path
         self.shuffle = shuffle or random.SystemRandom().shuffle
         self.fallback_loader = fallback_loader
+        self.clock = clock
+        self._catalog_retry_after = 0.0
         self.entries: tuple[SongCandidate, ...] = ()
         self.index = -1
+        self.round_number = 0
         self.auto_advance = False
         self._near_end = False
         self.load()
@@ -54,6 +59,8 @@ class QQPlaylist:
                                   MusicPlaybackError.RESULT_NOT_FOUND)
 
     def create(self, artist='陈楚生'):
+        if self.player.cancelled():
+            return self.failure('音乐操作已取消。')
         if self.player.client_finder('qq', self.player.settings.qq_music_path) is None:
             return self.failure('未找到 QQ 音乐，请在设置中选择 QQMusic.exe。')
         songs = {}
@@ -67,7 +74,9 @@ class QQPlaylist:
         if self.fallback_loader and canonical(artist) == canonical('陈楚生'):
             collect(self.fallback_loader())
         try:
-            for page in range(1, 6):
+            has_fallback = sum(not self._paid(s) for s in songs.values()) >= self.SIZE
+            pages = () if has_fallback and self.clock() < self._catalog_retry_after else range(1, 6)
+            for page in pages:
                 if self.player.cancelled():
                     return self.failure('音乐操作已取消。')
                 try:
@@ -85,6 +94,7 @@ class QQPlaylist:
         except QQCatalogError as exc:
             if len(songs) < self.SIZE:
                 return self.failure(str(exc))
+            self._catalog_retry_after = self.clock() + 60
         available = list(songs.values())
         if len(available) < self.SIZE:
             return self.failure(f'在线目录只找到 {len(available)} 首不同歌曲，未满 30 首；原歌单已保留，请稍后重试。')
@@ -92,11 +102,18 @@ class QQPlaylist:
         available.sort(key=self._paid)  # 优先选择无需订阅的版本，授权仍由 QQ 判断。
         chosen = available[:self.SIZE]
         self.shuffle(chosen)
+        if self.entries:
+            previous = self.entries[self.index]
+            if (chosen[0].identifier == previous.identifier
+                    or canonical(chosen[0].title) == canonical(previous.title)):
+                chosen[0], chosen[1] = chosen[1], chosen[0]
         result = self.player.play_candidate(chosen[0], artist=artist)
         if not result.success:
             return result
         self.entries, self.index = tuple(chosen), 0
-        self.auto_advance = result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED
+        self.round_number += 1
+        self.auto_advance = (not self.player.cancelled()
+                             and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
         self._near_end = False
         self.save()
         return self.decorate(result, created=True)
@@ -106,20 +123,28 @@ class QQPlaylist:
         return bool((song.native or {}).get('requires_subscription'))
 
     def decorate(self, result, *, created=False):
-        prefix = f'六毛歌单 {self.index + 1}/{len(self.entries)} · '
+        prefix = f'六毛歌单 第 {self.round_number} 轮 {self.index + 1}/{len(self.entries)} · '
         return replace(result, playlist_size=len(self.entries), playlist_index=self.index,
-                       playlist_created=created, message=prefix + result.message)
+                       playlist_created=created, playlist_round=self.round_number,
+                       message=prefix + result.message)
 
     def move(self, step):
+        if step == 1 and self.entries and self.index == len(self.entries) - 1:
+            return self.create()
+        return self.select(self.index + step)
+
+    def select(self, target):
+        if self.player.cancelled():
+            return self.failure('音乐操作已取消。')
         if not self.entries:
             return self.failure('还没有陈楚生歌单，请先点击“随机听陈楚生”。')
-        target = self.index + step
-        if not 0 <= target < len(self.entries):
-            return self.failure('已经是歌单最后一首。' if step > 0 else '已经是歌单第一首。')
+        if type(target) is not int or not 0 <= target < len(self.entries):
+            return self.failure('已经到歌单边界，请重新随机或选择列表中的歌曲。')
         result = self.player.play_candidate(self.entries[target])
         if result.success:
             self.index = target
-            self.auto_advance = result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED
+            self.auto_advance = (not self.player.cancelled()
+                                 and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
             self._near_end = False
             self.save()
             return self.decorate(result)
@@ -151,7 +176,7 @@ class QQPlaylist:
     def save(self):
         if self.store_path is None:
             return
-        data = {'version': 1, 'index': self.index, 'songs': [
+        data = {'version': 1, 'index': self.index, 'round': self.round_number, 'songs': [
             {'id': s.identifier, 'title': s.title, 'artist': s.artist,
              'album': (s.native or {}).get('album', ''), 'requires_subscription': self._paid(s),
              'primary_artist_only': bool((s.native or {}).get('primary_artist_only'))}
@@ -193,5 +218,7 @@ class QQPlaylist:
             if len({s.identifier for s in songs}) != self.SIZE:
                 return
             self.entries, self.index = tuple(songs), index
+            number = data.get('round', 1)
+            self.round_number = number if type(number) is int and 1 <= number <= 1_000_000 else 1
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return

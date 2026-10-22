@@ -1,4 +1,4 @@
-"""验证三十首歌单的顺序、持久化、失败回滚及自然结束和暂停边界。"""
+"""验证三十首连续轮播、重复随机、恢复、失败回滚和优先暂停边界。"""
 
 from dataclasses import replace
 import json
@@ -109,12 +109,14 @@ def test_failed_dispatch_does_not_advance_or_replace_queue(tmp_path):
     assert (tmp_path / 'list.json').read_bytes() == before
 
 
-def test_boundaries_do_not_wrap_or_dispatch():
+def test_previous_at_start_stops_but_next_at_end_creates_fresh_round():
     value, player = queue()
     assert not value.move(-1).success
     value.index = 29
-    assert not value.move(1).success
-    assert len(player.sent) == 1
+    result = value.move(1)
+    assert result.success and result.playlist_round == 2 and result.playlist_created
+    assert value.index == 0 and len(value.entries) == 30
+    assert len(player.sent) == 2
 
 
 def test_manual_pause_and_early_external_change_never_auto_resume():
@@ -152,6 +154,7 @@ def test_manager_natural_end_advances_once_and_failure_disarms():
     value, player = queue()
     manager = MusicProviderManager(PetSettings(), platform_name='win32', client_finder=lambda *_: None)
     manager.qq_playlist = value
+    manager._control_qq_online = lambda action: None
     manager._qq_online_track = lambda: track(value, position=199000)
     assert manager.control('auto', 'playlist_tick') is None
     manager._qq_online_track = lambda: track(value, 'stopped', 200000)
@@ -160,6 +163,79 @@ def test_manager_natural_end_advances_once_and_failure_disarms():
     assert not value.auto_advance
     assert manager.control('auto', 'playlist_tick') is None
     assert len(player.sent) == 2
+
+
+def test_every_random_click_replaces_thirty_songs_and_plays_a_fresh_first_song(tmp_path):
+    value, player = queue(tmp_path)
+    first = player.sent[-1]
+    result = value.create()
+    assert result.playlist_created and result.playlist_size == 30
+    assert result.playlist_round == value.round_number == 2
+    assert value.index == 0 and player.sent[-1] != first
+    restored = QQPlaylist(player, store_path=tmp_path / 'list.json')
+    assert restored.round_number == 2 and not restored.auto_advance
+
+
+def test_thirty_natural_ends_generate_another_round_and_pause_stops_all_advancement():
+    value, player = queue()
+    manager = MusicProviderManager(PetSettings(), platform_name='win32', client_finder=lambda *_: None)
+    manager.qq_playlist = value
+    for expected in range(1, 31):
+        manager._qq_online_track = lambda: track(value, position=199000)
+        assert manager.control('auto', 'playlist_tick') is None
+        manager._qq_online_track = lambda: track(value, 'stopped', 200000)
+        result = manager.control('auto', 'playlist_tick')
+        assert result.success
+        assert value.index == expected % 30
+        assert value.round_number == (2 if expected == 30 else 1)
+    assert len(value.entries) == 30 and len(player.sent) == 31
+    assert value.auto_advance and not result.playlist_created
+    assert player.sent[-1] != player.sent[-2]
+    manager._qq_online_track = lambda: track(value, 'paused')
+    assert manager.control('auto', 'playlist_tick') is None
+    count = len(player.sent)
+    for _ in range(3):
+        assert manager.control('auto', 'playlist_tick') is None
+    assert len(player.sent) == count and not value.auto_advance
+
+
+def test_failed_new_round_stops_and_keeps_the_previous_thirty():
+    value, player = queue()
+    value.index = 29
+    manager = MusicProviderManager(PetSettings(), platform_name='win32', client_finder=lambda *_: None)
+    manager.qq_playlist = value
+    pauses = []
+    manager._control_qq_online = pauses.append
+    manager._qq_online_track = lambda: track(value, position=199000)
+    manager.control('auto', 'playlist_tick')
+    manager._qq_online_track = lambda: track(value, 'stopped', 200000)
+    player.fail = True
+    before = value.entries
+    assert not manager.control('auto', 'playlist_tick').success
+    assert value.entries == before and value.round_number == 1
+    assert not value.auto_advance and pauses == ['pause']
+
+
+def test_select_last_song_preserves_order_and_rejects_invalid_rows():
+    value, player = queue()
+    before = value.entries
+    assert value.select(29).playlist_index == 29
+    assert value.entries == before and player.sent[-1] == before[29].identifier
+    for index in (-1, 30, True, '1'):
+        assert not value.select(index).success
+
+
+def test_resume_restored_queue_reselects_saved_song_if_qq_has_moved_elsewhere():
+    value, player = queue()
+    value.index = 12
+    value.auto_advance = False
+    manager = MusicProviderManager(PetSettings(), platform_name='win32', client_finder=lambda *_: None)
+    manager.qq_playlist = value
+    manager._qq_online_track = lambda: TrackInfo('外部歌曲', '其他歌手', '', 'paused')
+    result = manager.control('auto', 'play')
+    assert result.success and result.playlist_index == 12
+    assert player.sent[-1] == value.entries[12].identifier
+    assert value.round_number == 1 and value.auto_advance
 
 
 def test_invalid_persisted_song_ids_or_wrong_artist_never_load(tmp_path):
@@ -209,6 +285,23 @@ def test_catalog_retry_is_bounded_and_stops_on_cancellation():
     assert not value.create().success and len(calls) == 2
 
 
+def test_recent_catalog_failure_uses_metadata_fallback_without_delaying_every_round():
+    player = Player()
+    calls = []
+    def offline(*_, **__):
+        calls.append(1)
+        raise QQCatalogError('offline')
+    player.catalog.search = offline
+    now = [100.0]
+    value = QQPlaylist(player, fallback_loader=bundled_candidates, clock=lambda: now[0])
+    assert value.create().success and len(calls) == 2
+    assert value.create().success and len(calls) == 2 and value.round_number == 2
+    now[0] += 61
+    assert value.create().success and len(calls) == 4
+    player.cancelled = lambda: True
+    assert not value.create().success and len(calls) == 4
+
+
 def test_dialog_shows_all_thirty_and_buttons_use_shared_controller():
     from PySide6.QtCore import QObject, Signal
     from PySide6.QtWidgets import QApplication
@@ -225,6 +318,8 @@ def test_dialog_shows_all_thirty_and_buttons_use_shared_controller():
             self.calls.append(action)
         def play_qq_song(self):
             self.calls.append('random')
+        def play_qq_playlist_index(self, index):
+            self.calls.append(index)
     controller = Controller()
     dialog = MusicPlaylistDialog(controller)
     try:
@@ -234,7 +329,10 @@ def test_dialog_shows_all_thirty_and_buttons_use_shared_controller():
         value.move(1)
         controller.result_ready.emit(value.decorate(player_result := SongPlaybackResult(True, 'qq', '', '', 'next')))
         assert dialog.songs.currentRow() == 1
+        dialog.songs.itemDoubleClicked.emit(dialog.songs.item(29))
+        assert controller.calls[-1] == 29
         controller.busy_changed.emit(True)
         assert not dialog.buttons[2].isEnabled()
+        assert dialog.buttons[1].isEnabled()
     finally:
         dialog.close()
