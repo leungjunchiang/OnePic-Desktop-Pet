@@ -1,4 +1,6 @@
-"""先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
+"""QQ 在线随机点歌与聊天控制共用后台线程，听歌动作仅由真实播放状态触发。
+
+先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
 
 闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
 
@@ -75,6 +77,8 @@ Agent 快速定位：
 API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 app.py 在退出时完成。
 `user_assets/` 默认不进入 Git；只有用户主动放入的自拍图片才会在本机显示。
 右键菜单和附属窗口使用宠物所在显示器的 Qt 全局逻辑坐标，不混用物理像素。
+
+陈楚生在线歌单显示三十首固定顺序，并把切歌交给共享音乐线程。
 """
 
 from __future__ import annotations
@@ -205,7 +209,7 @@ from .companion import (
     CompanionReply,
     FOOD_OPTIONS,
 )
-from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, social_pet_label
+from .config import PET_NAME, PetSettings, clean_owner_nickname, save_settings, social_pet_label, user_settings_path
 from .controls import (
     CoffeeScenePrompt,
     QuickControlPanel,
@@ -315,7 +319,9 @@ from .social_ui import (
     SocialVisitResponseThread,
 )
 from .music_control import MusicControlResult, MusicController, MusicProviderManager
-from .music_playback import SongPlaybackResult
+from .music_playback import MusicPlaybackOutcome, SongPlaybackResult
+from .music_playlist_ui import MusicPlaylistDialog
+from .music_commands import parse_music_request
 from .native_window_policy import apply_native_window_policy
 from .wellness import WellnessReminderModel
 from .work_timer import (
@@ -982,7 +988,8 @@ class PetWindow(QWidget):
         # All account-aware local stores now exist, so a restored Supabase
         # session can safely select its namespace during startup.
         self._switch_focus_account(self._current_social_user_id())
-        self.music_provider_manager = MusicProviderManager(self.settings)
+        self.music_provider_manager = MusicProviderManager(
+            self.settings, playlist_path=user_settings_path().parent / "music" / "qq-playlist.json")
         self.music_controller = MusicController(
             self.settings,
             self.music_provider_manager,
@@ -1163,6 +1170,8 @@ class PetWindow(QWidget):
         self.quick_panel.work_requested.connect(self._quick_work_action)
         self.quick_panel.work_report_requested.connect(self.show_work_report)
         self.quick_panel.chen_artist_requested.connect(self.open_chen_artist_page)
+        self.quick_panel.music_requested.connect(self.play_random_song)
+        self.quick_panel.music_playlist_requested.connect(self.show_music_playlist)
         self.quick_panel.artist_music_service_requested.connect(self.set_artist_music_service)
         self.quick_panel.todo_requested.connect(self.show_todo_center)
         self.quick_panel.social_requested.connect(self.open_social_hub)
@@ -4454,7 +4463,19 @@ class PetWindow(QWidget):
         return reply
 
     def _handle_chat_local_command(self, message: str) -> ManagedChatReply | None:
-        """Route explicit work controls through the existing shared session."""
+        """明确音乐指令交给串行工作线程；工作控制仍使用原共享会话。"""
+
+        music = parse_music_request(message)
+        if music is not None:
+            if music.action in {'random', 'song'}:
+                accepted = self.music_controller.play_qq_song(music.title, music.artist)
+            else:
+                accepted = self.music_controller.perform(music.action)
+            if accepted:
+                self._music_chat_feedback_pending = True
+            return ManagedChatReply(
+                '正在处理音乐请求，稍后告诉你实际结果。' if accepted else
+                '上一项音乐操作还在处理中，请稍等一下。', PetState.SIT, 'local-action')
 
         text = " ".join(str(message or "").replace("六毛", "", 1).split())
         text = text.strip(" ，,。.!！")
@@ -11560,9 +11581,23 @@ class PetWindow(QWidget):
         self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
-        """兼容旧调用：统一转到浏览器歌手主页，不再随机唤起播放器。"""
+        """生成三十首在线歌单，真实投递第一首并等待媒体播放状态。"""
 
-        return self.open_chen_artist_page()
+        if self.music_controller.play_qq_song():
+            self.show_speech('正在给你随机生成 30 首陈楚生歌单，并核对 QQ 音乐播放状态…', 4200)
+        else:
+            self.show_speech('上一项音乐操作还在处理中，请稍等一下。', 3200)
+        return '陈楚生随机歌曲'
+
+    def show_music_playlist(self):
+        """打开保存的三十首歌单，所有按钮使用同一个异步音乐控制器。"""
+        dialog = getattr(self, '_music_playlist_dialog', None)
+        if dialog is None:
+            dialog = self._music_playlist_dialog = MusicPlaylistDialog(self.music_controller, self)
+        dialog.refresh()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def open_music_collection(self) -> str:
         """兼容旧调用：保留方法名，但行为与新入口完全一致。"""
@@ -11614,7 +11649,7 @@ class PetWindow(QWidget):
         return False
 
     def _music_control_result(self, result: MusicControlResult | SongPlaybackResult) -> None:
-        """只在用户操作完成后给出轻量反馈，不显示歌曲或 Now Playing 状态。"""
+        """反馈实际结果；只有已确认正在播放时才进入陪听动作。"""
 
         is_status = isinstance(result, MusicControlResult) and result.action == "status"
         if isinstance(result, MusicControlResult):
@@ -11623,40 +11658,35 @@ class PetWindow(QWidget):
         else:
             track_artist = result.current_artist
             track_title = result.current_title
-        family_music = family_music_mode(track_artist, track_title)
+        playing = result.success and (
+            (isinstance(result, SongPlaybackResult)
+             and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
+            or (isinstance(result, MusicControlResult) and result.status.is_playing))
+        if (isinstance(result, MusicControlResult) and result.success
+                and result.status.track
+                and result.status.track.playback_status.casefold() in {'paused', 'stopped'}
+                and getattr(self, '_ambient_activity', '') == 'headphones'):
+            self.activity_timer.stop()
+            self._manual_activity_until = 0.0
+            self._change_ambient_activity('none')
+        family_music = playing and family_music_mode(track_artist, track_title)
         if family_music:
             # 听到爹的歌时让六毛先听歌，暂时减少普通主动打扰。
             self._show_emotion(PetState.SIT, 2400)
             self._set_temporary_activity("headphones", 120_000)
             self._manual_activity_until = time.monotonic() + 120
-        if result.success and not is_status and not family_music:
+        if playing and not is_status and not family_music:
             self._change_ambient_activity("headphones")
             self._manual_activity_until = time.monotonic() + 45
         if isinstance(result, SongPlaybackResult):
             save_settings(self.settings)
-        if result.success:
-            if isinstance(result, SongPlaybackResult):
-                feedback = result.message or "给你挑了一首歌♪"
-            else:
-                feedback = {
-                    "toggle": "播放状态已切换。",
-                    "previous": "已切换到上一首。",
-                    "next": "已切换到下一首。",
-                }.get(result.action, "音乐操作已完成。")
-        else:
-            # 失败时也只反馈本次操作，避免把播放器返回的歌曲名、媒体状态或
-            # Now Playing 文案重新带回六毛气泡。音乐面板是控制入口，不是状态面板。
-            if isinstance(result, SongPlaybackResult):
-                feedback = "随机播放暂时没有成功，请确认播放器可用。"
-            else:
-                feedback = {
-                    "toggle": "播放/暂停暂时无法执行。",
-                    "previous": "上一首暂时无法执行。",
-                    "next": "下一首暂时无法执行。",
-                    "play": "播放暂时无法执行。",
-                    "pause": "暂停暂时无法执行。",
-                }.get(result.action, "音乐操作暂时无法执行。")
-        self.show_speech(feedback, 3200 if result.success else 4200)
+            if result.playlist_created:
+                self.show_music_playlist()
+        feedback = result.message or ('音乐操作已完成。' if result.success else '音乐操作暂时无法执行。')
+        if getattr(self, '_music_chat_feedback_pending', False):
+            self._music_chat_feedback_pending = False
+            self._chat_notice(feedback)
+        self.show_speech(feedback, 5200 if playing else 6500)
 
     def set_activity(self, activity: str) -> None:
         """手动选择修正版动作表中的任意完整动作。"""
@@ -12218,6 +12248,9 @@ class PetWindow(QWidget):
             "music_toggle": lambda _checked=False: self.control_music("toggle"),
             "music_previous": lambda _checked=False: self.control_music("previous"),
             "music_next": lambda _checked=False: self.control_music("next"),
+            "music_random_qq": lambda _checked=False: self.play_random_song(),
+            "music_status": lambda _checked=False: self.control_music("status"),
+            "music_playlist": lambda _checked=False: self.show_music_playlist(),
             "chen_artist": lambda _checked=False: self.open_chen_artist_page(),
             "artist_music_auto": lambda _checked=False: self.set_artist_music_service("auto"),
             "artist_music_netease": lambda _checked=False: self.set_artist_music_service("netease"),

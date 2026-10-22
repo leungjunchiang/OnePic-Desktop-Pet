@@ -7,6 +7,9 @@ command list. The macOS Dock menu is another projection of this same model.
 
 工作时长入口明确表示今日累计，结束本轮不改变显示偏好。
 氛围特效入口也只作为本地菜单命令投影，不在菜单模型中执行网络或计时逻辑。
+在线随机点歌与查看状态是独立命令，歌手网页入口继续保留。
+
+音乐菜单提供六毛三十首在线歌单入口。
 """
 
 from __future__ import annotations
@@ -117,6 +120,9 @@ class UnifiedMenuModel:
             MenuItemSpec("播放 / 暂停", "music_toggle"),
             MenuItemSpec("上一首", "music_previous"),
             MenuItemSpec("下一首", "music_next"),
+            MenuItemSpec("随机听陈楚生（QQ 在线）", "music_random_qq"),
+            MenuItemSpec("查看陈楚生歌单…", "music_playlist"),
+            MenuItemSpec("查看音乐状态", "music_status"),
             MenuItemSpec.divider(),
             MenuItemSpec("听陈楚生…", "chen_artist"),
             MenuItemSpec("音乐平台", children=tuple(music_platform_children)),

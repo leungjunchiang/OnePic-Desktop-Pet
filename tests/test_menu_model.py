@@ -1,4 +1,4 @@
-"""统一菜单的今日累计显示偏好与专注会话状态分离。"""
+"""验证共享菜单的在线点歌、状态查询与今日累计显示入口。"""
 from __future__ import annotations
 
 from onepic_desktop_pet.menu_model import UnifiedMenuModel
@@ -30,6 +30,8 @@ def test_unified_menu_model_is_shared_by_all_lili_entry_points() -> None:
             "music_toggle",
             "music_previous",
             "music_next",
+            "music_random_qq",
+            "music_status",
             "chen_artist",
             "artist_music_auto",
             "artist_music_netease",
@@ -118,6 +120,9 @@ def test_unified_menu_model_is_shared_by_all_lili_entry_points() -> None:
         "播放 / 暂停",
         "上一首",
         "下一首",
+        "随机听陈楚生（QQ 在线）",
+        "查看陈楚生歌单…",
+        "查看音乐状态",
         "",
         "听陈楚生…",
         "音乐平台",

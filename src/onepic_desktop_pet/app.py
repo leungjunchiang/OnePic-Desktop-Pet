@@ -1,5 +1,6 @@
 """
 系统更新重启走独立的本地落盘、限时退出路径；普通退出等待音频与 TLS 完整清理。
+源码启动器可标注 QQ 在线开发版的窗口和托盘，帮助区分仍在运行的已安装版本。
 
 本模块（区分关闭窗口与真正退出应用）管理 Lili 应用生命周期、精简系统托盘菜单和退出时的位置保存。
 
@@ -422,6 +423,10 @@ class DesktopPetApplication(QObject):
         self.tray: QSystemTrayIcon | None = (
             self._create_tray() if _uses_qt_system_tray() else None
         )
+        if os.environ.get('ONEPIC_DEVELOPMENT_MODE') == '1':
+            self.window.setWindowTitle(f'{APP_DISPLAY_NAME} · 六毛（QQ 在线开发版）')
+            if self.tray is not None:
+                self.tray.setToolTip('六毛 · QQ 在线开发版')
         if self.tray is None:
             self.tray_menu = None
         self._dock_controller = install_dock_menu(self.window.unified_menu_model)

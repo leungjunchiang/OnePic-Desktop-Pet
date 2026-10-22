@@ -1,5 +1,5 @@
 """
-透明窗禁用阴影，累计投影省略报告细节；今日累计框结束本轮不消失，特效避让只在显示设置关闭时清除。
+验证 QQ 在线音乐入口；透明窗禁用阴影，累计投影省略报告细节；今日累计框结束本轮不消失。
 本模块还验证免打扰首次处理不被在途旧反应覆盖；有效离开截止时间可校准显示，不被普通暂停防回退掩盖。
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
 喂食、离线对话、陪伴动作、工作计时、专注导航、备注提醒和自拍成片；手动监视器用例隔离周期轮询。
@@ -698,6 +698,17 @@ def _create_window() -> tuple[QApplication, PetWindow]:
     window.show()
     app.processEvents()
     return app, window
+
+
+def test_quick_online_music_signal_reaches_shared_controller(monkeypatch) -> None:
+    """快捷口袋的在线随机入口必须连接后台控制器，不能回到网页入口。"""
+
+    app, window = _create_window()
+    calls = []
+    monkeypatch.setattr(window.music_controller, 'play_qq_song', lambda: calls.append('qq') or True)
+    window.quick_panel.music_requested.emit()
+    assert calls == ['qq']
+    window.close(); window.deleteLater(); app.processEvents()
 
 
 def test_missing_single_packaged_pet_frame_does_not_crash_startup(tmp_path) -> None:
@@ -3323,7 +3334,7 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     assert not any("›" in label for label in labels)
     music = next(action for action in menu.actions() if action.text() == "音乐")
     music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
-    assert music_labels == ["播放 / 暂停", "上一首", "下一首", "听陈楚生…", "音乐平台"]
+    assert music_labels == ["播放 / 暂停", "上一首", "下一首", "随机听陈楚生（QQ 在线）", "查看陈楚生歌单…", "查看音乐状态", "听陈楚生…", "音乐平台"]
     platform_menu = next(action for action in music.menu().actions() if action.text() == "音乐平台")
     assert [action.text() for action in platform_menu.menu().actions()] == [
         "跟随系统默认",

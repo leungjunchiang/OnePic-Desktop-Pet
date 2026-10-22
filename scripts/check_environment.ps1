@@ -6,7 +6,14 @@ if ($env:OS -ne "Windows_NT") {
 }
 
 $pythonCommand = $null
-if (Get-Command py -ErrorAction SilentlyContinue) {
+$projectPython = Join-Path (Split-Path -Parent $PSScriptRoot) '.venv\Scripts\python.exe'
+if (Test-Path $projectPython) {
+    $version = & $projectPython -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    if ($LASTEXITCODE -eq 0 -and $version -eq '3.12') {
+        $pythonCommand = $projectPython
+    }
+}
+if (-not $pythonCommand -and (Get-Command py -ErrorAction SilentlyContinue)) {
     & py -3.12 --version *> $null
     if ($LASTEXITCODE -eq 0) {
         $pythonCommand = "py -3.12"

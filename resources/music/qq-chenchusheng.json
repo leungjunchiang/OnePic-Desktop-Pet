@@ -1,0 +1,280 @@
+{
+  "version": 1,
+  "source": "QQ Music public song metadata",
+  "checked": "2026-10-23",
+  "artist_note": "Primary artist only; guests and album are verified when the client exposes them.",
+  "songs": [
+    {
+      "id": "726580165",
+      "title": "失温拥抱",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "7156742",
+      "title": "有没有人告诉你",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "385678435",
+      "title": "直到世界尽头 (Live)",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "729051696",
+      "title": "月下煮茶 (2026中央广播电视总台中秋晚会现场)",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "610384799",
+      "title": "耍赖",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "228287230",
+      "title": "招摇",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "764436",
+      "title": "风起时，想你",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "649499076",
+      "title": "荒野国王",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "393422840",
+      "title": "爱的尽头",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "672605596",
+      "title": "鹿回头",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "1109488",
+      "title": "瘾 (Live)",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "358093792",
+      "title": "给从前的自己",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "392420",
+      "title": "姑娘 (Live)",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "236813606",
+      "title": "我在何地",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "653937777",
+      "title": "暗夜",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "662701615",
+      "title": "无声的祭坛",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "624735865",
+      "title": "墙",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "104828950",
+      "title": "一个人的冬天",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "5107370",
+      "title": "夜夜夜夜 (Live)",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "692629084",
+      "title": "光",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "202972570",
+      "title": "有没有人曾告诉你 (Live)",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "274130206",
+      "title": "吻别",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "445540231",
+      "title": "向海而生",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "280526634",
+      "title": "天长地久",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "317426786",
+      "title": "我们俩 (Live)",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "257629331",
+      "title": "无问西东 (Live)",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "340764295",
+      "title": "漠河舞厅 (Live)",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "393086",
+      "title": "不必勉强",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "5212414",
+      "title": "难道 (Live)",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "274130200",
+      "title": "来生缘",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "403523",
+      "title": "Sophia",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "270927999",
+      "title": "忘不了",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "739823",
+      "title": "山高水长",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    },
+    {
+      "id": "274130201",
+      "title": "冷雨夜",
+      "artist": "陈楚生",
+      "album": "",
+      "primary_artist_only": true,
+      "requires_subscription": false
+    }
+  ]
+}

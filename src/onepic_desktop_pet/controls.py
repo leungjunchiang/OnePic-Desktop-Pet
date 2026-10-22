@@ -4,10 +4,13 @@
 
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
 播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
+快捷音乐菜单提供 QQ 在线随机点歌和真实媒体状态查询。
 快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
 独立宠物图层继续使用透明窗口；工作控制、状态和提示框使用实色窗口承载圆角样式，确保在深色桌面上边框与文字始终可见。
 工作报告二级按钮使用短暂悬停停留确认，快速扫过工作入口时不会闪出错误的整行按钮。
 计时与纪律小牌共用单层圆角绘制，不叠加矩形底框。
+
+音乐菜单提供六毛三十首在线歌单入口。
 """
 
 from __future__ import annotations
@@ -1135,6 +1138,7 @@ class QuickControlPanel(QWidget):
             ("播放 / 暂停", "toggle"),
             ("上一首", "previous"),
             ("下一首", "next"),
+            ("查看音乐状态", "status"),
         ):
             action = menu.addAction(label)
             action.triggered.connect(
@@ -1143,6 +1147,10 @@ class QuickControlPanel(QWidget):
                 )
             )
         menu.addSeparator()
+        random_song = menu.addAction("随机听陈楚生（QQ 在线）")
+        random_song.triggered.connect(lambda _checked=False: self._choose(self.music_requested))
+        playlist = menu.addAction("查看陈楚生歌单…")
+        playlist.triggered.connect(lambda _checked=False: self._choose(self.music_playlist_requested))
         artist = menu.addAction("听陈楚生…")
         artist.triggered.connect(lambda _checked=False: self._choose(self.chen_artist_requested))
         platform_menu = menu.addMenu("音乐平台")

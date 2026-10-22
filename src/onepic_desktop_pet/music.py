@@ -1,6 +1,8 @@
 """处理六毛的选歌、音乐 Deep Link 和正版网页回退，不承担基础播放控制。
 
 支持 QQ、网易云、酷狗、Apple Music 与 Spotify。本模块不内置歌词、音频或非公开曲库接口。
+开发启动器可保留原 LOCALAPPDATA 供客户端检测，不受独立桌宠数据目录影响。
+QQ Windows 客户端也可能安装在 QQMusic 目录下的版本子目录中。
 快捷“随机听一首”只负责从本地曲库选歌，然后直接尝试平台 Deep Link；Deep Link 失效、客户端
 未安装或系统拒绝唤起时，降级到正版 HTTPS 页面。打开客户端不等于已确认播放，基础播放命令
 仍由 music_control.py 读取系统媒体 Session 或发送媒体键。
@@ -654,13 +656,24 @@ def music_client_candidates(service: str) -> tuple[Path, ...]:
     if os.name == "nt":
         program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
         program_x86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
-        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        local = Path(os.environ.get("ONEPIC_MUSIC_LOCALAPPDATA", os.environ.get("LOCALAPPDATA", "")))
         if service == "qq":
-            return (
+            common = (
                 program_x86 / "Tencent" / "QQMusic" / "QQMusic.exe",
                 program_files / "Tencent" / "QQMusic" / "QQMusic.exe",
                 local / "Tencent" / "QQMusic" / "QQMusic.exe",
             )
+            versioned = []
+            for path in common:
+                try:
+                    children = sorted(
+                        path.parent.glob('QQMusic*/QQMusic.exe'),
+                        key=lambda p: tuple(int(n) for n in re.findall(r'\d+', p.parent.name)),
+                        reverse=True)
+                    versioned.extend(children[:10])
+                except OSError:
+                    continue
+            return common + tuple(versioned)
         if service == "netease":
             return (
                 program_files / "NetEase" / "CloudMusic" / "cloudmusic.exe",
