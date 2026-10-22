@@ -1,5 +1,7 @@
 """统一管理本机播放器检测、QQ 三十首连续轮播、优先暂停和真实播放状态。
 
+Windows 时间轴按 UTC 更新时间推算播放进度，暂停时保留真实位置。
+
 QQ 在线点歌复用音乐工作线程，后续控制只使用唯一 QQMusic.exe Session，禁止全局媒体键回退。
 已经暂停或播放时，幂等控制先确认状态，不因客户端禁用重复按钮而误报失败。
 
@@ -22,6 +24,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Mapping
@@ -186,6 +189,25 @@ class WindowsSessionSnapshot:
     controls: frozenset[str]
 
 
+def _windows_timeline_ms(timeline, state: str, *, rate=None, now=None) -> tuple[int, int]:
+    """Position 是 LastUpdatedTime 时的快照，只有 Playing 才按速率推进。"""
+    try:
+        start = timeline.start_time.total_seconds()
+        duration = max(0, int((timeline.end_time.total_seconds() - start) * 1000))
+        position = max(0, int((timeline.position.total_seconds() - start) * 1000))
+        updated = getattr(timeline, 'last_updated_time', None)
+        if state == 'playing' and duration and isinstance(updated, datetime):
+            updated = updated if updated.tzinfo is not None else updated.replace(tzinfo=timezone.utc)
+            age = ((now or datetime.now(timezone.utc)) - updated).total_seconds()
+            speed = float(rate) if rate is not None else 1.0
+            # 无效纪元、未来时间和异常速率都不能把曲目错误推进到末尾。
+            if 0 <= age <= duration / 1000 + 10 and 0 <= speed <= 16:
+                position += int(age * speed * 1000)
+        return min(position, duration) if duration else position, duration
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return 0, 0
+
+
 class WindowsGSMTCBridge:
     """用 PyWinRT 调用 Windows 全局媒体 Session API。"""
 
@@ -252,14 +274,19 @@ class WindowsGSMTCBridge:
                 )
                 status_value = getattr(playback, "playback_status", None)
                 status_name = getattr(status_value, "name", str(status_value or "unknown"))
-                timeline = session.get_timeline_properties()
+                try:
+                    timeline = session.get_timeline_properties()
+                    position, duration = _windows_timeline_ms(
+                        timeline, status_name.casefold(), rate=getattr(playback, 'playback_rate', None))
+                except Exception:
+                    position, duration = 0, 0
                 track = TrackInfo(
                     title=str(getattr(properties, "title", "") or ""),
                     artist=str(getattr(properties, "artist", "") or ""),
                     album=str(getattr(properties, "album_title", "") or ""),
                     playback_status=status_name.casefold(),
-                    position_ms=int(timeline.position.total_seconds() * 1000),
-                    duration_ms=int(timeline.end_time.total_seconds() * 1000),
+                    position_ms=position,
+                    duration_ms=duration,
                 )
             except Exception:
                 enabled = frozenset()

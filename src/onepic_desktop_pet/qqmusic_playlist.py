@@ -156,11 +156,14 @@ class QQPlaylist:
         return candidate_matches(self.entries[self.index], track)
 
     def ended(self, track):
-        """仅在先观测到曲末后识别结束；暂停或提前手动换歌不触发续播。"""
+        """先观测曲末才识别自然结束；六毛暂停会预先关闭 auto_advance。"""
         if not self.auto_advance or track is None:
             return False
         state = track.playback_status.casefold()
         if state == 'paused':
+            if (self._near_end and self.matches(track) and track.duration_ms > 0
+                    and track.position_ms >= track.duration_ms - 200):
+                return True
             self.auto_advance = False
             self._near_end = False
             return False

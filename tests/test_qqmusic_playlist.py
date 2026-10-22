@@ -122,7 +122,7 @@ def test_previous_at_start_stops_but_next_at_end_creates_fresh_round():
 def test_manual_pause_and_early_external_change_never_auto_resume():
     value, _ = queue()
     assert not value.ended(track(value, position=199000))
-    assert not value.ended(track(value, 'paused', position=200000))
+    assert not value.ended(track(value, 'paused', position=199000))
     assert not value.auto_advance
     value.auto_advance = True
     assert not value.ended(track(value, position=10000))
@@ -136,6 +136,14 @@ def test_natural_completion_after_near_end_advances_but_unknown_duration_does_no
     assert not value.ended(track(value, 'stopped'))
     assert not value.ended(track(value, position=199000))
     assert value.ended(track(value, 'stopped', position=200000))
+
+
+def test_client_paused_at_actual_end_advances_but_explicit_pause_never_does():
+    value, _ = queue()
+    assert not value.ended(track(value, position=199000))
+    assert value.ended(track(value, 'paused', position=200000))
+    value.auto_advance = False  # 六毛的优先暂停在系统状态返回前已经关闭续播。
+    assert not value.ended(track(value, 'paused', position=200000))
 
 
 def test_manager_next_never_sends_native_next_or_global_media_key():

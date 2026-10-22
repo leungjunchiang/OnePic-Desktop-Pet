@@ -8,6 +8,8 @@
 
 歌单窗口显示轮次和当前曲目，双击任意歌曲可选曲。查询或换轮过程中也可点播放/暂停，优先取消当前操作再暂停，防止晚返回的播放确认重新启用续播。
 
+Windows 进度按 [LastUpdatedTime](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssessiontimelineproperties.lastupdatedtime) 和 [Position](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssessiontimelineproperties.position) 计算：Playing 按时间和速率推进，暂停时不推进。播放器在实际曲末返回 Paused 也可识别自然结束；六毛暂停按钮会在识别前关闭自动续播。
+
 ## 兼容和错误反馈
 
 - 自动寻找 QQ 音乐安装路径，包括版本子目录；也可在设置中选择 `QQMusic.exe`。
