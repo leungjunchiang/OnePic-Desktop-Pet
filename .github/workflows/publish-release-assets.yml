@@ -12,6 +12,16 @@ on:
         required: true
         default: "v0.22.0"
         type: string
+      source_ref:
+        description: "Optional exact source commit for a draft without a tag ref"
+        required: false
+        default: ""
+        type: string
+      skip_manifest:
+        description: "Upload draft packages without a content-update manifest"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -23,7 +33,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_tag }}
+          ref: ${{ inputs.source_ref || inputs.release_tag }}
+      - name: Verify draft source and successful build
+        if: inputs.source_ref != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$ARTIFACT_RUN_ID" =~ ^[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_REF"
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)" = "$SOURCE_REF"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID" --jq .conclusion)" = success
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID" --jq .head_sha)" = "$SOURCE_REF"
       - name: Download artifacts from the successful build
         uses: actions/download-artifact@v4
         with:
@@ -32,6 +60,7 @@ jobs:
           path: release-assets
           merge-multiple: true
       - name: Build content update manifest
+        if: inputs.skip_manifest != true
         shell: bash
         run: |
           python tools/build_content_manifest.py \
@@ -41,6 +70,17 @@ jobs:
             --ref "${{ inputs.release_tag }}" \
             --repository "$GITHUB_REPOSITORY" \
             --output release-assets/content-manifest.json
+      - name: Archive exact draft source
+        if: inputs.source_ref != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="Lili-$RELEASE_TAG-Source.zip"
+          git archive --format=zip --prefix="Lili-$RELEASE_TAG/" --output="release-assets/$archive" HEAD
+          cd release-assets
+          sha256sum "$archive" > "$archive.sha256"
       - name: Upload artifacts to the existing release
         env:
           GH_TOKEN: ${{ github.token }}
