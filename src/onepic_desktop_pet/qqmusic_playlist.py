@@ -62,7 +62,7 @@ class QQPlaylist:
         if self.player.cancelled():
             return self.failure('音乐操作已取消。')
         if self.player.client_finder('qq', self.player.settings.qq_music_path) is None:
-            return self.failure('未找到 QQ 音乐，请在设置中选择 QQMusic.exe。')
+            return self.failure('未找到 QQ 音乐，请先安装并在设置中选择 QQ 音乐客户端。')
         songs = {}
         def collect(rows):
             for candidate in rows:

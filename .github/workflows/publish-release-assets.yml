@@ -27,6 +27,11 @@ on:
         required: false
         default: false
         type: boolean
+      include_macos:
+        description: "Require both macOS DMGs and their checksums before publishing"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -96,13 +101,14 @@ jobs:
           gh release upload "${{ inputs.release_tag }}" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
-      - name: Publish verified Windows draft
+      - name: Publish verified desktop draft
         if: inputs.finalize_only == true
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REF: ${{ inputs.source_ref }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           SKIP_MANIFEST: ${{ inputs.skip_manifest }}
+          INCLUDE_MACOS: ${{ inputs.include_macos }}
         shell: bash
         run: |
           set -euo pipefail
@@ -112,18 +118,20 @@ jobs:
           release_id="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)"
           [[ "$release_id" =~ ^[0-9]+$ ]]
           gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > release-metadata.json
-          jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_REF" '
+          jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_REF" --argjson macos "$INCLUDE_MACOS" '
             .draft == true and .target_commitish == $source and
             ([.assets[].name] | sort) == ([
               ("Lili-" + $tag + "-Source.zip"), ("Lili-" + $tag + "-Source.zip.sha256"),
               "Lili-Windows-x64-Setup.exe", "Lili-Windows-x64-Setup.exe.sha256",
-              "Lili-Windows-x64.zip", "Lili-Windows-x64.zip.sha256"] | sort) and
+              "Lili-Windows-x64.zip", "Lili-Windows-x64.zip.sha256"] +
+              (if $macos then ["Lili-macOS-arm64-unsigned.dmg", "Lili-macOS-arm64-unsigned.dmg.sha256",
+                              "Lili-macOS-x64-unsigned.dmg", "Lili-macOS-x64-unsigned.dmg.sha256"] else [] end) | sort) and
             all(.assets[]; .state == "uploaded" and .size > 0) and
             all(.assets[] | select(.name | endswith(".sha256") | not);
                 .digest | test("^sha256:[0-9a-f]{64}$"))
           ' release-metadata.json > /dev/null
           # Use the repository token so publishing the new tag does not recursively
-          # trigger the unrelated tag-push deployment workflow. Keep the existing
-          # cross-platform latest release while publishing this Windows package.
-          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          # trigger the unrelated tag-push deployment workflow. Only a release
+          # containing all three desktop installers can become cross-platform latest.
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$INCLUDE_MACOS"
           test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = false

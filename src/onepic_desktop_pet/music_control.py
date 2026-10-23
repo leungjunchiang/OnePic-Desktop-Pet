@@ -1,4 +1,4 @@
-"""统一管理本机播放器检测、QQ 三十首连续轮播、优先暂停和真实播放状态。
+"""管理 QQ 后台连续轮播；Windows 会话和实验性 macOS 已授权 AX 均只核对目标客户端。
 
 Windows 时间轴按 UTC 更新时间推算播放进度，暂停时保留真实位置。
 
@@ -92,6 +92,7 @@ class TrackInfo:
     playback_status: str = "unknown"
     position_ms: int = 0
     duration_ms: int = 0
+    metadata_scope: str = ''
 
     def display_text(self) -> str:
         if not self.title:
@@ -711,6 +712,7 @@ class MusicProviderManager:
         transport_wait_timeout: float = 1.8,
         transport_poll_interval: float = 0.2,
         playlist_path: Path | None = None,
+        mac_qq_bridge=None,
     ) -> None:
         self.settings = settings
         self.platform_name = platform_name or sys.platform
@@ -731,12 +733,20 @@ class MusicProviderManager:
         self._playback_adapters = dict(adapters)
         self.active_provider: str | None = None
         self._online_qq_selected = False
+        self.mac_qq_bridge = mac_qq_bridge
+        if self.platform_name == 'darwin' and self.mac_qq_bridge is None:
+            from .qqmusic_macos import QQMusicMacBridge
+            self.mac_qq_bridge = QQMusicMacBridge(
+                cancelled=lambda: QThread.currentThread().isInterruptionRequested())
         self.qq_online_player = QQMusicOnlinePlayer(
             settings, self._qq_online_track, client_finder=client_finder,
             verify_timeout=playback_verify_timeout,
             poll_interval=playback_poll_interval, sleep=playback_sleep or time.sleep,
             cancelled=lambda: QThread.currentThread().isInterruptionRequested(),
+            candidate_dispatcher=self.mac_qq_bridge.play_candidate if self.mac_qq_bridge else None,
         )
+        if self.mac_qq_bridge is not None:
+            self.qq_online_player.backgrounder = self.mac_qq_bridge.background
         self.qq_playlist = QQPlaylist(self.qq_online_player, store_path=playlist_path,
                                       fallback_loader=bundled_candidates)
         self.playback_manager = ExactMusicPlaybackManager(
@@ -1029,6 +1039,8 @@ class MusicProviderManager:
     def _qq_online_session(self) -> WindowsSessionSnapshot | None:
         """严格匹配唯一 QQ 会话，不接受浏览器、名称包含项或重复会话。"""
 
+        if self.platform_name == 'darwin':
+            return self.mac_qq_bridge.session()
         matches = [s for s in self.windows_bridge.sessions()
                    if s.source_id.casefold() == 'qqmusic.exe']
         return matches[0] if len(matches) == 1 else None
@@ -1040,9 +1052,9 @@ class MusicProviderManager:
     def play_qq_online_song(self, title: str = '', artist: str = '陈楚生') -> SongPlaybackResult:
         """查询在线目录后单次投递歌曲；未确认时仍锁定 QQ，便于用户查状态。"""
 
-        if self.platform_name != 'win32':
+        if self.platform_name not in {'win32', 'darwin'}:
             return SongPlaybackResult(False, 'qq', title, artist,
-                                      'QQ 一键在线点歌目前仅支持 Windows。',
+                                      'QQ 一键在线点歌目前支持 Windows 和 macOS。',
                                       MusicPlaybackError.PLAY_ACTION_FAILED)
         # 首次查询尚未完成时也让优先暂停锁定 QQ，绝不误控其他播放器。
         self.active_provider, self._online_qq_selected = 'qq', True
@@ -1097,7 +1109,8 @@ class MusicProviderManager:
             status = MusicProviderStatus(
                 'qq', MusicControlState.PLAYING if playing else (
                     MusicControlState.CONTROL_READY if session else MusicControlState.WAITING_SESSION),
-                'QQ 音乐未公开唯一媒体会话，请先登录并在客户端播放一次。',
+                (getattr(self.mac_qq_bridge, 'last_error', '') if self.platform_name == 'darwin' else '')
+                or 'QQ 音乐未公开唯一媒体会话，请先登录并在客户端播放一次。',
                 application_detected=True, application_running=bool(session),
                 session_id=session.source_id if session else '', track=track)
             self._cache['qq'] = status
@@ -1133,7 +1146,8 @@ class MusicProviderManager:
         if QThread.currentThread().isInterruptionRequested():
             return result(False, '音乐操作已取消。')
         try:
-            accepted = self.windows_bridge.control(before.source_id, action)
+            bridge = self.mac_qq_bridge if self.platform_name == 'darwin' else self.windows_bridge
+            accepted = bridge.control(before.source_id, action)
         except Exception:
             accepted = False
         if not accepted:

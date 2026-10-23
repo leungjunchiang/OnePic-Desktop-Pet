@@ -1,4 +1,4 @@
-"""验证菜单后台点歌、未确认反馈及换轮处理中优先暂停不重新续播。"""
+"""验证后台点歌不弹歌单、手动查看不抢常驻置顶，以及优先暂停不重新续播。"""
 
 import os
 from types import SimpleNamespace
@@ -64,6 +64,34 @@ def test_confirmed_playback_triggers_companion_headphones(monkeypatch):
         outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
     PetWindow._music_control_result(pet, result)
     assert activities == [('headphones', 120_000)]
+
+
+def test_new_playlist_confirmation_does_not_open_a_window(monkeypatch):
+    opened, speech = [], []
+    pet = SimpleNamespace(settings=object(), _music_chat_feedback_pending=False,
+        _set_temporary_activity=lambda *_: None, _show_emotion=lambda *_: None,
+        show_music_playlist=lambda: opened.append(True),
+        show_speech=lambda text, *_: speech.append(text))
+    monkeypatch.setattr('onepic_desktop_pet.window.save_settings', lambda _: None)
+    result = SongPlaybackResult(True, 'qq', '', '陈楚生', 'full technical feedback',
+        current_title='山高水长', current_artist='陈楚生', playlist_created=True, playlist_size=30,
+        outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
+    PetWindow._music_control_result(pet, result)
+    assert opened == []
+    assert speech == ['已在后台播放《山高水长》♪']
+
+
+def test_automatic_next_song_does_not_show_speech_or_open_window(monkeypatch):
+    opened, speech = [], []
+    pet = SimpleNamespace(settings=object(), _music_chat_feedback_pending=False,
+        _set_temporary_activity=lambda *_: None, _show_emotion=lambda *_: None,
+        show_music_playlist=lambda: opened.append(True), show_speech=lambda *args: speech.append(args))
+    monkeypatch.setattr('onepic_desktop_pet.window.save_settings', lambda _: None)
+    result = SongPlaybackResult(True, 'qq', '', '陈楚生', 'automatic next',
+        current_title='山高水长', current_artist='陈楚生', playlist_size=30,
+        outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
+    PetWindow._music_control_result(pet, result)
+    assert not opened and not speech
 
 
 def test_confirmed_pause_clears_the_listening_pose():

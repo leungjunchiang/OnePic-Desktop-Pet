@@ -1,4 +1,4 @@
-"""验证三十首连续轮播、重复随机、恢复、失败回滚和优先暂停边界。"""
+"""验证三十首连续轮播、优先暂停、以及独立歌单窗口隐藏或最小化不影响播放。"""
 
 from dataclasses import replace
 import json
@@ -344,3 +344,40 @@ def test_dialog_shows_all_thirty_and_buttons_use_shared_controller():
         assert dialog.buttons[1].isEnabled()
     finally:
         dialog.close()
+
+
+def test_playlist_window_is_independent_and_can_minimize_without_pausing():
+    from PySide6.QtCore import QObject, Qt, Signal
+    from PySide6.QtWidgets import QApplication, QWidget
+    from onepic_desktop_pet.music_playlist_ui import MusicPlaylistDialog
+    app = QApplication.instance() or QApplication([])
+    value, _ = queue()
+    class Controller(QObject):
+        result_ready = Signal(object)
+        busy_changed = Signal(bool)
+        busy = False
+        manager = SimpleNamespace(qq_playlist=value)
+        calls = []
+        def perform(self, action): self.calls.append(action)
+        def play_qq_song(self): self.calls.append('random')
+        def play_qq_playlist_index(self, index): self.calls.append(index)
+    controller = Controller()
+    parent = QWidget()
+    parent.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    dialog = MusicPlaylistDialog(controller, parent)
+    try:
+        assert not dialog.isVisible()
+        assert dialog.parentWidget() is None
+        assert not dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+        assert dialog.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint
+        dialog.show()
+        dialog.showMinimized()
+        app.processEvents()
+        assert dialog.isMinimized() and value.auto_advance
+        dialog.showNormal()
+        dialog.close()
+        assert not dialog.isVisible() and value.auto_advance
+        assert controller.calls == []
+    finally:
+        dialog.deleteLater()
+        parent.close()

@@ -20,7 +20,7 @@ if sys.platform == "darwin":
     # These imports are intentionally performed at runtime so Windows/Linux
     # builds do not load AppKit.  PyInstaller therefore needs the native
     # modules listed explicitly for the macOS Dock/status-item bridge.
-    hiddenimports += ["AppKit", "Foundation", "objc", "Quartz"]
+    hiddenimports += ["AppKit", "Foundation", "objc", "Quartz", "ApplicationServices"]
 # These are development/build or optional data-science packages.  Nothing in
 # main.py or the runtime package imports them; excluding them prevents a
 # local dev environment from silently inflating the public artifact.  The

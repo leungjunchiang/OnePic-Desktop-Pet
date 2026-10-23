@@ -1,4 +1,4 @@
-"""查询 QQ 在线目录并投递客户端；暂停取消在投递与确认阶段均有检查。
+"""后台投递 QQ 在线歌曲并核对平台公开的真实元数据；暂停取消优先于后续确认。
 
 仅传递歌曲元数据与客户端命令，不下载音频。目录属于可变化的客户端接口；错误、
 登录和会员限制交给客户端处理。命令只投递一次；元数据匹配不等于精确 ID 或完整
@@ -19,6 +19,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .music import ShuffleBag, SongEntry, find_music_client
+from .music_background import background_music_client
 from .music_playback import (
     MusicPlaybackError, MusicPlaybackOutcome, SongCandidate, SongPlaybackResult,
 )
@@ -46,11 +47,12 @@ def candidate_matches(selected: SongCandidate, track) -> bool:
     expected, actual = artist_names(selected.artist), artist_names(track.artist)
     artists_match = expected <= actual if native.get('primary_artist_only') else expected == actual
     return (canonical(track.title) == canonical(selected.title) and artists_match
-            and (not native.get('album') or canonical(track.album) == canonical(native['album'])))
+            and (not native.get('album') or canonical(track.album) == canonical(native['album'])
+                 or (getattr(track, 'metadata_scope', '') == 'mac-accessibility' and not track.album)))
 
 
 def _fetch_json(url: str) -> dict:
-    request = Request(url, headers={'Referer': 'https://y.qq.com/', 'User-Agent': 'OnePic-Desktop-Pet/0.23.329'})
+    request = Request(url, headers={'Referer': 'https://y.qq.com/', 'User-Agent': 'OnePic-Desktop-Pet/0.23.331'})
     try:
         with urlopen(request, timeout=3) as response:
             raw = response.read(2_000_001)
@@ -158,12 +160,15 @@ class QQMusicOnlinePlayer:
 
     def __init__(self, settings, track_reader, *, catalog=None, client_finder=find_music_client,
                  dispatcher=dispatch_song, verify_timeout=6.0, poll_interval=0.35,
-                 sleep=time.sleep, clock=time.monotonic, cancelled=lambda: False) -> None:
+                 sleep=time.sleep, clock=time.monotonic, cancelled=lambda: False,
+                 candidate_dispatcher=None, backgrounder=background_music_client) -> None:
         self.settings = settings
         self.track_reader = track_reader
         self.catalog = catalog or QQMusicCatalog()
         self.client_finder = client_finder
         self.dispatcher = dispatcher
+        self.candidate_dispatcher = candidate_dispatcher
+        self.backgrounder = backgrounder
         self.verify_timeout = max(0.0, verify_timeout)
         self.poll_interval = max(0.01, poll_interval)
         self.sleep, self.clock = sleep, clock
@@ -180,7 +185,7 @@ class QQMusicOnlinePlayer:
             return failed('音乐操作已取消。', MusicPlaybackError.PLAY_ACTION_FAILED)
         client = self.client_finder('qq', self.settings.qq_music_path)
         if client is None:
-            return failed('未找到 QQ 音乐。请先安装并登录，在设置中选择 QQMusic.exe。',
+            return failed('未找到 QQ 音乐。请先安装并登录，在设置中选择 QQ 音乐客户端。',
                           MusicPlaybackError.PLAY_ACTION_FAILED)
         try:
             candidates = self.catalog.search(title, artist)
@@ -214,10 +219,14 @@ class QQMusicOnlinePlayer:
             return failed('音乐操作已取消。', MusicPlaybackError.PLAY_ACTION_FAILED)
         client = self.client_finder('qq', self.settings.qq_music_path)
         if client is None:
-            return failed('未找到 QQ 音乐，请在设置中选择 QQMusic.exe。',
+            return failed('未找到 QQ 音乐，请在设置中选择 QQ 音乐客户端。',
                           MusicPlaybackError.PLAY_ACTION_FAILED)
         try:
-            self.dispatcher(client, selected.identifier)
+            if self.candidate_dispatcher is not None:
+                self.candidate_dispatcher(client, selected)
+            else:
+                self.dispatcher(client, selected.identifier)
+            self._background(client)
         except (OSError, ValueError) as exc:
             return failed(f'QQ 音乐歌曲投递失败：{exc}', MusicPlaybackError.PLAY_ACTION_FAILED)
         deadline = self.clock() + self.verify_timeout
@@ -229,6 +238,7 @@ class QQMusicOnlinePlayer:
                 latest = self.track_reader()
             except Exception:
                 latest = None
+            self._background(client)
             if (not self.cancelled() and latest and str(latest.playback_status).casefold() == 'playing'
                     and candidate_matches(selected, latest)):
                 return SongPlaybackResult(
@@ -248,3 +258,10 @@ class QQMusicOnlinePlayer:
             '请检查客户端登录、会员权限或弹窗；可说“查看音乐状态”。',
             selected=selected, play_attempts=1,
             outcome=MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED)
+
+    def _background(self, client):
+        if not self.cancelled():
+            try:
+                self.backgrounder(client)
+            except (OSError, ValueError):
+                pass

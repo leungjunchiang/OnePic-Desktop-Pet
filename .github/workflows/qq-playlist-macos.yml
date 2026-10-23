@@ -1,0 +1,66 @@
+name: QQ playlist macOS packages
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated build and test environment
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -e ".[dev]"
+      - name: Run complete macOS regression suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+          TZ: Asia/Shanghai
+        run: |
+          for file in tests/test_*.py; do
+            if [[ "$file" == "tests/test_alarm_ui.py" ]]; then
+              echo 'Native alarm windows require an interactive desktop; same exclusion as the production Mac gate.'
+              continue
+            fi
+            .venv/bin/python -m pytest --basetemp "$RUNNER_TEMP/pytest-$(basename "$file" .py)" "$file"
+          done
+      - name: Build public macOS application and DMG
+        env:
+          ONEPIC_MAC_ARCH: ${{ matrix.arch }}
+        run: |
+          source .venv/bin/activate
+          bash scripts/build_macos.sh
+      - name: Verify frozen application startup and clean exit
+        env:
+          QT_QPA_PLATFORM: offscreen
+          ONEPIC_USE_DEMO_ASSETS: '1'
+        run: |
+          export LOCALAPPDATA="$RUNNER_TEMP/lili-mac-smoke-${{ matrix.arch }}"
+          .venv/bin/python -c 'import subprocess; subprocess.run(["dist/Lili.app/Contents/MacOS/Lili", "--smoke-test-ms", "2000"], timeout=60, check=True)'
+          test ! -d dist/Lili.app/Contents/Resources/user_assets
+          test ! -d dist/Lili.app/Contents/Frameworks/user_assets
+          codesign --verify --deep --strict dist/Lili.app
+          hdiutil verify "dist/Lili-macOS-${{ matrix.arch }}-unsigned.dmg"
+          cd dist
+          shasum -a 256 "Lili-macOS-${{ matrix.arch }}-unsigned.dmg" > "Lili-macOS-${{ matrix.arch }}-unsigned.dmg.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qq-playlist-macos-${{ matrix.arch }}
+          path: |
+            dist/Lili-macOS-${{ matrix.arch }}-unsigned.dmg
+            dist/Lili-macOS-${{ matrix.arch }}-unsigned.dmg.sha256
+          if-no-files-found: error

@@ -62,6 +62,10 @@ jobs:
     needs: windows-tests
     uses: ./.github/workflows/qq-playlist-windows.yml
 
+  qq-playlist-macos-packages:
+    if: github.event_name == 'workflow_dispatch' && inputs.mac_contract_probe != true && github.ref == 'refs/heads/dev/qq-playlist-30'
+    uses: ./.github/workflows/qq-playlist-macos.yml
+
   relay-tests:
     if: inputs.mac_contract_probe != true
     runs-on: ubuntu-latest

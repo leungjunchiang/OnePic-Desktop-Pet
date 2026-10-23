@@ -1,4 +1,4 @@
-"""QQ 在线随机点歌与聊天控制共用后台线程，听歌动作仅由真实播放状态触发。
+"""QQ 在线点歌默认后台播放，歌单仅在手动请求时打开；听歌动作仅由真实状态触发。
 
 先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
 
@@ -11584,7 +11584,7 @@ class PetWindow(QWidget):
         """生成三十首在线歌单，真实投递第一首并等待媒体播放状态。"""
 
         if self.music_controller.play_qq_song():
-            self.show_speech('正在给你随机生成 30 首陈楚生歌单，并核对 QQ 音乐播放状态…', 4200)
+            self.show_speech('正在后台准备陈楚生歌单…', 2600)
         else:
             self.show_speech('上一项音乐操作还在处理中，请稍等一下。', 3200)
         return '陈楚生随机歌曲'
@@ -11595,7 +11595,7 @@ class PetWindow(QWidget):
         if dialog is None:
             dialog = self._music_playlist_dialog = MusicPlaylistDialog(self.music_controller, self)
         dialog.refresh()
-        dialog.show()
+        dialog.showNormal()
         dialog.raise_()
         dialog.activateWindow()
 
@@ -11680,12 +11680,15 @@ class PetWindow(QWidget):
             self._manual_activity_until = time.monotonic() + 45
         if isinstance(result, SongPlaybackResult):
             save_settings(self.settings)
-            if result.playlist_created:
-                self.show_music_playlist()
         feedback = result.message or ('音乐操作已完成。' if result.success else '音乐操作暂时无法执行。')
         if getattr(self, '_music_chat_feedback_pending', False):
             self._music_chat_feedback_pending = False
             self._chat_notice(feedback)
+        if (isinstance(result, SongPlaybackResult) and result.playlist_size
+                and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED):
+            if result.playlist_created:
+                self.show_speech(f'已在后台播放《{result.current_title}》♪', 2600)
+            return
         self.show_speech(feedback, 5200 if playing else 6500)
 
     def set_activity(self, activity: str) -> None:
