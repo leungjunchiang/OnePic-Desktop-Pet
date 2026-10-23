@@ -1,4 +1,4 @@
-"""验证音乐与工作报告共用悬停交互、短暂移入余量、隐藏与独立信号。"""
+"""验证音乐与工作报告共用悬停交互；按实际状态限时等待，兼容 Mac 合成事件。"""
 
 import pytest
 from PySide6.QtCore import QPoint
@@ -31,21 +31,22 @@ def test_same_dwell_bridge_and_leave_hide_for_both_shortcuts(panel, primary, sec
     target[0] = primary
     value._poll_hover_button()
     assert not secondary.isVisible()
-    QTest.qWait(155)
-    assert secondary.isVisible() and value._secondary_mode == mode
+    assert QTest.qWaitFor(lambda: secondary.isVisible() and value._secondary_mode == mode, 1500)
     assert primary.mapToGlobal(QPoint(primary.width() // 2, 0)).x() == secondary.mapToGlobal(
         QPoint(secondary.width() // 2, 0)).x()
     target[0] = None
     value._poll_hover_button()
-    QTest.qWait(70)
+    assert value._report_hide_timer.isActive()
     target[0] = secondary
     value._poll_hover_button()
     QTest.qWait(180)
     assert secondary.isVisible()
     target[0] = None
     value._poll_hover_button()
-    QTest.qWait(240)  # 60ms polling must not perpetually restart the 160ms hide timer.
-    assert not secondary.isVisible()
+    # 60ms polling must not perpetually restart the 160ms hide timer. Await
+    # the actual transition rather than assuming the runner schedules it at
+    # one exact wall-clock millisecond (macOS may synthesize later Enter events).
+    assert QTest.qWaitFor(lambda: not secondary.isVisible(), 1500)
 
 
 def test_crossing_music_fast_never_shows_or_plays_and_switching_modes_keeps_primary_row(panel):
