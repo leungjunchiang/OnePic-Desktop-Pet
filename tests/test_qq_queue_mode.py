@@ -2,7 +2,7 @@
 from types import SimpleNamespace
 from onepic_desktop_pet.qqmusic_queue_mode import QQQueueMode, SINGLE
 from test_qqmusic_playlist import queue, track
-from onepic_desktop_pet.music_control import MusicProviderManager
+from onepic_desktop_pet.music_control import MusicProviderManager, WindowsSessionSnapshot
 from onepic_desktop_pet.config import PetSettings
 
 
@@ -91,3 +91,23 @@ def test_thirty_single_loop_wraps_keep_playlist_order_and_create_next_round():
         else:
             assert value.round_number == 2
     assert len(player.sent) == 31 and mode.isolated
+
+
+def test_resume_mode_failure_disarms_and_pauses_instead_of_leaving_old_queue_running():
+    value, _ = queue()
+    state, commands = ['playing'], []
+    def control(source, action):
+        commands.append((source, action))
+        state[0] = 'paused'
+        return True
+    bridge = SimpleNamespace(
+        sessions=lambda: (WindowsSessionSnapshot('QQMusic.exe', track(value, state[0]), frozenset(('play','pause'))),),
+        control=control)
+    manager = MusicProviderManager(PetSettings(), platform_name='win32', windows_bridge=bridge,
+        qq_queue_mode=SimpleNamespace(acquire=lambda: False, release=lambda: True),
+        client_finder=lambda *_: None)
+    manager.qq_playlist = value
+    manager.active_provider, manager._online_qq_selected = 'qq', True
+    result = manager.control('qq', 'play')
+    assert not result.success and result.status.track.playback_status == 'paused'
+    assert not value.auto_advance and commands == [('QQMusic.exe','pause')]

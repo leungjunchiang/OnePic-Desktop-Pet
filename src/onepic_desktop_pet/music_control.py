@@ -1158,7 +1158,11 @@ class MusicProviderManager:
         desired = {'play': 'playing', 'pause': 'paused'}.get(action)
         if desired == 'playing' and self.qq_playlist.entries and self.qq_playlist.matches(before.track):
             if not self.qq_queue_mode.acquire():
-                return result(False, '未确认 QQ 单曲模式，请在 QQ 选择单曲循环后重试。')
+                self.qq_playlist.auto_advance = False
+                paused = self._control_qq_online('pause')
+                return replace(paused, success=False, action=action,
+                    message='未确认 QQ 单曲模式，请先选择单曲循环。' + (
+                        '已暂停。' if paused.success else '暂停尚未确认，请查看 QQ。'))
         if desired and before.track.playback_status.casefold() == desired:
             return result(True, 'QQ 音乐已经在播放。' if desired == 'playing' else 'QQ 音乐已经暂停。')
         if action not in before.controls:
@@ -1170,7 +1174,11 @@ class MusicProviderManager:
             desired = 'paused' if state == 'playing' else 'playing'
         if action == 'toggle' and desired == 'playing' and self.qq_playlist.entries and self.qq_playlist.matches(before.track):
             if not self.qq_queue_mode.acquire():
-                return result(False, '未确认 QQ 单曲模式，请在 QQ 选择单曲循环后重试。')
+                self.qq_playlist.auto_advance = False
+                paused = self._control_qq_online('pause')
+                return replace(paused, success=False, action=action,
+                    message='未确认 QQ 单曲模式，请先选择单曲循环。' + (
+                        '已暂停。' if paused.success else '暂停尚未确认，请查看 QQ。'))
         if QThread.currentThread().isInterruptionRequested():
             return result(False, '音乐操作已取消。')
         try:
