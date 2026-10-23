@@ -1,4 +1,4 @@
-"""QQ 模式使用限时独立进程核验以隔离旧队列；暂停尝试恢复原模式，不在 Qt 内执行 UIA。"""
+"""QQ 模式优先使用客户端原生命令并读回确认，独立进程内保留可访问性回退。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +10,27 @@ import time
 
 MODES = frozenset(('随机播放', '列表循环', '单曲循环', '顺序播放', '单曲播放'))
 SINGLE = '单曲循环'
+NATIVE_MODES = {SINGLE: 1, '顺序播放': 2, '列表循环': 3, '随机播放': 4}
+MODE_SETUP_MESSAGE = ('已找到 QQ 音乐，但没能确认“单曲循环”模式。'
+    '请展开 QQ 音乐，在底部播放栏选择“单曲循环”，再点一次随机听陈楚生。'
+    '已请求暂停，避免原队列插入其他歌曲。')
+
+
+def dispatch_native_mode(executable, target, *, popen=None):
+    """只向已运行且完整路径匹配的 QQ 投递已实测的模式值；投递不等于确认。"""
+    from .music_background import music_client_windows
+    if target not in NATIVE_MODES or executable is None:
+        return False
+    executable = Path(executable)
+    if (executable.name.casefold() != 'qqmusic.exe' or not executable.is_file()
+            or not music_client_windows(executable)):
+        return False
+    # Do not wait for or terminate the client: an existing process can exit
+    # between discovery and dispatch, turning this invocation into a new client.
+    (popen or subprocess.Popen)([str(executable), '/playmode', str(NATIVE_MODES[target])],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        shell=False, creationflags=0x08000000 if sys.platform == 'win32' else 0)
+    return True
 
 
 class QQQueueMode:
@@ -104,7 +125,7 @@ class WindowsQQModeBackend:
 
 
 class _WindowsQQModeNativeBackend:
-    """对完整路径匹配的 QQ 播放栏调用标准可访问性动作，不移动鼠标或置前。"""
+    """优先投递原生命令并读回模式，兼容回退到标准可访问性动作，不移动鼠标。"""
 
     def __init__(self, executable, cancelled=lambda: False):
         self.executable, self.cancelled = executable, cancelled
@@ -114,8 +135,17 @@ class _WindowsQQModeNativeBackend:
         executable = self.executable()
         if executable is None:
             raise OSError('未找到已配置的 QQ 音乐。')
-        roots = [auto.ControlFromHandle(hwnd) for hwnd in music_client_windows(Path(executable))]
-        return [root for root in roots if root is not None]
+        roots = []
+        for hwnd in music_client_windows(Path(executable)):
+            try:
+                root = auto.ControlFromHandle(hwnd)
+                if root is not None:
+                    roots.append(root)
+            except Exception:
+                # A native command briefly creates helper windows which can
+                # close between EnumWindows and ElementFromHandle.
+                continue
+        return roots
 
     def _controls(self, auto):
         stack = [(root, 0) for root in self._roots(auto)]
@@ -123,43 +153,68 @@ class _WindowsQQModeNativeBackend:
         while stack and visited < 2500 and time.monotonic() < deadline and not self.cancelled():
             control, depth = stack.pop()
             visited += 1
-            if control.ControlTypeName in {'ButtonControl', 'MenuItemControl'}:
-                name = control.Name.strip()
-                if name in MODES:
-                    yield name, control
-            if depth < 45:
-                stack.extend((child, depth + 1) for child in control.GetChildren())
+            try:
+                if control.ControlTypeName in {'ButtonControl', 'MenuItemControl'}:
+                    name = control.Name.strip()
+                    if name in MODES:
+                        yield name, control
+                if depth < 45:
+                    stack.extend((child, depth + 1) for child in control.GetChildren())
+            except Exception:
+                continue  # QQ can rebuild the playback bar while changing modes.
 
     def read(self):
         import uiautomation as auto
         with auto.UIAutomationInitializerInThread():
+            modes = set()
             for name, control in self._controls(auto):
-                if control.ControlTypeName != 'ButtonControl':
+                try:
+                    if control.ControlTypeName != 'ButtonControl':
+                        continue
+                    parent = control.GetParentControl()
+                    region = parent.GetParentControl() if parent is not None else None
+                    labels = {child.Name for child in region.GetChildren()} if region is not None else set()
+                    if {'下一曲', '上一曲'} <= labels:
+                        modes.add(name)
+                except Exception:
                     continue
-                parent = control.GetParentControl()
-                region = parent.GetParentControl() if parent is not None else None
-                labels = {child.Name for child in region.GetChildren()} if region is not None else set()
-                if {'下一曲', '上一曲'} <= labels:
-                    return name
+            if len(modes) == 1:
+                return modes.pop()
             raise OSError('QQ 播放栏模式按钮不可访问。')
 
     def _invoke(self, auto, control):
-        pattern = control.GetPattern(auto.PatternId.InvokePattern)
-        try:
-            if pattern is None:
-                raise OSError('QQ 播放模式未提供后台 Invoke。')
-            pattern.Invoke()
-        except Exception as exc:
-            legacy = control.GetPattern(auto.PatternId.LegacyIAccessiblePattern)
+        last_error = None
+        for pattern_id, method in ((auto.PatternId.InvokePattern, 'Invoke'),
+                                   (auto.PatternId.LegacyIAccessiblePattern, 'DoDefaultAction')):
             try:
-                if legacy is None:
-                    raise OSError('QQ 模式没有默认可访问性动作。')
-                legacy.DoDefaultAction()
-            except Exception:
-                raise OSError('QQ 拒绝后台切换播放模式，请先在 QQ 中选择单曲循环。') from exc
+                pattern = control.GetPattern(pattern_id)
+                if pattern is not None and getattr(pattern, method)() is True:
+                    return
+            except Exception as exc:
+                last_error = exc
+        raise OSError('QQ 拒绝后台切换播放模式，请先在 QQ 中选择单曲循环。') from last_error
 
     def set(self, target):
         if target not in MODES:
+            return False
+        if self.cancelled():
+            return False
+        try:
+            accepted = dispatch_native_mode(self.executable(), target)
+        except OSError:
+            accepted = False
+        if accepted:
+            deadline = time.monotonic() + 1.5
+            while not self.cancelled():
+                try:
+                    if self.read() == target:
+                        return True
+                except Exception:
+                    pass  # A transient detached UIA node is not a mode readback.
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.1)
+        if self.cancelled():
             return False
         import uiautomation as auto
         with auto.UIAutomationInitializerInThread():

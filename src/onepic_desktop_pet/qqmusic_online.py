@@ -3,6 +3,7 @@
 仅传递歌曲元数据与客户端命令，不下载音频。目录属于可变化的客户端接口；错误、
 登录和会员限制交给客户端处理。命令只投递一次；元数据匹配不等于精确 ID 或完整
 播放权限已获确认。所有阻塞操作由既有 MusicCommandThread 调用；分页收集歌单，切歌复用候选元数据。
+连续轮播先完成模式设置，再最小化客户端，避免后台隐藏导致可访问性动作失败。
 """
 
 from __future__ import annotations
@@ -209,8 +210,8 @@ class QQMusicOnlinePlayer:
         return self.play_candidate(selected, title=title, artist=artist)
 
     def play_candidate(self, selected: SongCandidate, *, title: str = '',
-                       artist: str = '陈楚生') -> SongPlaybackResult:
-        """投递歌单中的确定歌曲，不重新随机或重新搜索。"""
+                       artist: str = '陈楚生', prepare_queue=None) -> SongPlaybackResult:
+        """投递确定歌曲；连续轮播的准备动作必须早于后台隐藏。"""
 
         def failed(message, code):
             return SongPlaybackResult(False, 'qq', title, artist, message, code)
@@ -226,7 +227,8 @@ class QQMusicOnlinePlayer:
                 self.candidate_dispatcher(client, selected)
             else:
                 self.dispatcher(client, selected.identifier)
-            self._background(client)
+            if prepare_queue is None:
+                self._background(client)
         except (OSError, ValueError) as exc:
             return failed(f'QQ 音乐歌曲投递失败：{exc}', MusicPlaybackError.PLAY_ACTION_FAILED)
         deadline = self.clock() + self.verify_timeout
@@ -238,9 +240,20 @@ class QQMusicOnlinePlayer:
                 latest = self.track_reader()
             except Exception:
                 latest = None
-            self._background(client)
+            if prepare_queue is None:
+                self._background(client)
             if (not self.cancelled() and latest and str(latest.playback_status).casefold() == 'playing'
                     and candidate_matches(selected, latest)):
+                if prepare_queue is not None:
+                    try:
+                        ready = prepare_queue()
+                    finally:
+                        self._background(client)
+                    if self.cancelled():
+                        return failed('音乐操作已取消，正在执行暂停。', MusicPlaybackError.PLAY_ACTION_FAILED)
+                    if not ready:
+                        from .qqmusic_queue_mode import MODE_SETUP_MESSAGE
+                        return failed(MODE_SETUP_MESSAGE, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
                 return SongPlaybackResult(
                     True, 'qq', title, artist,
                     f'QQ 音乐正在播放：{latest.artist}《{latest.title}》，六毛陪你一起听♪',
@@ -250,6 +263,8 @@ class QQMusicOnlinePlayer:
             if remaining <= 0:
                 break
             self.sleep(min(self.poll_interval, remaining))
+        if prepare_queue is not None:
+            self._background(client)
         if self.cancelled():
             return failed('音乐操作已取消，正在执行暂停。', MusicPlaybackError.PLAY_ACTION_FAILED)
         return SongPlaybackResult(
