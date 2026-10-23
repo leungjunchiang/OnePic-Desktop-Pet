@@ -4,9 +4,15 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      mac_contract_probe:
+        description: "Inspect the official macOS QQ Music application without installing or launching it"
+        type: boolean
+        default: false
 
 jobs:
   windows-tests:
+    if: inputs.mac_contract_probe != true
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,6 +63,7 @@ jobs:
     uses: ./.github/workflows/qq-playlist-windows.yml
 
   relay-tests:
+    if: inputs.mac_contract_probe != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,3 +75,19 @@ jobs:
         run: |
           npm test
           npm run check
+
+  mac-qq-contract:
+    if: github.event_name == 'workflow_dispatch' && inputs.mac_contract_probe == true
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Inspect official QQ Music contract without running it
+        run: python tools/inspect_qqmusic_macos.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qqmusic-macos-contract
+          path: qqmusic-macos-contract.json
+          if-no-files-found: error
