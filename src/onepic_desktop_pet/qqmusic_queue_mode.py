@@ -1,7 +1,11 @@
-"""接管 QQ 本机播放模式以隔离旧队列；只调用目标客户端控件，暂停后恢复原模式。"""
+"""QQ 模式使用限时独立进程核验以隔离旧队列；暂停尝试恢复原模式，不在 Qt 内执行 UIA。"""
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import subprocess
+import sys
+import tempfile
 import time
 
 MODES = frozenset(('随机播放', '列表循环', '单曲循环', '顺序播放', '单曲播放'))
@@ -57,6 +61,49 @@ class QQQueueMode:
 
 
 class WindowsQQModeBackend:
+    """每次请求用独立限时进程访问 UIA，避免 COM 指针跨 Qt 线程和调用残留。"""
+
+    def __init__(self, executable, cancelled=lambda: False):
+        self.executable, self.cancelled = executable, cancelled
+
+    def _request(self, action, target=''):
+        with tempfile.TemporaryDirectory(prefix='lili-qq-mode-') as directory:
+            result = Path(directory)/'reply.json'
+            executable = self.executable()
+            args = [action, str(executable or ''), target, str(result)]
+            command = ([sys.executable, '--lili-qq-mode-worker'] if getattr(sys, 'frozen', False)
+                       else [sys.executable, '-m', 'onepic_desktop_pet.qqmusic_mode_worker']) + args
+            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, creationflags=0x08000000 if sys.platform == 'win32' else 0)
+            deadline = time.monotonic() + (10 if action == 'set' else 6)
+            try:
+                while process.poll() is None:
+                    if self.cancelled() or time.monotonic() >= deadline:
+                        raise OSError('QQ 播放模式访问已取消或超时。')
+                    time.sleep(0.04)
+                if not result.is_file():
+                    raise OSError('QQ 模式辅助未返回结果。')
+                reply = json.loads(result.read_text(encoding='utf-8'))
+                if not reply.get('ok'):
+                    raise OSError(reply.get('error') or 'QQ 播放模式暂不可用。')
+                return reply.get('value')
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=1)
+
+    def read(self):
+        return self._request('read')
+
+    def set(self, target):
+        return self._request('set', target) is True
+
+
+class _WindowsQQModeNativeBackend:
     """对完整路径匹配的 QQ 播放栏调用标准可访问性动作，不移动鼠标或置前。"""
 
     def __init__(self, executable, cancelled=lambda: False):

@@ -4,7 +4,7 @@
 职责范围：
 - 解析可选的 `--smoke-test-ms` 自动退出参数；
 - 调用 onepic_desktop_pet.app.run() 启动 Qt 应用；
-- 音频辅助入口先于应用初始化，不创建宠物、托盘或账号同步；
+- 音频与 QQ 模式辅助入口先于应用初始化，不创建宠物、托盘或账号同步；
 - 不包含窗口、行为或配置业务逻辑。
 
 Agent 快速定位：
@@ -46,6 +46,9 @@ def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == "--lili-alarm-audio-worker":
         from onepic_desktop_pet.alarm_audio_process import run_audio_worker
         return run_audio_worker(sys.argv[2])
+    if len(sys.argv) == 6 and sys.argv[1] == '--lili-qq-mode-worker':
+        from onepic_desktop_pet.qqmusic_mode_worker import run_mode_worker
+        return run_mode_worker(sys.argv[2:])
     from onepic_desktop_pet.app import run
     args = parse_args()
     return run(smoke_test_ms=args.smoke_test_ms)

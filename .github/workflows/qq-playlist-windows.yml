@@ -26,6 +26,9 @@ jobs:
       - name: Verify frozen audio helper
         shell: powershell
         run: .\.venv\Scripts\python.exe scripts/verify_packaged_alarm_audio.py dist/Lili/Lili.exe
+      - name: Verify isolated QQ mode helper
+        shell: powershell
+        run: .\.venv\Scripts\python.exe tools/verify_packaged_qq_mode.py dist/Lili/Lili.exe
       - name: Verify isolated frozen application startup and exit
         shell: powershell
         run: |
