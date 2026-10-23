@@ -3043,8 +3043,10 @@ def test_quick_panel_debounces_report_when_pointer_sweeps_across_work() -> None:
     # Moving to another primary shortcut before the dwell threshold cancels
     # the pending secondary row and leaves the dock in one stable layout.
     panel._set_hover_button(panel.music_button, immediate=False)
-    assert not panel._report_show_timer.isActive()
+    assert panel._report_show_timer.isActive()
+    assert panel._pending_secondary_mode == panel.SECONDARY_MUSIC_RANDOM
     assert not panel.report_button.isVisible()
+    assert not panel.random_music_button.isVisible()
 
     # A real dwell still reveals exactly one report tile; it does not create a
     # second row of transient secondary controls.

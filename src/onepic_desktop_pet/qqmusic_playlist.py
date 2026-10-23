@@ -2,6 +2,7 @@
 
 只存歌曲元数据，不下载音频或保存登录信息。歌单属于六毛，不写入 QQ 云端收藏。
 所有修改和媒体查询复用串行音乐线程；持久化失败不会丢失内存中的队列。
+曲终使用原始位置、完整播放截止时间与持续结束状态，外推进度和短暂元数据变化不能触发切歌。
 """
 
 from __future__ import annotations
@@ -52,6 +53,9 @@ class QQPlaylist:
         self.round_number = 0
         self.auto_advance = False
         self._near_end = False
+        self._end_not_before = None
+        self._last_end_position = None
+        self._pending_end = None
         self.load()
 
     def failure(self, message):
@@ -115,6 +119,7 @@ class QQPlaylist:
         self.auto_advance = (not self.player.cancelled()
                              and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
         self._near_end = False
+        self._reset_completion()
         self.save()
         return self.decorate(result, created=True)
 
@@ -146,6 +151,7 @@ class QQPlaylist:
             self.auto_advance = (not self.player.cancelled()
                                  and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
             self._near_end = False
+            self._reset_completion()
             self.save()
             return self.decorate(result)
         return result
@@ -155,26 +161,55 @@ class QQPlaylist:
             return False
         return candidate_matches(self.entries[self.index], track)
 
+    def _reset_completion(self):
+        self._near_end = False
+        self._end_not_before = None
+        self._last_end_position = None
+        self._pending_end = None
+
     def ended(self, track):
-        """先观测曲末才识别自然结束；六毛暂停会预先关闭 auto_advance。"""
+        """播放完整时长后，结束状态还需持续 1.2 秒；暂停与异常快照不会抢切。"""
         if not self.auto_advance or track is None:
+            self._pending_end = None
             return False
+        now = self.clock()
         state = track.playback_status.casefold()
-        if state == 'paused':
-            if (self._near_end and self.matches(track) and track.duration_ms > 0
-                    and track.position_ms >= track.duration_ms - 200):
-                return True
-            self.auto_advance = False
-            self._near_end = False
+        matches = self.matches(track)
+        position = getattr(track, 'raw_position_ms', None)
+        position = track.position_ms if position is None else position
+        duration = track.duration_ms
+        if matches and state == 'playing':
+            self._pending_end = None
+            near = duration > 0 and 0 <= duration - position <= 2500
+            if near:
+                sample = (position, duration)
+                if sample != self._last_end_position:
+                    self._end_not_before = now + max(0, duration - position) / 1000
+                    self._last_end_position = sample
+                self._near_end = True
+            else:
+                self._reset_completion()
             return False
-        if self.matches(track) and state == 'playing':
-            self._near_end = bool(track.duration_ms > 0 and
-                                  track.position_ms >= track.duration_ms - 2500)
-            return False
-        ended = self._near_end and (state == 'stopped' or not self.matches(track))
-        if not ended and not self.matches(track):
+        actual_end = matches and duration > 0 and 0 <= duration - position <= 200
+        if state == 'paused' and not actual_end:
             self.auto_advance = False
-        return ended
+            self._reset_completion()
+            return False
+        terminal = (not matches and bool(track.title) and state in {'playing', 'paused', 'stopped'}) or (
+            actual_end and state in {'paused', 'stopped'})
+        if not terminal or not self._near_end or self._end_not_before is None:
+            self._pending_end = None
+            if not matches:
+                self.auto_advance = False
+                self._reset_completion()
+            return False
+        # A crossfade/metadata update can precede the actual end. Never send
+        # our next-song command before the previous track's full deadline.
+        fingerprint = (track.title, track.artist, track.album, state)
+        if self._pending_end is None or self._pending_end[0] != fingerprint:
+            self._pending_end = (fingerprint, now)
+            return False
+        return now >= self._end_not_before and now - self._pending_end[1] >= 1.2
 
     def save(self):
         if self.store_path is None:

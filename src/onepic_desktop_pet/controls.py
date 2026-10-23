@@ -7,7 +7,7 @@
 快捷音乐菜单提供 QQ 在线随机点歌和真实媒体状态查询。
 快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
 独立宠物图层继续使用透明窗口；工作控制、状态和提示框使用实色窗口承载圆角样式，确保在深色桌面上边框与文字始终可见。
-工作报告二级按钮使用短暂悬停停留确认，快速扫过工作入口时不会闪出错误的整行按钮。
+工作报告与随机听陈楚生共用悬停延迟、跨按钮余量和隐藏规则，二级按钮对齐各自入口。
 计时与纪律小牌共用单层圆角绘制，不叠加矩形底框。
 
 音乐菜单提供六毛三十首在线歌单入口。
@@ -565,6 +565,13 @@ def _quick_icon(kind: str, *, active: bool = False) -> QIcon:
     elif kind == "social":
         painter.setBrush(QBrush(yellow)); painter.setPen(Qt.PenStyle.NoPen); painter.drawEllipse(8, 13, 25, 25); painter.drawEllipse(39, 13, 25, 25)
         painter.setBrush(QBrush(blue)); painter.drawRoundedRect(7, 39, 28, 20, 9, 9); painter.drawRoundedRect(37, 39, 28, 20, 9, 9)
+    elif kind == "music_random":
+        painter.drawPolyline([QPoint(10, 18), QPoint(23, 18), QPoint(49, 54), QPoint(61, 54)])
+        painter.drawPolyline([QPoint(10, 54), QPoint(23, 54), QPoint(49, 18), QPoint(61, 18)])
+        painter.setPen(QPen(red, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawPolyline([QPoint(52, 9), QPoint(62, 18), QPoint(52, 27)])
+        painter.setPen(QPen(yellow, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawPolyline([QPoint(52, 45), QPoint(62, 54), QPoint(52, 63)])
     elif kind == "music":
         # A bold pair of connected eighth notes reads clearly even when the
         # 72px source is rendered as a 22px shortcut icon.
@@ -634,6 +641,7 @@ class QuickControlPanel(QWidget):
 
     SECONDARY_NONE = "none"
     SECONDARY_WORK_REPORT = "work_report"
+    SECONDARY_MUSIC_RANDOM = "music_random"
 
     chat_requested = Signal()
     work_requested = Signal()
@@ -688,6 +696,7 @@ class QuickControlPanel(QWidget):
         self._artist_music_service = "auto"
         self._work_action_label = "开始工作"
         self._secondary_mode = self.SECONDARY_NONE
+        self._pending_secondary_mode = self.SECONDARY_NONE
         # Windows paints a frameless translucent top-level window between a
         # child visibility change and its later resize/move.  With a vertical
         # secondary row this exposed either the old primary-row geometry or
@@ -756,10 +765,17 @@ class QuickControlPanel(QWidget):
         # is aligned with the work button without ever sharing its layout.
         secondary_layout.addSpacing(self.work_button_width_offset())
         secondary_layout.addWidget(self.report_button)
+        # Separate fixed column slots preserve the primary row's geometry.
+        # Only one secondary button is shown, above its own primary shortcut.
+        self.random_music_button = self._button("music_random", "随机听陈楚生", None)
+        self.random_music_button.clicked.connect(lambda: self._choose(self.music_requested))
+        secondary_layout.addSpacing(3 * (42 + shortcut_gap))
+        secondary_layout.addWidget(self.random_music_button)
         secondary_layout.addStretch(1)
         # A visible parent would otherwise make QPushButton's default-visible
         # state leak the report tile into the initial Windows dock.
         self.report_button.hide()
+        self.random_music_button.hide()
         if self._stable_windows_dock:
             # Reserve the exact button-row height from construction onward.
             # The button is still hidden until the work shortcut is hovered.
@@ -779,7 +795,7 @@ class QuickControlPanel(QWidget):
             self.music_button,
             self.food_button,
         )
-        self._hover_buttons = self._quick_buttons + (self.work_button, self.report_button)
+        self._hover_buttons = self._quick_buttons + (self.work_button, self.report_button, self.random_music_button)
         primary_buttons = (
             self.chat_button,
             self.work_button,
@@ -795,7 +811,7 @@ class QuickControlPanel(QWidget):
             button.installEventFilter(self)
         layout.addWidget(self._secondary_container)
         layout.addWidget(self._primary_container)
-        for button in (self.work_button, self.report_button):
+        for button in (self.work_button, self.report_button, self.random_music_button):
             button.setMouseTracking(True)
             button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
             button.installEventFilter(self)
@@ -872,6 +888,7 @@ class QuickControlPanel(QWidget):
         self._hover_poll_timer.stop()
         self._report_show_timer.stop()
         self._report_hide_timer.stop()
+        self._pending_secondary_mode = self.SECONDARY_NONE
         self._hide_hint()
         self._set_secondary_mode(self.SECONDARY_NONE, notify_layout=False)
 
@@ -884,24 +901,17 @@ class QuickControlPanel(QWidget):
     def _set_secondary_mode(self, mode: str, *, notify_layout: bool = True) -> None:
         """Commit one complete secondary state without exposing a layout frame."""
 
-        normalized = (
-            self.SECONDARY_WORK_REPORT
-            if mode == self.SECONDARY_WORK_REPORT
-            else self.SECONDARY_NONE
-        )
-        target_visible = normalized == self.SECONDARY_WORK_REPORT
-        current_visible = (
-            bool(self.report_button.isVisible())
-            if self._stable_windows_dock
-            else bool(self._secondary_container.isVisible())
-        )
-        already_visible = self._secondary_mode == normalized and current_visible == target_visible
+        normalized = mode if mode in {self.SECONDARY_WORK_REPORT, self.SECONDARY_MUSIC_RANDOM} else self.SECONDARY_NONE
+        target_visible = normalized != self.SECONDARY_NONE
+        already_visible = (self._secondary_mode == normalized
+            and self.report_button.isVisible() == (normalized == self.SECONDARY_WORK_REPORT)
+            and self.random_music_button.isVisible() == (normalized == self.SECONDARY_MUSIC_RANDOM))
         self._secondary_mode = normalized
         if already_visible:
             return
         if not target_visible:
             self._report_show_timer.stop()
-            if self._hint_button is self.report_button:
+            if self._hint_button in (self.report_button, self.random_music_button):
                 self._hide_hint()
         else:
             self._report_hide_timer.stop()
@@ -913,7 +923,7 @@ class QuickControlPanel(QWidget):
             # order during a fast pointer sweep.
             self.setUpdatesEnabled(False)
             try:
-                self.report_button.setVisible(target_visible)
+                self._apply_secondary_buttons(normalized)
             finally:
                 self.setUpdatesEnabled(True)
             self.update()
@@ -926,7 +936,7 @@ class QuickControlPanel(QWidget):
         # position are committed; the GUI event loop itself remains running.
         self.setUpdatesEnabled(False)
         try:
-            self.report_button.setVisible(target_visible)
+            self._apply_secondary_buttons(normalized)
             self._secondary_container.setVisible(target_visible)
             self.layout().invalidate()
             self.layout().activate()
@@ -941,6 +951,17 @@ class QuickControlPanel(QWidget):
         self.update()
         if target_visible:
             self._hover_poll_timer.start()
+
+    def _apply_secondary_buttons(self, mode: str) -> None:
+        """Keep fixed column widths even when a different secondary tile is hidden."""
+        row = self._secondary_container.layout()
+        # The report tile occupies column 1. When hidden, retain its 42px
+        # contribution plus the adjacent 6px gap before the music column.
+        row.itemAt(2).spacerItem().changeSize(96 if mode == self.SECONDARY_WORK_REPORT else 144, 0)
+        self.report_button.setVisible(mode == self.SECONDARY_WORK_REPORT)
+        self.random_music_button.setVisible(mode == self.SECONDARY_MUSIC_RANDOM)
+        row.invalidate()
+        row.activate()
 
     def prepare_for_show(self) -> None:
         """Materialize the final Windows dock geometry before it is shown."""
@@ -973,22 +994,30 @@ class QuickControlPanel(QWidget):
     def _schedule_report_hide(self) -> None:
         """Give the pointer a short bridge from the main button to the report."""
 
-        if self.report_button.isVisible():
+        if self._secondary_mode != self.SECONDARY_NONE and not self._report_hide_timer.isActive():
             self._report_hide_timer.start()
 
     def _hide_report_if_pointer_outside(self) -> None:
         """Hide the floating report button only after leaving both hover targets."""
 
         button = self._button_at_global_pos(QCursor.pos())
-        if button in (self.work_button, self.report_button):
+        if self._secondary_mode_for_button(button) == self._secondary_mode and button is not None:
             return
-        self._set_report_button_visible(False)
+        self._set_secondary_mode(self.SECONDARY_NONE)
 
     def _show_report_if_pointer_still_on_work(self) -> None:
         """Materialize the report tile only after a stable work-button hover."""
 
-        if self._button_at_global_pos(QCursor.pos()) is self.work_button:
-            self._set_report_button_visible(True)
+        mode = self._secondary_mode_for_button(self._button_at_global_pos(QCursor.pos()))
+        if mode != self.SECONDARY_NONE and mode == self._pending_secondary_mode:
+            self._set_secondary_mode(mode)
+
+    def _secondary_mode_for_button(self, button) -> str:
+        if button in (self.work_button, self.report_button):
+            return self.SECONDARY_WORK_REPORT
+        if button in (self.music_button, self.random_music_button):
+            return self.SECONDARY_MUSIC_RANDOM
+        return self.SECONDARY_NONE
 
     def _position_report_button(self) -> None:
         """Keep the legacy positioning hook harmless after container split."""
@@ -1015,7 +1044,7 @@ class QuickControlPanel(QWidget):
         self.hover_hint.adjustSize()
         # Keep the report label above its tile so it does not add another
         # visual row below the shortcut dock near the bottom edge of a screen.
-        is_secondary = button is self.report_button
+        is_secondary = button in (self.report_button, self.random_music_button)
         above = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7))
         below = button.mapToGlobal(QPoint(button.width() // 2, button.height() + 7))
         preferred = above if is_secondary else below
@@ -1085,11 +1114,17 @@ class QuickControlPanel(QWidget):
                 self._hide_hint()
             self._schedule_report_hide()
             return
-        if button in (self.work_button, self.report_button):
+        mode = self._secondary_mode_for_button(button)
+        if mode != self.SECONDARY_NONE:
             self._report_hide_timer.stop()
-            if immediate or button is self.report_button:
-                self._set_secondary_mode(self.SECONDARY_WORK_REPORT)
-            elif not self.report_button.isVisible() and not self._report_show_timer.isActive():
+            if mode != self._pending_secondary_mode:
+                self._report_show_timer.stop()
+                if self._secondary_mode != mode:
+                    self._set_secondary_mode(self.SECONDARY_NONE)
+                self._pending_secondary_mode = mode
+            if immediate or button in (self.report_button, self.random_music_button):
+                self._set_secondary_mode(mode)
+            elif self._secondary_mode != mode and not self._report_show_timer.isActive():
                 self._report_show_timer.start()
         else:
             # Work report is the only secondary mode. Moving to another primary

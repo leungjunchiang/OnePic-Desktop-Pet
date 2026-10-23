@@ -1,6 +1,6 @@
 """管理 QQ 后台连续轮播；Windows 会话和实验性 macOS 已授权 AX 均只核对目标客户端。
 
-Windows 时间轴按 UTC 更新时间推算播放进度，暂停时保留真实位置。
+Windows 时间轴的外推只供显示；连续轮播使用客户端原始位置和稳定曲终证据。
 
 QQ 在线点歌复用音乐工作线程，后续控制只使用唯一 QQMusic.exe Session，禁止全局媒体键回退。
 已经暂停或播放时，幂等控制先确认状态，不因客户端禁用重复按钮而误报失败。
@@ -93,6 +93,7 @@ class TrackInfo:
     position_ms: int = 0
     duration_ms: int = 0
     metadata_scope: str = ''
+    raw_position_ms: int | None = None
 
     def display_text(self) -> str:
         if not self.title:
@@ -288,6 +289,8 @@ class WindowsGSMTCBridge:
                     playback_status=status_name.casefold(),
                     position_ms=position,
                     duration_ms=duration,
+                    raw_position_ms=max(0, int((timeline.position - timeline.start_time).total_seconds() * 1000))
+                        if duration else None,
                 )
             except Exception:
                 enabled = frozenset()

@@ -1,4 +1,4 @@
-"""验证三十首连续轮播、优先暂停、以及独立歌单窗口隐藏或最小化不影响播放。"""
+"""验证稳定曲终不提前抢切、三十首换轮、优先暂停及独立歌单后台播放。"""
 
 from dataclasses import replace
 import json
@@ -42,6 +42,8 @@ def queue(tmp_path=None, player=None):
     player = player or Player()
     value = QQPlaylist(player, store_path=tmp_path / 'list.json' if tmp_path else None,
                        shuffle=lambda entries: entries.reverse())
+    value.test_time = [1000.0]
+    value.clock = lambda: value.test_time[0]
     assert value.create().success
     return value, player
 
@@ -135,12 +137,16 @@ def test_natural_completion_after_near_end_advances_but_unknown_duration_does_no
     assert not value.ended(track(value, duration=0))
     assert not value.ended(track(value, 'stopped'))
     assert not value.ended(track(value, position=199000))
+    assert not value.ended(track(value, 'stopped', position=200000))
+    value.test_time[0] += 1.3
     assert value.ended(track(value, 'stopped', position=200000))
 
 
 def test_client_paused_at_actual_end_advances_but_explicit_pause_never_does():
     value, _ = queue()
     assert not value.ended(track(value, position=199000))
+    assert not value.ended(track(value, 'paused', position=200000))
+    value.test_time[0] += 1.3
     assert value.ended(track(value, 'paused', position=200000))
     value.auto_advance = False  # 六毛的优先暂停在系统状态返回前已经关闭续播。
     assert not value.ended(track(value, 'paused', position=200000))
@@ -167,6 +173,8 @@ def test_manager_natural_end_advances_once_and_failure_disarms():
     assert manager.control('auto', 'playlist_tick') is None
     manager._qq_online_track = lambda: track(value, 'stopped', 200000)
     player.fail = True
+    assert manager.control('auto', 'playlist_tick') is None
+    value.test_time[0] += 1.3
     assert not manager.control('auto', 'playlist_tick').success
     assert not value.auto_advance
     assert manager.control('auto', 'playlist_tick') is None
@@ -192,6 +200,8 @@ def test_thirty_natural_ends_generate_another_round_and_pause_stops_all_advancem
         manager._qq_online_track = lambda: track(value, position=199000)
         assert manager.control('auto', 'playlist_tick') is None
         manager._qq_online_track = lambda: track(value, 'stopped', 200000)
+        assert manager.control('auto', 'playlist_tick') is None
+        value.test_time[0] += 1.3
         result = manager.control('auto', 'playlist_tick')
         assert result.success
         assert value.index == expected % 30
@@ -217,11 +227,63 @@ def test_failed_new_round_stops_and_keeps_the_previous_thirty():
     manager._qq_online_track = lambda: track(value, position=199000)
     manager.control('auto', 'playlist_tick')
     manager._qq_online_track = lambda: track(value, 'stopped', 200000)
+    assert manager.control('auto', 'playlist_tick') is None
+    value.test_time[0] += 1.3
     player.fail = True
     before = value.entries
     assert not manager.control('auto', 'playlist_tick').success
     assert value.entries == before and value.round_number == 1
     assert not value.auto_advance and pauses == ['pause']
+
+
+def test_extrapolated_end_cannot_arm_or_cut_a_song_with_raw_position_in_middle():
+    value, player = queue()
+    optimistic = replace(track(value, position=200000), raw_position_ms=70000)
+    assert not value.ended(optimistic)
+    assert not value.ended(TrackInfo('另一首', '陈楚生', '', 'playing'))
+    value.test_time[0] += 10
+    assert not value.ended(TrackInfo('另一首', '陈楚生', '', 'playing'))
+    assert len(player.sent) == 1
+
+
+def test_transient_metadata_and_stopped_status_do_not_trigger_early_next():
+    value, _ = queue()
+    assert not value.ended(track(value, position=197600))
+    changed = TrackInfo('短暂新标题', '陈楚生', '', 'playing')
+    assert not value.ended(changed)
+    value.test_time[0] += 1.3
+    assert not value.ended(changed)  # Stable metadata still cannot shorten the last 2.4s.
+    assert not value.ended(track(value, position=198900))  # Original song returns.
+    value.test_time[0] += 1.3
+    assert not value.ended(track(value, 'stopped', position=198900))  # A buffer/stop in the tail.
+    assert not value.ended(track(value, position=200000))  # Playing alone is never completion.
+    assert not value.ended(track(value, 'stopped', position=200000))
+    value.test_time[0] += 1.3
+    assert value.ended(track(value, 'stopped', position=200000))
+
+
+def test_real_client_transition_waits_for_full_duration_and_stable_successor():
+    value, _ = queue()
+    assert not value.ended(track(value, position=197600))
+    changed = TrackInfo('客户端队列下一首', '陈楚生', '', 'playing')
+    assert not value.ended(changed)
+    value.test_time[0] += 1.3
+    assert not value.ended(changed)
+    value.test_time[0] += 1.2
+    assert value.ended(changed)
+
+
+def test_seek_back_clears_old_end_proof_and_pause_during_confirmation_disarms():
+    value, _ = queue()
+    assert not value.ended(track(value, position=199000))
+    assert not value.ended(track(value, position=30000))
+    value.test_time[0] += 200
+    assert not value.ended(track(value, 'stopped', position=200000))
+    assert not value.ended(track(value, position=199000))
+    assert not value.ended(track(value, 'stopped', position=200000))
+    value.auto_advance = False
+    value.test_time[0] += 2
+    assert not value.ended(track(value, 'stopped', position=200000))
 
 
 def test_select_last_song_preserves_order_and_rejects_invalid_rows():
