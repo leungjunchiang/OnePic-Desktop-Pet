@@ -32,6 +32,11 @@ on:
         required: false
         default: false
         type: boolean
+      publish_as_prerelease:
+        description: "Publish a preview without replacing the latest stable release"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -109,6 +114,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           SKIP_MANIFEST: ${{ inputs.skip_manifest }}
           INCLUDE_MACOS: ${{ inputs.include_macos }}
+          PUBLISH_AS_PRERELEASE: ${{ inputs.publish_as_prerelease }}
         shell: bash
         run: |
           set -euo pipefail
@@ -133,5 +139,10 @@ jobs:
           # Use the repository token so publishing the new tag does not recursively
           # trigger the unrelated tag-push deployment workflow. Only a release
           # containing all three desktop installers can become cross-platform latest.
-          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$INCLUDE_MACOS"
+          if [[ "$PUBLISH_AS_PRERELEASE" == true ]]; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=true --latest=false
+          else
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest="$INCLUDE_MACOS"
+          fi
           test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = false
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" = "$PUBLISH_AS_PRERELEASE"
