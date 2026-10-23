@@ -704,6 +704,7 @@ def test_quick_online_music_signal_reaches_shared_controller(monkeypatch) -> Non
     """快捷口袋的在线随机入口必须连接后台控制器，不能回到网页入口。"""
 
     app, window = _create_window()
+    window.settings.qq_music_path = 'QQMusic.exe'
     calls = []
     monkeypatch.setattr(window.music_controller, 'play_qq_song', lambda: calls.append('qq') or True)
     window.quick_panel.music_requested.emit()

@@ -2,7 +2,7 @@
 
 只存歌曲元数据，不下载音频或保存登录信息。歌单属于六毛，不写入 QQ 云端收藏。
 所有修改和媒体查询复用串行音乐线程；持久化失败不会丢失内存中的队列。
-曲终使用原始位置、完整播放截止时间与持续结束状态，外推进度和短暂元数据变化不能触发切歌。
+连续轮播先确认 QQ 单曲模式隔离旧队列；只在完整曲终或明确单曲回绕后切换六毛下一首。
 """
 
 from __future__ import annotations
@@ -41,12 +41,13 @@ class QQPlaylist:
     SIZE = 30
 
     def __init__(self, player, *, store_path: Path | None = None, shuffle=None, fallback_loader=None,
-                 clock=time.monotonic):
+                 clock=time.monotonic, queue_mode=None, stopper=lambda: None):
         self.player = player
         self.store_path = store_path
         self.shuffle = shuffle or random.SystemRandom().shuffle
         self.fallback_loader = fallback_loader
         self.clock = clock
+        self.queue_mode, self.stopper = queue_mode, stopper
         self._catalog_retry_after = 0.0
         self.entries: tuple[SongCandidate, ...] = ()
         self.index = -1
@@ -114,6 +115,8 @@ class QQPlaylist:
         result = self.player.play_candidate(chosen[0], artist=artist)
         if not result.success:
             return result
+        if not self._acquire_mode(result):
+            return self.failure('QQ 播放模式未能接管，已暂停。请将 QQ 设为“单曲循环”后再试。')
         self.entries, self.index = tuple(chosen), 0
         self.round_number += 1
         self.auto_advance = (not self.player.cancelled()
@@ -147,6 +150,8 @@ class QQPlaylist:
             return self.failure('已经到歌单边界，请重新随机或选择列表中的歌曲。')
         result = self.player.play_candidate(self.entries[target])
         if result.success:
+            if not self._acquire_mode(result):
+                return self.failure('未确认 QQ 单曲模式，已暂停，避免插入原队列歌曲。')
             self.index = target
             self.auto_advance = (not self.player.cancelled()
                                  and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
@@ -167,6 +172,16 @@ class QQPlaylist:
         self._last_end_position = None
         self._pending_end = None
 
+    def _acquire_mode(self, result):
+        if self.queue_mode is None:
+            return True
+        if result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED and self.queue_mode.acquire():
+            return True
+        self.auto_advance = False
+        self.stopper()
+        self.queue_mode.release()
+        return False
+
     def ended(self, track):
         """播放完整时长后，结束状态还需持续 1.2 秒；暂停与异常快照不会抢切。"""
         if not self.auto_advance or track is None:
@@ -179,6 +194,13 @@ class QQPlaylist:
         position = track.position_ms if position is None else position
         duration = track.duration_ms
         if matches and state == 'playing':
+            if (getattr(self.queue_mode, 'isolated', False) and self._near_end
+                    and self._end_not_before is not None and self._last_end_position is not None
+                    and duration == self._last_end_position[1] and position < 2500):
+                # QQ stays on the same song in verified single mode. A real
+                # end-to-start wrap is stronger evidence than metadata change;
+                # it cannot insert an unrelated QQ queue item between ours.
+                return now >= self._end_not_before
             self._pending_end = None
             near = duration > 0 and 0 <= duration - position <= 2500
             if near:
@@ -194,6 +216,8 @@ class QQPlaylist:
         if state == 'paused' and not actual_end:
             self.auto_advance = False
             self._reset_completion()
+            if self.queue_mode is not None:
+                self.queue_mode.release()
             return False
         terminal = (not matches and bool(track.title) and state in {'playing', 'paused', 'stopped'}) or (
             actual_end and state in {'paused', 'stopped'})
@@ -202,6 +226,8 @@ class QQPlaylist:
             if not matches:
                 self.auto_advance = False
                 self._reset_completion()
+                if self.queue_mode is not None:
+                    self.queue_mode.release()
             return False
         # A crossfade/metadata update can precede the actual end. Never send
         # our next-song command before the previous track's full deadline.

@@ -1,11 +1,11 @@
-"""投递歌曲时只最小化路径核验后的 QQ 主窗口，不激活其他应用或发送媒体键。"""
+"""按完整路径枚举 QQ 窗口；后台点歌只最小化目标，不激活其他应用或发送媒体键。"""
 from pathlib import Path
 import sys
 
 
-def background_music_client(executable: Path) -> None:
+def music_client_windows(executable: Path) -> tuple[int, ...]:
     if sys.platform != 'win32' or executable.name.casefold() != 'qqmusic.exe' or not executable.is_file():
-        return
+        return ()
     import ctypes
     from ctypes import wintypes
     user = ctypes.WinDLL('user32', use_last_error=True)
@@ -22,12 +22,11 @@ def background_music_client(executable: Path) -> None:
     kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     expected = str(executable.resolve()).casefold()
+    handles = []
 
     @callback_type
     def visit(hwnd, _):
         try:
-            if not user.IsWindowVisible(hwnd) or user.GetWindow(hwnd, 4):
-                return True
             pid = wintypes.DWORD()
             user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
             process = kernel.OpenProcess(0x1000, False, pid.value)
@@ -38,10 +37,27 @@ def background_music_client(executable: Path) -> None:
                 size = wintypes.DWORD(len(path))
                 if (kernel.QueryFullProcessImageNameW(process, 0, path, ctypes.byref(size))
                         and path.value.casefold() == expected):
-                    user.ShowWindowAsync(hwnd, 7)  # SW_SHOWMINNOACTIVE：不抢前台焦点。
+                    handles.append(int(hwnd))
             finally:
                 kernel.CloseHandle(process)
         except (OSError, ValueError):
             pass
         return True
     user.EnumWindows(visit, 0)
+    return tuple(handles)
+
+
+def background_music_client(executable: Path) -> None:
+    handles = music_client_windows(executable)
+    if not handles:
+        return
+    import ctypes
+    from ctypes import wintypes
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
+    user.GetWindow.argtypes = [wintypes.HWND, ctypes.c_uint]
+    user.GetWindow.restype = wintypes.HWND
+    user.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
+    for hwnd in handles:
+        if user.IsWindowVisible(hwnd) and not user.GetWindow(hwnd, 4):
+            user.ShowWindowAsync(hwnd, 7)  # SW_SHOWMINNOACTIVE：不抢前台焦点。

@@ -1,4 +1,4 @@
-"""验证后台点歌不弹歌单、手动查看不抢常驻置顶，以及优先暂停不重新续播。"""
+"""验证点歌地址引导、后台不弹歌单、上方锚定及优先暂停不重新续播。"""
 
 import os
 from types import SimpleNamespace
@@ -16,10 +16,80 @@ from onepic_desktop_pet.window import PetWindow
 def test_random_menu_entry_calls_online_player_instead_of_browser():
     calls = []
     pet = SimpleNamespace(
+        settings=SimpleNamespace(qq_music_path='QQMusic.exe'),
         music_controller=SimpleNamespace(play_qq_song=lambda: calls.append('online') or True),
         show_speech=lambda *_: None)
     assert PetWindow.play_random_song(pet) == '陈楚生随机歌曲'
     assert calls == ['online']
+
+
+def test_missing_qq_address_goes_to_target_field_and_cancel_does_not_play():
+    calls = []
+    pet = SimpleNamespace(settings=SimpleNamespace(qq_music_path=''),
+        open_settings=lambda source, **kwargs: calls.append((source, kwargs)),
+        music_controller=SimpleNamespace(play_qq_song=lambda: calls.append('play') or True),
+        show_speech=lambda *_: None)
+    assert '地址' in PetWindow.play_random_song(pet)
+    assert len(calls) == 1 and calls[0][1] == {'section': 'qq_music'}
+
+
+def test_saving_qq_address_from_random_action_continues_playback_once():
+    calls = []
+    pet = SimpleNamespace(settings=SimpleNamespace(qq_music_path=''),
+        music_controller=SimpleNamespace(play_qq_song=lambda: calls.append('play') or True),
+        show_speech=lambda *_: None)
+    def settings(source, **kwargs):
+        calls.append(kwargs['section'])
+        pet.settings.qq_music_path = 'QQMusic.exe'
+    pet.open_settings = settings
+    assert PetWindow.play_random_song(pet) == '陈楚生随机歌曲'
+    assert calls == ['qq_music', 'play']
+
+
+def test_settings_scrolls_to_and_focuses_qq_address_without_touching_credentials():
+    from PySide6.QtWidgets import QApplication
+    from onepic_desktop_pet.chat import AISettingsDialog
+    app = QApplication.instance() or QApplication([])
+    credentials = SimpleNamespace(get=lambda *_: '', has=lambda *_: False)
+    dialog = AISettingsDialog(PetSettings(), credentials)
+    dialog.show()
+    app.processEvents()
+    dialog.focus_qq_music_path()
+    app.processEvents()
+    field = dialog.qq_music_path
+    viewport = dialog._settings_scroll.viewport()
+    assert viewport.rect().contains(field.mapTo(viewport, field.rect().center()))
+    assert dialog._settings_scroll.verticalScrollBar().value() > 0
+    assert field.hasFocus()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_playlist_is_above_pet_and_shortcuts_and_follows_anchor(monkeypatch):
+    from PySide6.QtCore import QRect
+    from test_window import _create_window
+    app, pet = _create_window()
+    monkeypatch.setattr(pet, '_screen_geometry', lambda: QRect(0, 0, 1800, 1200))
+    pet.move(700, 900)
+    pet.show_music_playlist()
+    app.processEvents()
+    dialog = pet._music_playlist_dialog
+    assert dialog.frameGeometry().bottom() < min(pet.y(), pet.quick_panel.y())
+    before = dialog.pos()
+    pet.move(400, 800)
+    pet._position_accessories()
+    app.processEvents()
+    assert dialog.pos() != before
+    assert dialog.frameGeometry().bottom() < min(pet.y(), pet.quick_panel.y())
+    dialog.resize(350, 450)
+    app.processEvents()
+    assert dialog.frameGeometry().bottom() < min(pet.y(), pet.quick_panel.y())
+    pet.move(400, 5)
+    pet._position_accessories()
+    app.processEvents()
+    assert not dialog.frameGeometry().intersects(pet.geometry())
+    assert not dialog.frameGeometry().intersects(pet.quick_panel.geometry())
+    dialog.close()
+    pet.close(); pet.deleteLater(); app.processEvents()
 
 
 def test_chat_exact_song_and_pause_use_shared_controller():

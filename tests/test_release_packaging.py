@@ -1,4 +1,4 @@
-"""Validate that public release automation stays cross-platform and private-data safe."""
+"""验证跨平台公开发布、隐私门禁和仅由用户动作定位设置的唯一入口。"""
 
 import re
 from pathlib import Path
@@ -214,6 +214,6 @@ def test_ai_settings_has_one_source_guarded_open_path() -> None:
     ):
         assert forbidden not in combined
     assert combined.count("dialog = AISettingsDialog(") == 1
-    assert "def open_settings(self, source: str) -> bool:" in window
+    assert "def open_settings(self, source: str, *, section: str | None = None) -> bool:" in window
     assert "if source != SETTINGS_SOURCE_USER_ACTION:" in window
     assert "AISettingsDialog" not in chat_manager

@@ -1,4 +1,4 @@
-"""勾选配置使用统一矢量绘制。
+"""设置支持从点歌入口定位 QQ 程序地址；勾选配置使用统一矢量绘制。
 
 本模块实现六毛的半透明聊天面板、AI 设置与生活提醒面板。
 
@@ -864,6 +864,7 @@ class AISettingsDialog(QDialog):
         outer_layout.addWidget(title)
 
         scroll = QScrollArea()
+        self._settings_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1093,6 +1094,7 @@ class AISettingsDialog(QDialog):
         form.addRow("自动选择状态", self.music_status)
 
         self.qq_music_path = QLineEdit(settings.qq_music_path)
+        self.qq_music_path.setAccessibleName('QQ 音乐程序地址')
         self.qq_music_path.setPlaceholderText("自动寻找，或选择 QQMusic.exe / QQMusic.app")
         qq_row = QWidget(); qq_layout = QHBoxLayout(qq_row); qq_layout.setContentsMargins(0, 0, 0, 0)
         qq_pick = QPushButton("选择…"); qq_pick.setObjectName("softButton"); qq_pick.clicked.connect(self._choose_qq_music)
@@ -1173,6 +1175,13 @@ class AISettingsDialog(QDialog):
         lifecycle_log("settings.close_event.begin", self)
         super().closeEvent(event)
         lifecycle_log("settings.close_event.end", self)
+
+    def focus_qq_music_path(self) -> None:
+        """由明确点歌动作定位 QQ 地址输入框，保存后由原调用继续播放。"""
+        self.setWindowTitle('选择 QQ 音乐程序 · 六毛')
+        self._settings_scroll.ensureWidgetVisible(self.qq_music_path, 25, 70)
+        self.qq_music_path.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.qq_music_path.selectAll()
 
     def _music_provider_changed(self) -> None:
         """分别显示应用、Transport 与自动选歌能力，不把安装称为已连接。"""

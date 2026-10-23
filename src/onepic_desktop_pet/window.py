@@ -1,4 +1,4 @@
-"""QQ 在线点歌默认后台播放，歌单仅在手动请求时打开；听歌动作仅由真实状态触发。
+"""QQ 点歌缺地址定位设置；歌单在六毛与快捷坞上方手动打开，后台播放由真实状态触发。
 
 先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
 
@@ -5269,7 +5269,9 @@ class PetWindow(QWidget):
 
         if hasattr(self, "speech_bubble") and self.speech_bubble.isVisible():
             self._position_speech_bubble()
-        if hasattr(self, "quick_panel") and self.quick_panel.isVisible():
+        if hasattr(self, "quick_panel") and (self.quick_panel.isVisible()
+                or (getattr(self, '_music_playlist_dialog', None) is not None
+                    and self._music_playlist_dialog.isVisible())):
             self._position_quick_panel()
         if hasattr(self, "work_controls") and self.work_controls.isVisible():
             self._position_work_controls()
@@ -8069,7 +8071,7 @@ class PetWindow(QWidget):
         if not self.chat_manager.reconnect_now():
             self._chat_notice("AI 已在后台检测中，请稍等一下。")
 
-    def open_settings(self, source: str) -> bool:
+    def open_settings(self, source: str, *, section: str | None = None) -> bool:
         """只允许明确用户动作打开设置；所有自动或未知来源均拒绝并记录。"""
 
         if source != SETTINGS_SOURCE_USER_ACTION:
@@ -8086,6 +8088,8 @@ class PetWindow(QWidget):
             music_manager=self.music_provider_manager,
         )
         lifecycle_log("settings.create", dialog)
+        if section == 'qq_music':
+            QTimer.singleShot(0, dialog.focus_qq_music_path)
         destroyed_signal = getattr(dialog, "destroyed", None)
         if destroyed_signal is not None:
             destroyed_signal.connect(
@@ -11581,7 +11585,12 @@ class PetWindow(QWidget):
         self._change_ambient_activity(mapping.get(category, "none"))
 
     def play_random_song(self) -> str:
-        """生成三十首在线歌单，真实投递第一首并等待媒体播放状态。"""
+        """用户点歌缺少 QQ 地址时定位设置，保存后继续生成并播放歌单。"""
+
+        if not str(self.settings.qq_music_path or '').strip():
+            self.open_settings(SETTINGS_SOURCE_USER_ACTION, section='qq_music')
+            if not str(self.settings.qq_music_path or '').strip():
+                return '请先填写 QQ 音乐程序地址'
 
         if self.music_controller.play_qq_song():
             self.show_speech('正在后台准备陈楚生歌单…', 2600)
@@ -11594,10 +11603,37 @@ class PetWindow(QWidget):
         dialog = getattr(self, '_music_playlist_dialog', None)
         if dialog is None:
             dialog = self._music_playlist_dialog = MusicPlaylistDialog(self.music_controller, self)
+            dialog.anchor_requested.connect(self._position_music_playlist)
         dialog.refresh()
+        self._position_quick_panel()
+        self._position_music_playlist()
         dialog.showNormal()
+        self._position_music_playlist()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _position_music_playlist(self):
+        """把手动查看的歌单放到六毛与快捷坞上方，屏幕不足时避到侧边。"""
+        dialog = getattr(self, '_music_playlist_dialog', None)
+        if dialog is None or dialog.isMinimized():
+            return
+        area = self._screen_geometry()
+        gap = 12
+        anchor_top = min(self.y(), self.quick_panel.y())
+        width, height = dialog.frameGeometry().width(), dialog.frameGeometry().height()
+        x = self.x() + (self.width() - width) // 2
+        y = anchor_top - height - gap
+        if area is not None:
+            if y < area.top():
+                # A small/top-edge desktop cannot fit a full list overhead.
+                # Prefer a side column over covering the pet or shortcuts.
+                right = max(self.x() + self.width(), self.quick_panel.geometry().right()) + gap
+                left = min(self.x(), self.quick_panel.x()) - width - gap
+                x = right if right + width <= area.right() + 1 else left
+                y = area.top()
+            x = min(max(x, area.left()), max(area.left(), area.right() - width + 1))
+            y = min(max(y, area.top()), max(area.top(), area.bottom() - height + 1))
+        dialog.move(x, y)
 
     def open_music_collection(self) -> str:
         """兼容旧调用：保留方法名，但行为与新入口完全一致。"""
@@ -11845,6 +11881,9 @@ class PetWindow(QWidget):
             )
         panel.move(chosen.topLeft())
         panel.position_report_button()
+        dialog = getattr(self, '_music_playlist_dialog', None)
+        if dialog is not None and dialog.isVisible():
+            self._position_music_playlist()
 
     def _position_work_controls(self) -> None:
         """Keep the right-click work controls above the pet with edge fallback."""

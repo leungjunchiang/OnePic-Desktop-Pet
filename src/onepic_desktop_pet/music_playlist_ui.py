@@ -1,6 +1,6 @@
-"""手动打开的轻量歌单：独立可最小化窗口，关闭不影响后台连续播放。"""
+"""手动歌单锚定桌宠上方，可独立最小化；再次随机经主窗口校验 QQ 地址。"""
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout,
 )
@@ -8,6 +8,7 @@ from .music_playback import MusicPlaybackOutcome
 
 
 class MusicPlaylistDialog(QDialog):
+    anchor_requested = Signal()
     def __init__(self, controller, parent=None):
         # 不作为置顶桌宠的 owned dialog，避免跟随桌宠压在其他窗口前面。
         super().__init__(None)
@@ -89,7 +90,8 @@ class MusicPlaylistDialog(QDialog):
         row.addStretch()
         new = QPushButton('换一轮', self)
         new.setToolTip('重新随机生成 30 首')
-        new.clicked.connect(lambda: controller.play_qq_song())
+        new.clicked.connect(lambda: parent.play_random_song() if parent is not None
+                            and hasattr(parent, 'play_random_song') else controller.play_qq_song())
         self.buttons.append(new)
         row.addWidget(new)
         layout.addLayout(row)
@@ -121,6 +123,10 @@ class MusicPlaylistDialog(QDialog):
             if queue.index >= 0:
                 self.songs.scrollToItem(self.songs.item(queue.index))
             self._index = queue.index
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.anchor_requested.emit()
 
     def _result(self, result):
         self.refresh()
