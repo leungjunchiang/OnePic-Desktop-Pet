@@ -2,7 +2,7 @@
 
 只存歌曲元数据，不下载音频或保存登录信息。歌单属于六毛，不写入 QQ 云端收藏。
 所有修改和媒体查询复用串行音乐线程；持久化失败不会丢失内存中的队列。
-连续轮播先确认 QQ 单曲模式隔离旧队列；只在完整曲终或明确单曲回绕后切换六毛下一首。
+连续轮播先确认 QQ 单曲模式隔离旧队列；新鲜曲末进度完整到期即可衔接，不必等重唱开头。
 模式设置安排在客户端最小化之前；失败说明给出播放栏的设置位置。
 生成完毕先保存三十首，再尝试播放；首次接管或点歌失败不会丢失本机已生成歌单。
 """
@@ -60,13 +60,15 @@ class QQPlaylist:
         self._last_end_position = None
         self._pending_end = None
         self._start_stopped = False
+        self._catalog = ()
         self.load()
+        self._reset_completion()
 
     def failure(self, message):
         return SongPlaybackResult(False, 'qq', '', '陈楚生', message,
                                   MusicPlaybackError.RESULT_NOT_FOUND)
 
-    def create(self, artist='陈楚生'):
+    def create(self, artist='陈楚生', *, reuse_catalog=False):
         if self.player.cancelled():
             return self.failure('音乐操作已取消。')
         if self.player.client_finder('qq', self.player.settings.qq_music_path) is None:
@@ -79,11 +81,13 @@ class QQPlaylist:
                             or (self._paid(songs[key]) == self._paid(candidate)
                                 and (songs[key].native or {}).get('primary_artist_only'))):
                     songs[key] = candidate
+        if reuse_catalog:
+            collect(self._catalog or self.entries)
         if self.fallback_loader and canonical(artist) == canonical('陈楚生'):
             collect(self.fallback_loader())
         try:
             has_fallback = sum(not self._paid(s) for s in songs.values()) >= self.SIZE
-            pages = () if has_fallback and self.clock() < self._catalog_retry_after else range(1, 6)
+            pages = () if has_fallback and (reuse_catalog or self.clock() < self._catalog_retry_after) else range(1, 6)
             for page in pages:
                 if self.player.cancelled():
                     return self.failure('音乐操作已取消。')
@@ -117,6 +121,7 @@ class QQPlaylist:
                 chosen[0], chosen[1] = chosen[1], chosen[0]
         if self.player.cancelled():
             return self.failure('音乐操作已取消。')
+        self._catalog = tuple(available)
         self.entries, self.index = tuple(chosen), 0
         self.round_number += 1
         self.auto_advance = False
@@ -183,6 +188,40 @@ class QQPlaylist:
         self._end_not_before = None
         self._last_end_position = None
         self._pending_end = None
+        self._tail_position = None
+        self._tail_samples = 0
+        self._handoff_deadline = None
+        self.completion_reason = None
+
+    def _fresh_tail_complete(self, track, position, duration, now):
+        """至少两次真实曲末推进且新鲜时间轴到完整时长，才允许不等回绕直接衔接。"""
+        age = getattr(track, 'timeline_age_ms', None)
+        if (getattr(track, 'raw_position_ms', None) is None or age is None
+                or not 0 <= age <= 2000 or not 0 <= duration - position <= 2500
+                or duration <= 0 or not getattr(self.queue_mode, 'isolated', False)):
+            self._tail_position = None
+            self._tail_samples = 0
+            self._handoff_deadline = None
+            return False
+        previous = self._tail_position
+        if previous is None or previous[1] != duration or position < previous[0]:
+            self._tail_samples = 1
+            self._handoff_deadline = None
+        elif position > previous[0]:
+            self._tail_samples += 1
+        self._tail_position = (position, duration)
+        deadline = now + (duration - position - age) / 1000
+        self._handoff_deadline = max(deadline, self._handoff_deadline or deadline)
+        complete = self._tail_samples >= 2 and now >= self._handoff_deadline and track.position_ms >= duration
+        if complete:
+            self.completion_reason = 'fresh-timeline-end'
+        return complete
+
+    @property
+    def poll_interval_ms(self):
+        """仅在预计曲终附近短时加密采样，冻结的时间轴恢复普通频率。"""
+        return (75 if self._near_end and self._end_not_before is not None
+                and self.clock() <= self._end_not_before + 2 else 1000)
 
     def _acquire_mode(self, result):
         if self.queue_mode is None:
@@ -222,7 +261,7 @@ class QQPlaylist:
                                   MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
 
     def ended(self, track):
-        """播放完整时长后，结束状态还需持续 1.2 秒；暂停与异常快照不会抢切。"""
+        """新鲜曲末到期及时衔接；无可靠时间轴时保留真实回绕/稳定结束的保守判断。"""
         if not self.auto_advance or track is None:
             self._pending_end = None
             return False
@@ -233,19 +272,26 @@ class QQPlaylist:
         position = track.position_ms if position is None else position
         duration = track.duration_ms
         if matches and state == 'playing':
+            if self._fresh_tail_complete(track, position, duration, now):
+                return True
             if (getattr(self.queue_mode, 'isolated', False) and self._near_end
                     and self._end_not_before is not None and self._last_end_position is not None
                     and duration == self._last_end_position[1] and position < 2500):
                 # QQ stays on the same song in verified single mode. A real
                 # end-to-start wrap is stronger evidence than metadata change;
                 # it cannot insert an unrelated QQ queue item between ours.
-                return now >= self._end_not_before
+                complete = now >= self._end_not_before
+                if complete:
+                    self.completion_reason = 'single-wrap'
+                return complete
             self._pending_end = None
             near = duration > 0 and 0 <= duration - position <= 2500
             if near:
                 sample = (position, duration)
                 if sample != self._last_end_position:
-                    self._end_not_before = now + max(0, duration - position) / 1000
+                    age = getattr(track, 'timeline_age_ms', None)
+                    age = age if age is not None and 0 <= age <= 2000 else 0
+                    self._end_not_before = now + max(0, duration - position - age) / 1000
                     self._last_end_position = sample
                 self._near_end = True
             else:

@@ -1,7 +1,7 @@
 """管理 QQ 后台连续轮播；Windows 会话和实验性 macOS 已授权 AX 均只核对目标客户端。
 
 连续轮播接管 QQ 单曲模式以隔离原队列；恢复歌单选曲先锁定 QQ，优先暂停不误控其他播放器。
-暂停恢复原模式，原始时间轴回绕识别完整曲终。
+暂停恢复原模式；新鲜曲末时间轴配合加密轮询，在完整截止时暂停旧曲后衔接下一首。
 
 QQ 在线点歌复用音乐工作线程，后续控制只使用唯一 QQMusic.exe Session，禁止全局媒体键回退。
 已经暂停或播放时，幂等控制先确认状态，不因客户端禁用重复按钮而误报失败。
@@ -95,6 +95,7 @@ class TrackInfo:
     duration_ms: int = 0
     metadata_scope: str = ''
     raw_position_ms: int | None = None
+    timeline_age_ms: int | None = None
 
     def display_text(self) -> str:
         if not self.title:
@@ -211,6 +212,19 @@ def _windows_timeline_ms(timeline, state: str, *, rate=None, now=None) -> tuple[
         return 0, 0
 
 
+def _windows_timeline_age_ms(timeline, state, *, rate=None, now=None):
+    """只为正常速率、两秒内的新鲜 Playing 快照提供曲末衔接依据。"""
+    try:
+        updated = timeline.last_updated_time
+        if state != 'playing' or not isinstance(updated, datetime) or (rate is not None and float(rate) != 1):
+            return None
+        updated = updated if updated.tzinfo is not None else updated.replace(tzinfo=timezone.utc)
+        age = ((now or datetime.now(timezone.utc)) - updated).total_seconds() * 1000
+        return int(age) if 0 <= age <= 2000 else None
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+
+
 class WindowsGSMTCBridge:
     """用 PyWinRT 调用 Windows 全局媒体 Session API。"""
 
@@ -292,6 +306,8 @@ class WindowsGSMTCBridge:
                     duration_ms=duration,
                     raw_position_ms=max(0, int((timeline.position - timeline.start_time).total_seconds() * 1000))
                         if duration else None,
+                    timeline_age_ms=_windows_timeline_age_ms(timeline, status_name.casefold(),
+                        rate=getattr(playback, 'playback_rate', None)) if duration else None,
                 )
             except Exception:
                 enabled = frozenset()
@@ -1098,16 +1114,47 @@ class MusicProviderManager:
         if not self.qq_playlist.ended(track):
             return None
         self.qq_playlist.auto_advance = False
+        if getattr(mode, 'isolated', False) and not self._pause_qq_handoff():
+            paused = self._control_qq_online('pause')
+            return replace(paused, success=False,
+                           message='曲终衔接暂停未获确认，已停止连续轮播，请查看 QQ 音乐。')
         if self.qq_playlist.index + 1 < len(self.qq_playlist.entries):
             result = self.qq_playlist.move(1)
         else:
             # 自动轮换更新现有列表，不像用户点击随机入口那样反复弹窗。
-            result = replace(self.qq_playlist.create(), playlist_created=False)
+            result = replace(self.qq_playlist.create(reuse_catalog=True), playlist_created=False)
         if not self.qq_playlist.auto_advance:
             # 切歌或新一轮未获确认时停止旧 QQ 队列，避免错误曲目继续播放。
             self._control_qq_online('pause')
             result = replace(result, message=result.message + ' 自动续播未获确认，已停止连续轮播。')
         return result
+
+    def _pause_qq_handoff(self):
+        """完整曲终先暂停唯一 QQ 会话，保留单曲隔离，阻止旧曲在装载下一首时重唱。"""
+        try:
+            session = self._qq_online_session()
+            if session is None or not self.qq_playlist.matches(session.track):
+                return False
+            state = session.track.playback_status.casefold()
+            if state in {'paused', 'stopped'}:
+                return True
+            if state != 'playing' or 'pause' not in session.controls:
+                return False
+            bridge = self.mac_qq_bridge if self.platform_name == 'darwin' else self.windows_bridge
+            if not bridge.control(session.source_id, 'pause'):
+                return False
+            deadline = time.monotonic() + .5
+            while True:
+                session = self._qq_online_session()
+                if session is None or not self.qq_playlist.matches(session.track):
+                    return False
+                if session.track.playback_status.casefold() in {'paused', 'stopped'}:
+                    return True
+                if time.monotonic() >= deadline or QThread.currentThread().isInterruptionRequested():
+                    return False
+                time.sleep(.02)
+        except Exception:
+            return False
 
     def play_qq_playlist_index(self, index: int):
         # Restored local playlists must also reserve priority pause for QQ
@@ -1899,8 +1946,13 @@ class MusicController(QObject):
                 playlist.auto_advance = False
             self._playlist_timer.stop()
             return
-        if getattr(getattr(self.manager, 'qq_playlist', None), 'auto_advance', False) and not self._playlist_timer.isActive():
-            self._playlist_timer.start()
+        playlist = getattr(self.manager, 'qq_playlist', None)
+        if getattr(playlist, 'auto_advance', False):
+            interval = getattr(playlist, 'poll_interval_ms', 1000)
+            if self._playlist_timer.interval() != interval:
+                self._playlist_timer.setInterval(interval)
+            if not self._playlist_timer.isActive():
+                self._playlist_timer.start()
         if result is None:
             return
         if isinstance(result, MusicControlResult):

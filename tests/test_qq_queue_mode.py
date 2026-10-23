@@ -1,4 +1,4 @@
-"""验证原生命令及模式读回、最小化前准备、失败暂停，以及完整单曲回绕才续播。"""
+"""验证原生命令及模式读回、最小化前准备、失败暂停，以及曲终衔接的保守回绕兜底。"""
 from contextlib import nullcontext
 from pathlib import Path
 import sys
@@ -85,6 +85,7 @@ def test_thirty_single_loop_wraps_keep_playlist_order_and_create_next_round():
     value.queue_mode = mode
     manager = MusicProviderManager(PetSettings(), platform_name='win32', client_finder=lambda *_: None)
     manager.qq_playlist = value
+    manager._pause_qq_handoff = lambda: True
     for index in range(1, 31):
         before = value.entries[(value.index + 1) % 30].identifier
         manager._qq_online_track = lambda: track(value, position=199000)
