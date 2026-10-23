@@ -1,10 +1,19 @@
 """验证音乐与工作报告共用悬停交互；按实际状态限时等待，兼容 Mac 合成事件。"""
 
 import pytest
+import time
 from PySide6.QtCore import QPoint
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication
 from onepic_desktop_pet.controls import QuickControlPanel
+
+
+def wait_until(condition):
+    """轮询真实状态并持续处理 Qt 事件，不依赖 C++ 模板的 Python 绑定。"""
+    deadline = time.monotonic() + 1.5
+    while not condition() and time.monotonic() < deadline:
+        QTest.qWait(10)
+    return condition()
 
 
 @pytest.fixture
@@ -31,7 +40,7 @@ def test_same_dwell_bridge_and_leave_hide_for_both_shortcuts(panel, primary, sec
     target[0] = primary
     value._poll_hover_button()
     assert not secondary.isVisible()
-    assert QTest.qWaitFor(lambda: secondary.isVisible() and value._secondary_mode == mode, 1500)
+    assert wait_until(lambda: secondary.isVisible() and value._secondary_mode == mode)
     assert primary.mapToGlobal(QPoint(primary.width() // 2, 0)).x() == secondary.mapToGlobal(
         QPoint(secondary.width() // 2, 0)).x()
     target[0] = None
@@ -46,7 +55,7 @@ def test_same_dwell_bridge_and_leave_hide_for_both_shortcuts(panel, primary, sec
     # 60ms polling must not perpetually restart the 160ms hide timer. Await
     # the actual transition rather than assuming the runner schedules it at
     # one exact wall-clock millisecond (macOS may synthesize later Enter events).
-    assert QTest.qWaitFor(lambda: not secondary.isVisible(), 1500)
+    assert wait_until(lambda: not secondary.isVisible())
 
 
 def test_crossing_music_fast_never_shows_or_plays_and_switching_modes_keeps_primary_row(panel):
