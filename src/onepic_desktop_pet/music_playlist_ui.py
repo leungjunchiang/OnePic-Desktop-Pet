@@ -1,4 +1,4 @@
-"""手动歌单锚定桌宠上方，可独立最小化；再次随机经主窗口校验 QQ 地址。"""
+"""本机歌单提供空列表引导、明确的选曲控制及桌宠上方定位，播放失败仍可查看重试。"""
 
 from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtWidgets import (
@@ -16,11 +16,12 @@ class MusicPlaylistDialog(QDialog):
             parent.destroyed.connect(self.deleteLater)
             self.setWindowIcon(parent.windowIcon())
         self.controller = controller
+        self._owner = parent
         self._entries = ()
         self._index = -1
         self._playing = False
         self.setObjectName('musicPlaylist')
-        self.setWindowTitle('陈楚生 · 歌单')
+        self.setWindowTitle('六毛歌单 · 陈楚生')
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowTitleHint
                             | Qt.WindowType.WindowSystemMenuHint | Qt.WindowType.WindowMinimizeButtonHint
                             | Qt.WindowType.WindowCloseButtonHint)
@@ -65,6 +66,10 @@ class MusicPlaylistDialog(QDialog):
         self.summary = QLabel(self)
         self.summary.setObjectName('playlistSummary')
         layout.addWidget(self.summary)
+        self.empty = QLabel('点“随机30首”生成本机歌单', self)
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty.setStyleSheet('color: #77857d; padding: 25px 4px;')
+        layout.addWidget(self.empty)
         self.songs = QListWidget(self)
         self.songs.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.songs.setTextElideMode(Qt.TextElideMode.ElideRight)
@@ -84,14 +89,13 @@ class MusicPlaylistDialog(QDialog):
             button.setFixedWidth(66 if action == 'toggle' else 34)
             if action == 'toggle':
                 button.setObjectName('playlistToggle')
-            button.clicked.connect(lambda _checked=False, command=action: controller.perform(command))
+            button.clicked.connect(lambda _checked=False, command=action: self._command(command))
             self.buttons.append(button)
             row.addWidget(button)
         row.addStretch()
-        new = QPushButton('换一轮', self)
+        new = self.new_round_button = QPushButton('换一轮', self)
         new.setToolTip('重新随机生成 30 首')
-        new.clicked.connect(lambda: parent.play_random_song() if parent is not None
-                            and hasattr(parent, 'play_random_song') else controller.play_qq_song())
+        new.clicked.connect(self._new_round)
         self.buttons.append(new)
         row.addWidget(new)
         layout.addLayout(row)
@@ -107,7 +111,11 @@ class MusicPlaylistDialog(QDialog):
     def refresh(self):
         queue = self.controller.manager.qq_playlist
         self.summary.setText(f'第 {queue.round_number} 轮  ·  {queue.index + 1:02d} / {len(queue.entries)} 首'
-                             if queue.entries else '暂无歌单')
+                             if queue.entries else '本机还没有歌单')
+        self.summary.setToolTip('歌单保存在这台电脑的六毛中')
+        self.empty.setVisible(not queue.entries)
+        self.songs.setVisible(bool(queue.entries))
+        self.new_round_button.setText('换一轮' if queue.entries else '随机30首')
         entries = tuple((s.identifier, s.title, s.artist) for s in queue.entries)
         changed = entries != self._entries
         if changed:
@@ -123,6 +131,32 @@ class MusicPlaylistDialog(QDialog):
             if queue.index >= 0:
                 self.songs.scrollToItem(self.songs.item(queue.index))
             self._index = queue.index
+        self._busy(self.controller.busy)
+
+    def _new_round(self):
+        if self._owner is not None and hasattr(self._owner, 'play_random_song'):
+            self._owner.play_random_song()
+        else:
+            self.controller.play_qq_song()
+
+    def _command(self, action):
+        queue = self.controller.manager.qq_playlist
+        if action == 'toggle':
+            if self.controller.busy or self._playing:
+                self.controller.perform('pause')
+            elif queue.entries:
+                row = self.songs.currentRow()
+                self.controller.play_qq_playlist_index(row if row >= 0 else queue.index)
+            else:
+                self._new_round()
+            return
+        if not queue.entries:
+            return
+        target = queue.index + (1 if action == 'next' else -1)
+        if action == 'next' and target >= len(queue.entries):
+            self._new_round()
+        elif 0 <= target < len(queue.entries):
+            self.controller.play_qq_playlist_index(target)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -130,17 +164,22 @@ class MusicPlaylistDialog(QDialog):
 
     def _result(self, result):
         self.refresh()
+        if getattr(result, 'provider', None) != 'qq':
+            return
         track = getattr(getattr(result, 'status', None), 'track', None)
-        if getattr(result, 'outcome', None) is MusicPlaybackOutcome.PLAYBACK_CONFIRMED:
+        if not result.success and not self.controller.manager.qq_playlist.auto_advance:
+            self._playing = False
+        elif getattr(result, 'outcome', None) is MusicPlaybackOutcome.PLAYBACK_CONFIRMED:
             self._playing = True
         elif track is not None:
             self._playing = track.playback_status.casefold() == 'playing'
         confirmed = track is not None or getattr(result, 'outcome', None) is MusicPlaybackOutcome.PLAYBACK_CONFIRMED
-        self.state.setText(('正在播放' if self._playing else '已暂停') if result.success and confirmed else '请查看 QQ 音乐')
+        self.state.setText(('正在播放' if self._playing else '已暂停') if result.success and confirmed
+                           else ('待播放' if self._entries else '请查看 QQ 音乐'))
         self.state.setToolTip(result.message)
         self.buttons[1].setText('暂停' if self._playing else '播放')
 
     def _busy(self, busy):
         self.buttons[1].setText('暂停' if busy or self._playing else '播放')
         for index, button in enumerate(self.buttons):
-            button.setEnabled(index == 1 or not busy)
+            button.setEnabled(index == 1 or (not busy and (index == 3 or bool(self._entries))))

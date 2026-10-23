@@ -10,7 +10,7 @@
 工作报告与随机听陈楚生共用悬停延迟、跨按钮余量和隐藏规则，二级按钮对齐各自入口。
 计时与纪律小牌共用单层圆角绘制，不叠加矩形底框。
 
-音乐菜单提供六毛三十首在线歌单入口。
+音乐悬停区同时提供随机点歌与文字歌单入口，共用延迟、移出隐藏和固定列定位。
 """
 
 from __future__ import annotations
@@ -771,11 +771,17 @@ class QuickControlPanel(QWidget):
         self.random_music_button.clicked.connect(lambda: self._choose(self.music_requested))
         secondary_layout.addSpacing(3 * (42 + shortcut_gap))
         secondary_layout.addWidget(self.random_music_button)
+        self.music_playlist_button = self._button("music_playlist", "查看陈楚生歌单", None)
+        self.music_playlist_button.setIcon(QIcon())
+        self.music_playlist_button.setText("歌单")
+        self.music_playlist_button.clicked.connect(lambda: self._choose(self.music_playlist_requested))
+        secondary_layout.addWidget(self.music_playlist_button)
         secondary_layout.addStretch(1)
         # A visible parent would otherwise make QPushButton's default-visible
         # state leak the report tile into the initial Windows dock.
         self.report_button.hide()
         self.random_music_button.hide()
+        self.music_playlist_button.hide()
         if self._stable_windows_dock:
             # Reserve the exact button-row height from construction onward.
             # The button is still hidden until the work shortcut is hovered.
@@ -795,7 +801,8 @@ class QuickControlPanel(QWidget):
             self.music_button,
             self.food_button,
         )
-        self._hover_buttons = self._quick_buttons + (self.work_button, self.report_button, self.random_music_button)
+        self._hover_buttons = self._quick_buttons + (self.work_button, self.report_button,
+                                                    self.random_music_button, self.music_playlist_button)
         primary_buttons = (
             self.chat_button,
             self.work_button,
@@ -811,7 +818,7 @@ class QuickControlPanel(QWidget):
             button.installEventFilter(self)
         layout.addWidget(self._secondary_container)
         layout.addWidget(self._primary_container)
-        for button in (self.work_button, self.report_button, self.random_music_button):
+        for button in (self.work_button, self.report_button, self.random_music_button, self.music_playlist_button):
             button.setMouseTracking(True)
             button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
             button.installEventFilter(self)
@@ -905,13 +912,14 @@ class QuickControlPanel(QWidget):
         target_visible = normalized != self.SECONDARY_NONE
         already_visible = (self._secondary_mode == normalized
             and self.report_button.isVisible() == (normalized == self.SECONDARY_WORK_REPORT)
-            and self.random_music_button.isVisible() == (normalized == self.SECONDARY_MUSIC_RANDOM))
+            and self.random_music_button.isVisible() == (normalized == self.SECONDARY_MUSIC_RANDOM)
+            and self.music_playlist_button.isVisible() == (normalized == self.SECONDARY_MUSIC_RANDOM))
         self._secondary_mode = normalized
         if already_visible:
             return
         if not target_visible:
             self._report_show_timer.stop()
-            if self._hint_button in (self.report_button, self.random_music_button):
+            if self._hint_button in (self.report_button, self.random_music_button, self.music_playlist_button):
                 self._hide_hint()
         else:
             self._report_hide_timer.stop()
@@ -960,6 +968,7 @@ class QuickControlPanel(QWidget):
         row.itemAt(2).spacerItem().changeSize(96 if mode == self.SECONDARY_WORK_REPORT else 144, 0)
         self.report_button.setVisible(mode == self.SECONDARY_WORK_REPORT)
         self.random_music_button.setVisible(mode == self.SECONDARY_MUSIC_RANDOM)
+        self.music_playlist_button.setVisible(mode == self.SECONDARY_MUSIC_RANDOM)
         row.invalidate()
         row.activate()
 
@@ -1015,7 +1024,7 @@ class QuickControlPanel(QWidget):
     def _secondary_mode_for_button(self, button) -> str:
         if button in (self.work_button, self.report_button):
             return self.SECONDARY_WORK_REPORT
-        if button in (self.music_button, self.random_music_button):
+        if button in (self.music_button, self.random_music_button, self.music_playlist_button):
             return self.SECONDARY_MUSIC_RANDOM
         return self.SECONDARY_NONE
 
@@ -1044,7 +1053,7 @@ class QuickControlPanel(QWidget):
         self.hover_hint.adjustSize()
         # Keep the report label above its tile so it does not add another
         # visual row below the shortcut dock near the bottom edge of a screen.
-        is_secondary = button in (self.report_button, self.random_music_button)
+        is_secondary = button in (self.report_button, self.random_music_button, self.music_playlist_button)
         above = button.mapToGlobal(QPoint(button.width() // 2, -self.hover_hint.height() - 7))
         below = button.mapToGlobal(QPoint(button.width() // 2, button.height() + 7))
         preferred = above if is_secondary else below
@@ -1122,7 +1131,7 @@ class QuickControlPanel(QWidget):
                 if self._secondary_mode != mode:
                     self._set_secondary_mode(self.SECONDARY_NONE)
                 self._pending_secondary_mode = mode
-            if immediate or button in (self.report_button, self.random_music_button):
+            if immediate or button in (self.report_button, self.random_music_button, self.music_playlist_button):
                 self._set_secondary_mode(mode)
             elif self._secondary_mode != mode and not self._report_show_timer.isActive():
                 self._report_show_timer.start()
@@ -1169,6 +1178,11 @@ class QuickControlPanel(QWidget):
         """Open only actionable music controls; no Now Playing panel."""
 
         menu = QMenu(self)
+        playlist = menu.addAction("查看陈楚生歌单…")
+        playlist.triggered.connect(lambda _checked=False: self._choose(self.music_playlist_requested))
+        random_song = menu.addAction("随机听陈楚生（QQ 在线）")
+        random_song.triggered.connect(lambda _checked=False: self._choose(self.music_requested))
+        menu.addSeparator()
         for label, command in (
             ("播放 / 暂停", "toggle"),
             ("上一首", "previous"),
@@ -1182,10 +1196,6 @@ class QuickControlPanel(QWidget):
                 )
             )
         menu.addSeparator()
-        random_song = menu.addAction("随机听陈楚生（QQ 在线）")
-        random_song.triggered.connect(lambda _checked=False: self._choose(self.music_requested))
-        playlist = menu.addAction("查看陈楚生歌单…")
-        playlist.triggered.connect(lambda _checked=False: self._choose(self.music_playlist_requested))
         artist = menu.addAction("听陈楚生…")
         artist.triggered.connect(lambda _checked=False: self._choose(self.chen_artist_requested))
         platform_menu = menu.addMenu("音乐平台")

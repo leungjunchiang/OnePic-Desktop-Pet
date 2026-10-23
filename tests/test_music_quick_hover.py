@@ -1,4 +1,4 @@
-"""验证音乐与工作报告共用悬停交互；按实际状态限时等待，兼容 Mac 合成事件。"""
+"""验证随机与歌单双入口共用工作报告的悬停/移出规则，查看歌单不触发播放。"""
 
 import pytest
 import time
@@ -83,3 +83,47 @@ def test_crossing_music_fast_never_shows_or_plays_and_switching_modes_keeps_prim
     target[0] = None
     value._poll_hover_button()
     assert not value.random_music_button.isVisible()
+
+
+def test_playlist_is_discoverable_beside_random_and_stays_until_leaving_both(panel):
+    value, target, app = panel
+    viewed, played = QSignalSpy(value.music_playlist_requested), QSignalSpy(value.music_requested)
+    original=value.music_button.mapToGlobal(QPoint(0,0))
+    target[0]=value.music_button
+    value._poll_hover_button()
+    assert wait_until(lambda:value.music_playlist_button.isVisible() and value.random_music_button.isVisible())
+    assert value.music_playlist_button.text()=='歌单'
+    assert value.rect().contains(value.music_playlist_button.mapTo(value,value.music_playlist_button.rect().bottomRight()))
+    if value._stable_windows_dock:
+        assert value.music_button.mapToGlobal(QPoint(0,0))==original
+    target[0]=value.music_playlist_button
+    value._poll_hover_button()
+    QTest.qWait(180)
+    assert value.music_playlist_button.isVisible() and value.random_music_button.isVisible()
+    target[0]=None
+    value._poll_hover_button()
+    assert wait_until(lambda:not value.music_playlist_button.isVisible() and not value.random_music_button.isVisible())
+    target[0]=value.music_button
+    value._set_hover_button(value.music_button)
+    value.music_playlist_button.click()
+    assert viewed.count()==1 and played.count()==0 and not value.isVisible()
+
+
+def test_music_menu_puts_saved_playlist_first_and_does_not_play_on_view(panel, monkeypatch):
+    from PySide6.QtWidgets import QMenu
+    value, _, app = panel
+    viewed, played = QSignalSpy(value.music_playlist_requested), QSignalSpy(value.music_requested)
+    titles=[]
+    def execute(menu,*_):
+        titles.extend(action.text() for action in menu.actions())
+        menu.actions()[0].trigger()
+    def menu_factory(parent):
+        menu=QMenu(parent)
+        # The application decorates each QMenu instance for native safety;
+        # replace exec after construction rather than patching its base type.
+        menu.exec=lambda *args:execute(menu,*args)
+        return menu
+    monkeypatch.setattr('onepic_desktop_pet.controls.QMenu',menu_factory)
+    value._show_music_menu()
+    assert titles[:2]==['查看陈楚生歌单…','随机听陈楚生（QQ 在线）']
+    assert viewed.count()==1 and played.count()==0

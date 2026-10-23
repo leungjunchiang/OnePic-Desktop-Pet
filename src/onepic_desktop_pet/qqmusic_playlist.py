@@ -4,6 +4,7 @@
 所有修改和媒体查询复用串行音乐线程；持久化失败不会丢失内存中的队列。
 连续轮播先确认 QQ 单曲模式隔离旧队列；只在完整曲终或明确单曲回绕后切换六毛下一首。
 模式设置安排在客户端最小化之前；失败说明给出播放栏的设置位置。
+生成完毕先保存三十首，再尝试播放；首次接管或点歌失败不会丢失本机已生成歌单。
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ class QQPlaylist:
         self._end_not_before = None
         self._last_end_position = None
         self._pending_end = None
+        self._start_stopped = False
         self.load()
 
     def failure(self, message):
@@ -113,13 +115,20 @@ class QQPlaylist:
             if (chosen[0].identifier == previous.identifier
                     or canonical(chosen[0].title) == canonical(previous.title)):
                 chosen[0], chosen[1] = chosen[1], chosen[0]
-        result = self._play_candidate(chosen[0], artist=artist)
-        if not result.success:
-            return result
-        if not self._acquire_mode(result):
-            return self._mode_failure()
+        if self.player.cancelled():
+            return self.failure('音乐操作已取消。')
         self.entries, self.index = tuple(chosen), 0
         self.round_number += 1
+        self.auto_advance = False
+        self._reset_completion()
+        self.save()
+        result = self._play_candidate(chosen[0], artist=artist)
+        if not result.success:
+            if not self._start_stopped:
+                self._stop_unisolated()
+            return self.decorate(result, created=True)
+        if not self._acquire_mode(result):
+            return self.decorate(self._mode_failure(), created=True)
         self.auto_advance = (not self.player.cancelled()
                              and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
         self._near_end = False
@@ -152,7 +161,7 @@ class QQPlaylist:
         result = self._play_candidate(self.entries[target])
         if result.success:
             if not self._acquire_mode(result):
-                return self._mode_failure()
+                return self.decorate(self._mode_failure())
             self.index = target
             self.auto_advance = (not self.player.cancelled()
                                  and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
@@ -160,7 +169,9 @@ class QQPlaylist:
             self._reset_completion()
             self.save()
             return self.decorate(result)
-        return result
+        if not self._start_stopped:
+            self._stop_unisolated()
+        return self.decorate(result)
 
     def matches(self, track):
         if not track or not 0 <= self.index < len(self.entries):
@@ -184,6 +195,7 @@ class QQPlaylist:
         return False
 
     def _play_candidate(self, selected, **kwargs):
+        self._start_stopped = False
         if self.queue_mode is not None:
             kwargs['prepare_queue'] = self._prepare_queue_mode
         return self.player.play_candidate(selected, **kwargs)
@@ -195,12 +207,14 @@ class QQPlaylist:
         return False
 
     def _stop_unisolated(self):
+        self._start_stopped = True
         self.auto_advance = False
         self._reset_completion()
         try:
             self.stopper()
         finally:
-            self.queue_mode.release()
+            if self.queue_mode is not None:
+                self.queue_mode.release()
 
     def _mode_failure(self):
         from .qqmusic_queue_mode import MODE_SETUP_MESSAGE

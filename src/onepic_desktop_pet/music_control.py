@@ -1,6 +1,7 @@
 """管理 QQ 后台连续轮播；Windows 会话和实验性 macOS 已授权 AX 均只核对目标客户端。
 
-连续轮播接管 QQ 单曲模式以隔离原队列；暂停恢复原模式，原始时间轴回绕识别完整曲终。
+连续轮播接管 QQ 单曲模式以隔离原队列；恢复歌单选曲先锁定 QQ，优先暂停不误控其他播放器。
+暂停恢复原模式，原始时间轴回绕识别完整曲终。
 
 QQ 在线点歌复用音乐工作线程，后续控制只使用唯一 QQMusic.exe Session，禁止全局媒体键回退。
 已经暂停或播放时，幂等控制先确认状态，不因客户端禁用重复按钮而误报失败。
@@ -1109,6 +1110,9 @@ class MusicProviderManager:
         return result
 
     def play_qq_playlist_index(self, index: int):
+        # Restored local playlists must also reserve priority pause for QQ
+        # before their first selection finishes or is cancelled.
+        self.active_provider, self._online_qq_selected = 'qq', True
         result = self.qq_playlist.select(index)
         if result.success:
             self.active_provider, self._online_qq_selected = 'qq', True

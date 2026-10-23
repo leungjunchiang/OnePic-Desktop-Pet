@@ -1,4 +1,4 @@
-"""验证稳定曲终不提前抢切、三十首换轮、优先暂停及独立歌单后台播放。"""
+"""验证先保存后播放、失败可恢复的新设备歌单，以及曲终换轮与独立界面控制。"""
 
 from dataclasses import replace
 import json
@@ -101,14 +101,41 @@ def test_cancelled_or_missing_client_does_not_dispatch():
     assert len(player.sent) == 1
 
 
-def test_failed_dispatch_does_not_advance_or_replace_queue(tmp_path):
+def test_failed_selection_keeps_position_but_new_random_saves_its_prepared_queue(tmp_path):
     value, player = queue(tmp_path)
     before = (tmp_path / 'list.json').read_bytes()
     player.fail = True
     assert not value.move(1).success
-    assert not value.create().success
-    assert value.index == 0
     assert (tmp_path / 'list.json').read_bytes() == before
+    result=value.create()
+    assert not result.success and result.playlist_created and result.playlist_size == 30
+    assert value.index == 0
+    restored=QQPlaylist(player,store_path=tmp_path/'list.json')
+    assert restored.entries == value.entries and restored.round_number == 2
+    assert not restored.auto_advance
+
+
+def test_fresh_computer_keeps_thirty_on_disk_even_when_first_play_fails(tmp_path):
+    player=Player()
+    player.fail=True
+    path=tmp_path/'new-computer'/'music'/'qq-playlist.json'
+    value=QQPlaylist(player,store_path=path,shuffle=lambda _:None)
+    assert not path.exists() and not value.entries
+    normal_play=player.play_candidate
+    def play(selected,**kwargs):
+        saved=json.loads(path.read_text(encoding='utf-8'))
+        assert len(saved['songs'])==30 and saved['songs'][0]['id']==selected.identifier
+        return normal_play(selected,**kwargs)
+    player.play_candidate=play
+    result=value.create()
+    assert not result.success and result.playlist_created and result.playlist_size==30
+    restored=QQPlaylist(player,store_path=path)
+    assert len(restored.entries)==30 and restored.entries==value.entries and not restored.auto_advance
+    player.play_candidate=normal_play
+    player.fail=False
+    searches=player.searched[:]
+    assert restored.select(0).success and player.searched==searches
+    assert player.sent[-1]==restored.entries[0].identifier
 
 
 def test_previous_at_start_stops_but_next_at_end_creates_fresh_round():
@@ -217,7 +244,7 @@ def test_thirty_natural_ends_generate_another_round_and_pause_stops_all_advancem
     assert len(player.sent) == count and not value.auto_advance
 
 
-def test_failed_new_round_stops_and_keeps_the_previous_thirty():
+def test_failed_new_round_stops_and_keeps_the_new_thirty_ready_for_retry():
     value, player = queue()
     value.index = 29
     manager = MusicProviderManager(PetSettings(), platform_name='win32', client_finder=lambda *_: None)
@@ -230,9 +257,8 @@ def test_failed_new_round_stops_and_keeps_the_previous_thirty():
     assert manager.control('auto', 'playlist_tick') is None
     value.test_time[0] += 1.3
     player.fail = True
-    before = value.entries
     assert not manager.control('auto', 'playlist_tick').success
-    assert value.entries == before and value.round_number == 1
+    assert len(value.entries) == 30 and value.round_number == 2 and value.index == 0
     assert not value.auto_advance and pauses == ['pause']
 
 
@@ -395,7 +421,7 @@ def test_dialog_shows_all_thirty_and_buttons_use_shared_controller():
     try:
         assert dialog.songs.count() == 30
         dialog.buttons[2].click()
-        assert controller.calls == ['next']
+        assert controller.calls == [1]
         value.move(1)
         controller.result_ready.emit(value.decorate(player_result := SongPlaybackResult(True, 'qq', '', '', 'next')))
         assert dialog.songs.currentRow() == 1
@@ -443,3 +469,45 @@ def test_playlist_window_is_independent_and_can_minimize_without_pausing():
     finally:
         dialog.deleteLater()
         parent.close()
+
+
+def test_empty_and_failed_playlist_have_a_visible_recovery_action_without_native_next():
+    from PySide6.QtCore import QObject, Signal
+    from PySide6.QtWidgets import QApplication
+    from onepic_desktop_pet.music_playlist_ui import MusicPlaylistDialog
+    app=QApplication.instance() or QApplication([])
+    player=Player()
+    value=QQPlaylist(player,shuffle=lambda _:None)
+    class Controller(QObject):
+        result_ready=Signal(object)
+        busy_changed=Signal(bool)
+        busy=False
+        manager=SimpleNamespace(qq_playlist=value)
+        calls=[]
+        def perform(self,action):self.calls.append(action)
+        def play_qq_song(self):self.calls.append('random')
+        def play_qq_playlist_index(self,index):self.calls.append(index)
+    controller=Controller()
+    dialog=MusicPlaylistDialog(controller)
+    dialog.show();app.processEvents()
+    try:
+        assert dialog.empty.isVisible() and dialog.new_round_button.text()=='随机30首'
+        assert not dialog.buttons[0].isEnabled() and not dialog.buttons[2].isEnabled()
+        dialog.new_round_button.click()
+        assert controller.calls==['random']
+        player.fail=True
+        result=value.create()
+        controller.result_ready.emit(result);app.processEvents()
+        assert dialog.songs.count()==30 and not dialog.empty.isVisible()
+        assert dialog.state.text()=='待播放' and dialog.buttons[1].text()=='播放'
+        dialog.songs.setCurrentRow(6)
+        dialog.buttons[1].click()
+        assert controller.calls[-1]==6
+        dialog.buttons[2].click()
+        assert controller.calls[-1]==1
+        value.index=29;dialog.refresh()
+        dialog.buttons[2].click()
+        assert controller.calls[-1]=='random'
+        assert 'next' not in controller.calls and 'toggle' not in controller.calls
+    finally:
+        dialog.close();dialog.deleteLater();app.processEvents()

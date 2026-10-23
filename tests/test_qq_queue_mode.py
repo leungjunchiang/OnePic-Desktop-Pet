@@ -54,10 +54,10 @@ def test_claimed_invoke_success_without_readback_never_arms():
     value.queue_mode = mode
     pauses = []
     value.stopper = lambda: pauses.append('pause')
-    original = value.entries
     result = value.create()
     assert not result.success and not value.auto_advance
-    assert pauses == ['pause'] and value.entries == original
+    assert pauses == ['pause'] and len(value.entries) == 30
+    assert result.playlist_size == 30 and result.playlist_created
 
 
 def test_verified_single_loop_wrap_advances_without_a_foreign_track():
@@ -161,7 +161,7 @@ def test_failed_mode_action_pauses_before_backgrounding_and_explains_setup():
     assert not result.success and not mode.isolated and not playlist.auto_advance
     assert result.error_code is MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE
     assert '已找到 QQ 音乐' in result.message and '底部播放栏' in result.message
-    assert not playlist.entries and playlist.index == -1
+    assert len(playlist.entries) == 30 and playlist.index == 0
     assert events == ['dispatch', 'mode', 'pause', 'background']
 
 

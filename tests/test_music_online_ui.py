@@ -1,6 +1,7 @@
-"""验证点歌地址引导、后台不弹歌单、上方锚定及优先暂停不重新续播。"""
+"""验证新设备选曲锁定 QQ、歌单重新打开及地址引导、上方锚定与优先暂停。"""
 
 import os
+import pytest
 from types import SimpleNamespace
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -74,6 +75,12 @@ def test_playlist_is_above_pet_and_shortcuts_and_follows_anchor(monkeypatch):
     app.processEvents()
     dialog = pet._music_playlist_dialog
     assert dialog.frameGeometry().bottom() < min(pet.y(), pet.quick_panel.y())
+    dialog.showMinimized()
+    app.processEvents()
+    pet.show_music_playlist()
+    app.processEvents()
+    assert dialog.isVisible() and not dialog.isMinimized()
+    assert dialog.frameGeometry().bottom() < min(pet.y(), pet.quick_panel.y())
     before = dialog.pos()
     pet.move(400, 800)
     pet._position_accessories()
@@ -102,6 +109,54 @@ def test_chat_exact_song_and_pause_use_shared_controller():
     assert pet._music_chat_feedback_pending
     PetWindow._handle_chat_local_command(pet, '暂停音乐')
     assert calls == [('song', ('山楂花', '陈楚生')), ('control', 'pause')]
+
+
+def test_restored_playlist_selection_reserves_qq_pause_before_attempting_playback():
+    from onepic_desktop_pet.music_control import MusicProviderManager
+    manager=MusicProviderManager(PetSettings(),platform_name='win32',client_finder=lambda *_:None)
+    manager.active_provider='spotify'
+    manager._online_qq_selected=False
+    seen=[]
+    def select(index):
+        seen.append((manager.active_provider,manager._online_qq_selected,index))
+        return SongPlaybackResult(False,'qq','','陈楚生','first attempt failed')
+    manager.qq_playlist.select=select
+    result=manager.play_qq_playlist_index(0)
+    assert not result.success and seen==[('qq',True,0)]
+
+
+def test_fresh_profile_failed_playlist_can_be_opened_from_visible_shortcut(tmp_path, monkeypatch):
+    from test_window import _create_window
+    from test_qqmusic_playlist import Player
+    from onepic_desktop_pet.qqmusic_playlist import QQPlaylist
+    player=Player()
+    player.fail=True
+    path=tmp_path/'another-computer'/'music'/'qq-playlist.json'
+    prepared=QQPlaylist(player,store_path=path)
+    assert not prepared.create().success
+    restored=QQPlaylist(player,store_path=path)
+    app,pet=_create_window()
+    pet.music_controller.manager.qq_playlist=restored
+    monkeypatch.setattr(pet.music_controller,'play_qq_song',lambda *_:pytest.fail('Viewing must not start audio'))
+    try:
+        pet.show_quick_panel()
+        panel=pet.quick_panel
+        panel._button_at_global_pos=lambda _:panel.music_button
+        panel._set_hover_button(panel.music_button)
+        app.processEvents()
+        assert panel.music_playlist_button.isVisible()
+        panel.music_playlist_button.click()
+        app.processEvents()
+        dialog=pet._music_playlist_dialog
+        assert dialog.isVisible() and dialog.songs.count()==30
+        assert not pet.music_controller.busy and not restored.auto_advance
+        assert not panel.isVisible()
+        dialog.showMinimized();app.processEvents()
+        pet.show_music_playlist();app.processEvents()
+        assert dialog.isVisible() and not dialog.isMinimized() and dialog.songs.count()==30
+        dialog.close()
+    finally:
+        pet.close();pet.deleteLater();app.processEvents()
 
 
 def test_unverified_dispatch_reports_reason_without_headphones(monkeypatch):
