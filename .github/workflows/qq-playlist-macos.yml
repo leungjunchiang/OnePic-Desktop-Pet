@@ -46,7 +46,9 @@ jobs:
           bash scripts/build_macos.sh
       - name: Verify frozen application startup and clean exit
         env:
-          QT_QPA_PLATFORM: offscreen
+          # Exercise the normal Cocoa startup: Qt must initialize NSApplication
+          # before the real Dock/status-item bridge touches WindowServer.
+          QT_QPA_PLATFORM: cocoa
           ONEPIC_USE_DEMO_ASSETS: '1'
         run: |
           export LOCALAPPDATA="$RUNNER_TEMP/lili-mac-smoke-${{ matrix.arch }}"
