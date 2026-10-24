@@ -1,4 +1,4 @@
-"""验证原生命令及模式读回、最小化前准备、失败暂停，以及曲终衔接的保守回绕兜底。"""
+"""验证原生命令、深层网页不遮挡播放栏、读回确认及曲终隔离兜底。"""
 from contextlib import nullcontext
 from pathlib import Path
 import sys
@@ -264,3 +264,33 @@ def test_mode_readback_rejects_conflicting_player_bars(monkeypatch):
     backend._controls=lambda _api:((SINGLE,button),('随机播放',button))
     with pytest.raises(OSError,match='不可访问'):
         backend.read()
+
+
+def test_large_web_branch_cannot_consume_budget_before_shallow_playback_bar():
+    class Control:
+        ControlTypeName='PaneControl'
+        Name=''
+        def __init__(self,children=()):
+            self.children=children
+        def GetChildren(self):
+            return self.children
+    mode=Control()
+    mode.ControlTypeName='ButtonControl'
+    mode.Name=SINGLE
+    dense=Control([Control() for _ in range(2600)])
+    # Reverse depth-first search follows this web branch and exhausts its budget.
+    root=Control([mode,dense])
+    backend=_WindowsQQModeNativeBackend(lambda:None)
+    backend._roots=lambda _api:[root]
+    assert list(backend._controls(None))==[(SINGLE,mode)]
+
+
+@pytest.mark.parametrize('previous,next_', [('上一曲','下一曲'),('上一首','下一首')])
+def test_mode_readback_supports_home_and_song_detail_playback_bars(monkeypatch,previous,next_):
+    monkeypatch.setitem(sys.modules,'uiautomation',SimpleNamespace(UIAutomationInitializerInThread=nullcontext))
+    region=SimpleNamespace(GetChildren=lambda:[SimpleNamespace(Name=previous),SimpleNamespace(Name=next_)])
+    parent=SimpleNamespace(GetParentControl=lambda:region)
+    button=SimpleNamespace(ControlTypeName='ButtonControl',GetParentControl=lambda:parent)
+    backend=_WindowsQQModeNativeBackend(lambda:Path('QQMusic.exe'))
+    backend._controls=lambda _api:((SINGLE,button),)
+    assert backend.read()==SINGLE

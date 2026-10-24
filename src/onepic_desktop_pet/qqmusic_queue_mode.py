@@ -1,7 +1,8 @@
-"""QQ 模式优先使用客户端原生命令并读回确认，独立进程内保留可访问性回退。"""
+"""QQ 模式读回兼容首页与歌曲详情页，优先遍历浅层播放栏并确认相邻切歌控件。"""
 from __future__ import annotations
 
 from pathlib import Path
+from collections import deque
 import json
 import subprocess
 import sys
@@ -148,10 +149,10 @@ class _WindowsQQModeNativeBackend:
         return roots
 
     def _controls(self, auto):
-        stack = [(root, 0) for root in self._roots(auto)]
+        pending = deque((root, 0) for root in self._roots(auto))
         deadline, visited = time.monotonic() + 2.5, 0
-        while stack and visited < 2500 and time.monotonic() < deadline and not self.cancelled():
-            control, depth = stack.pop()
+        while pending and visited < 2500 and time.monotonic() < deadline and not self.cancelled():
+            control, depth = pending.popleft()
             visited += 1
             try:
                 if control.ControlTypeName in {'ButtonControl', 'MenuItemControl'}:
@@ -159,7 +160,7 @@ class _WindowsQQModeNativeBackend:
                     if name in MODES:
                         yield name, control
                 if depth < 45:
-                    stack.extend((child, depth + 1) for child in control.GetChildren())
+                    pending.extend((child, depth + 1) for child in control.GetChildren())
             except Exception:
                 continue  # QQ can rebuild the playback bar while changing modes.
 
@@ -174,7 +175,7 @@ class _WindowsQQModeNativeBackend:
                     parent = control.GetParentControl()
                     region = parent.GetParentControl() if parent is not None else None
                     labels = {child.Name for child in region.GetChildren()} if region is not None else set()
-                    if {'下一曲', '上一曲'} <= labels:
+                    if (labels & {'下一曲', '下一首'} and labels & {'上一曲', '上一首'}):
                         modes.add(name)
                 except Exception:
                     continue
