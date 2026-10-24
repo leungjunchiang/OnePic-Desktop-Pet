@@ -1032,6 +1032,13 @@ class MusicProviderManager:
 
         if action == 'playlist_tick':
             return self._playlist_tick()
+        if (action in {'next', 'previous', 'play', 'pause', 'toggle'}
+                and self.qq_playlist.native_queue is not None
+                and self.active_provider in {None, 'qq'} and provider in {'auto', 'qq'}):
+            try:
+                self.qq_playlist.sync_native_position(self._qq_online_track())
+            except Exception:
+                pass
         if action in {'next', 'previous'} and self.qq_playlist.entries and (
                 self.active_provider in {None, 'qq'} and provider in {'auto', 'qq'}):
             result = self.qq_playlist.move(1 if action == 'next' else -1)

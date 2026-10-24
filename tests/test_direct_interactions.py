@@ -1,4 +1,4 @@
-"""验证直接回应继承原发送者、单次异步 RPC、防连点、失败恢复和投喂复用。"""
+"""验证直接回应与防连点；定时恢复按事件条件等待，兼容 Mac 的定时器调度余量。"""
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import threading
@@ -103,6 +103,9 @@ def test_reply_success_stays_disabled_then_restores(app):
     captured[0](True)
     assert button.text() == "✓ 已回击" and not button.isEnabled()
     QTest.qWait(2150)
+    # Coarse Qt timers can be delivered after this fixed wait on busy Mac
+    # runners. Keep the real timer and bound the event-driven condition wait.
+    wait_for(app, lambda: button.text() == "嘲讽回去" and button.isEnabled())
     assert button.text() == "嘲讽回去" and button.isEnabled()
     feed.close(); feed.deleteLater()
 

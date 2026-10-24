@@ -180,3 +180,7 @@ def test_real_player_dispatches_full_queue_and_manager_follows_without_reissuing
     value.select(12)
     assert current[0].title==value.entries[12].title and value.index==12
     assert len(commands)==2
+    # QQ has just advanced again but the one-second pet poll has not run.
+    current[0]=track(value,13)
+    result=manager.control('auto','next')
+    assert result.success and value.index==14 and current[0].title==value.entries[14].title

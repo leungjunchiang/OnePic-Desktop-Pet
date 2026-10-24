@@ -266,9 +266,7 @@ class QQPlaylist:
             if matched is not None:
                 self._native_pending = None
                 if matched != self.index:
-                    self.index = matched
-                    self._reset_completion()
-                    self.save()
+                    self.sync_native_position(track)
                     return self.decorate(SongPlaybackResult(True, 'qq', '', '陈楚生',
                         f'QQ 音乐：{track.artist}《{track.title}》', selected=self.entries[matched],
                         current_title=track.title, current_artist=track.artist,
@@ -303,6 +301,20 @@ class QQPlaylist:
             if now >= self._end_not_before and now - self._native_pending[1] >= 1.2:
                 return 'round'
         return None
+
+    def sync_native_position(self, track):
+        """手动控制前同步真实位置，避免曲终刚换歌而轮询未到时重播同一首。"""
+        if self.native_queue is None or not self.native_loaded or track is None:
+            return False
+        matched = next((i for i, song in enumerate(self.entries) if candidate_matches(song, track)), None)
+        if matched is None:
+            return False
+        if matched != self.index:
+            self.index = matched
+            self._native_pending = None
+            self._reset_completion()
+            self.save()
+        return True
 
     def _prepare_queue_mode(self):
         if not self.player.cancelled() and self.queue_mode.acquire():
