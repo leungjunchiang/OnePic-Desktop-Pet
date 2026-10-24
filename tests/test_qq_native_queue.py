@@ -37,7 +37,7 @@ def native(entries, mutate=None):
             if mutate:mutate(row)
             result[name]={'code':0,'data':{'track_info':row}}
         return result
-    return QQNativeQueue(request_json=fetch,popen=lambda *a,**k: commands.append((a,k))),requests,commands
+    return QQNativeQueue(request_json=fetch,popen=lambda *a,**k: commands.append((a,k)),running_check=lambda _:None),requests,commands
 
 
 def test_complete_thirty_keeps_order_selected_index_and_never_targets_cloud(tmp_path):

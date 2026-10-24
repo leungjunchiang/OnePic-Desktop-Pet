@@ -1,4 +1,4 @@
-"""QQ 模式专用辅助入口：不加载 Qt/账号，仅在当前用户随机临时目录回传一次结果。"""
+"""QQ 模式与启动就绪只读检查入口：不加载 Qt/账号，仅在随机临时目录回传状态。"""
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -22,12 +22,12 @@ def run_mode_worker(args):
             with auto.UIAutomationInitializerInThread():
                 assert auto.GetRootControl() is not None
             value = 'ready'
-        elif action in {'read', 'set'}:
+        elif action in {'read', 'set', 'startup'}:
             from .qqmusic_queue_mode import _WindowsQQModeNativeBackend, MODES
             backend = _WindowsQQModeNativeBackend(lambda: Path(executable) if executable else None)
             if action == 'set' and target not in MODES:
                 raise ValueError('不支持的 QQ 播放模式。')
-            value = backend.read() if action == 'read' else backend.set(target)
+            value = backend.startup_state() if action == 'startup' else backend.read() if action == 'read' else backend.set(target)
         else:
             raise ValueError('不支持的 QQ 模式操作。')
         reply = {'ok': True, 'value': value}

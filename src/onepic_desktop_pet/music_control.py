@@ -7,6 +7,7 @@ Windows 通过 QQ 原生临时队列顺序衔接，六毛跟随实际曲目；�
 QQ 在线点歌复用音乐工作线程，后续控制只使用唯一 QQMusic.exe Session，禁止全局媒体键回退。
 已经暂停或播放时，幂等控制先确认状态，不因客户端禁用重复按钮而误报失败。
 Windows 媒体会话明确标记来源；QQ 不返回专辑时仍须匹配完整版本标题和全部歌手。
+Windows 先复用唯一已运行版本，冷启动普通打开并等待登录就绪；未就绪不投递歌单。
 
 ``MusicSongResolver`` 只负责搜索歌手、选择内容并让一首歌开始播放；
 ``MusicTransportController`` 只负责已经开始播放后的 Play/Pause/Next/Previous 和元数据。
@@ -773,13 +774,17 @@ class MusicProviderManager:
             candidate_dispatcher=self.mac_qq_bridge.play_candidate if self.mac_qq_bridge else None,
             verification_detail=(lambda: self.mac_qq_bridge.last_error) if self.mac_qq_bridge else None,
         )
+        if self.platform_name == 'win32' and windows_bridge is None and client_finder is find_music_client:
+            from .qqmusic_startup import WindowsQQStartup
+            self.qq_online_player.client_preparer = WindowsQQStartup(
+                cancelled=self.qq_online_player.cancelled).ensure
         from .qqmusic_queue_mode import QQQueueMode, WindowsQQModeBackend, MacQQModeBackend
         if self.platform_name == 'win32' and windows_bridge is None and qq_native_queue is None:
             from .qqmusic_native_queue import QQNativeQueue
             qq_native_queue = QQNativeQueue(cancelled=self.qq_online_player.cancelled)
         self.qq_queue_mode = qq_queue_mode or QQQueueMode(
             MacQQModeBackend(self.mac_qq_bridge) if self.mac_qq_bridge is not None else
-            WindowsQQModeBackend(lambda: self.client_finder('qq', self.settings.qq_music_path),
+            WindowsQQModeBackend(lambda: self.qq_online_player.current_client or self.client_finder('qq', self.settings.qq_music_path),
                                  cancelled=lambda: QThread.currentThread().isInterruptionRequested()),
             cancelled=lambda: QThread.currentThread().isInterruptionRequested(),
             target='顺序播放' if qq_native_queue is not None else '单曲循环')
@@ -1108,6 +1113,8 @@ class MusicProviderManager:
                 self.qq_playlist.auto_advance = False
         else:
             result = self.qq_playlist.create(artist)
+        if result.error_code is MusicPlaybackError.CLIENT_NOT_READY:
+            self.qq_playlist.block_unready_client()
         if result.success:
             self.active_provider = 'qq'
             self._online_qq_selected = True
@@ -1132,7 +1139,7 @@ class MusicProviderManager:
                 return None
             self.qq_playlist.auto_advance = False
             result = replace(self.qq_playlist.create(reuse_catalog=True), playlist_created=False)
-            if not self.qq_playlist.auto_advance:
+            if not self.qq_playlist.auto_advance and result.error_code is not MusicPlaybackError.CLIENT_NOT_READY:
                 self._control_qq_online('pause')
             return result
         if (getattr(mode, 'isolated', False) and self.qq_playlist._near_end
@@ -1153,7 +1160,7 @@ class MusicProviderManager:
         else:
             # 自动轮换更新现有列表，不像用户点击随机入口那样反复弹窗。
             result = replace(self.qq_playlist.create(reuse_catalog=True), playlist_created=False)
-        if not self.qq_playlist.auto_advance:
+        if not self.qq_playlist.auto_advance and result.error_code is not MusicPlaybackError.CLIENT_NOT_READY:
             # 切歌或新一轮未获确认时停止旧 QQ 队列，避免错误曲目继续播放。
             self._control_qq_online('pause')
             result = replace(result, message=result.message + ' 自动续播未获确认，已停止连续轮播。')

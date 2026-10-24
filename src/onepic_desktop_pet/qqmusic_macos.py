@@ -3,6 +3,7 @@
 官方 Mac 客户端没有播放脚本字典。只在唯一 QQ 进程、明确播放栏和真实时间轴均可
 读取时确认播放；缺少权限或控件不匹配时明确失败，不猜测播放状态或改控其他应用。
 广度优先读取公开 AX 属性，兼容搜索子角色、占位文字与明确搜索按钮；只读自检不操作播放器。
+搜索前等待明确登录标记消失和搜索框就绪，不在登录恢复或验证界面输入歌曲。
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ import re
 import time
 
 from .qqmusic_online import artist_names, canonical
+from .qqmusic_startup import QQClientNotReady, LOGIN_LABELS, BUSY_LABELS
 
 BUNDLE_ID = 'com.tencent.QQMusicMac'
 PLAY = frozenset(('播放', '播放音乐', 'Play', 'Play music'))
@@ -272,19 +274,30 @@ class QQMusicMacBridge:
             self.backend = NativeAX(cancelled=self.cancelled)
         ensure = getattr(self.backend, 'ensure_running', None)
         launched = bool(ensure(executable)) if callable(ensure) else False
-        deadline = self.clock() + 8
+        deadline = self.clock() + 25
+        stable = 0
         while True:
             if self.cancelled():
                 raise OSError('音乐操作已取消。')
             try:
                 _app, tree = self._read()
-                break
+                labels = {n.text.strip() for n in tree.descendants()}
+                blocked = bool(labels & (LOGIN_LABELS | BUSY_LABELS))
+                stable = stable + 1 if not blocked and len(search_fields(tree)) == 1 else 0
+                if stable >= 2:
+                    break
+                if not launched and not blocked and len(search_fields(tree)) != 1:
+                    break  # Preserve the precise search-control diagnostic, without waiting for login.
+                if (not launched and labels & LOGIN_LABELS) or self.clock() >= deadline:
+                    raise QQClientNotReady('[Mac QQ / 登录] QQ 尚未登录或界面未就绪，未输入搜索或请求播放。请在 QQ 完成登录后重试。')
             except PermissionError:
+                raise
+            except QQClientNotReady:
                 raise
             except OSError:
                 if not launched or self.clock() >= deadline:
                     raise
-                self.sleep(.25)
+            self.sleep(.25)
         fields = search_fields(tree)
         title = re.split(r'[（(]', selected.title, maxsplit=1)[0].strip()
         if len(fields) != 1 or not self.backend.search(fields[0], f'陈楚生 {title}'):

@@ -1,4 +1,4 @@
-"""验证在线目录、冷启动后台参数、取消竞态和真实播放确认，不误控其他应用或隐藏窗口。"""
+"""验证在线目录、已运行客户端单次投递、取消竞态和真实播放确认，不操作登录。"""
 
 from pathlib import Path
 from threading import Event
@@ -140,16 +140,12 @@ def test_pause_cancellation_during_media_read_cannot_return_late_playing_success
     assert len(sent) == 1
 
 
-@pytest.mark.parametrize('cold', [False, True])
-def test_native_dispatch_uses_numeric_id_without_shell_or_wait(tmp_path, monkeypatch, cold):
-    from onepic_desktop_pet import qqmusic_online
-    options = {'startupinfo': object()} if cold else {}
-    monkeypatch.setattr(qqmusic_online, 'qq_background_startup_options', lambda _: options)
+def test_native_dispatch_uses_numeric_id_without_shell_or_wait(tmp_path):
     executable = tmp_path / 'QQMusic.exe'
     executable.touch()
     commands = []
-    dispatch_song(executable, '123', popen=lambda args, **kw: commands.append((args, kw)))
-    assert commands[0][0] == [str(executable), '/background', '/playbysongid', 'cmd_count==1&&id_0==123&&songtype_0==0']
+    dispatch_song(executable, '123', popen=lambda args, **kw: commands.append((args, kw)), running_check=lambda _: None)
+    assert commands[0][0] == [str(executable), '/playbysongid', 'cmd_count==1&&id_0==123&&songtype_0==0']
     assert commands[0][1]['shell'] is False
     for bad in ('001abc', '123&&evil', '-1', '0', '9999999999', '１２３'):
         with pytest.raises(ValueError):

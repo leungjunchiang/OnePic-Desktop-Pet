@@ -204,7 +204,7 @@ def test_native_mode_command_uses_only_validated_running_client_and_fixed_numeri
     calls=[]
     monkeypatch.setattr(music_background,'music_client_windows',lambda path:(123,) if path==client else ())
     assert dispatch_native_mode(client,target,popen=lambda *args,**kwargs:calls.append((args,kwargs)))
-    assert calls[0][0] == ([str(client),'/background','/playmode',code],)
+    assert calls[0][0] == ([str(client),'/playmode',code],)
     assert calls[0][1]['shell'] is False
     assert not dispatch_native_mode(client,'单曲播放',popen=lambda *_a,**_k:pytest.fail('unverified native mode'))
     monkeypatch.setattr(music_background,'music_client_windows',lambda _path:())

@@ -1,4 +1,4 @@
-"""冻结版本 QQ 模式辅助入口验收：只读 COM 就绪，不启动桌宠、账号或音频。"""
+"""冻结版本 QQ 辅助入口验收：只读 COM 和缺客户端的就绪状态，不启动桌宠、QQ 或音频。"""
 import json
 from pathlib import Path
 import subprocess
@@ -14,7 +14,12 @@ def main():
                        timeout=20, check=True)
         result = json.loads(reply.read_text(encoding='utf-8'))
         assert result == {'ok': True, 'value': 'ready'}, result
-    print('Packaged QQ mode helper/COM startup verified')
+    with tempfile.TemporaryDirectory(prefix='lili-qq-mode-') as directory:
+        reply = Path(directory)/'reply.json'
+        subprocess.run([str(executable), '--lili-qq-mode-worker', 'startup', '', '', str(reply)],
+                       timeout=20, check=True)
+        assert json.loads(reply.read_text(encoding='utf-8')) == {'ok': True, 'value': 'loading'}
+    print('Packaged QQ mode/COM and safe startup-readiness helper verified')
 
 
 if __name__ == '__main__':

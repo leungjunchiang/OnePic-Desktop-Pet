@@ -8,6 +8,7 @@ Windows 完整临时队列由 QQ 顺序衔接；六毛同步实际曲目，不�
 原生队列首次预备整个候选池的元数据，后续换轮从该池重新抽取三十首且不曲终联网。
 模式设置不改变 QQ 窗口状态；Mac 失败保留对应阶段原因及自检入口提示。
 未确认实际歌曲的结果保留原始原因，不能误报成播放模式失败。
+登录未就绪的请求尚未投递，仅禁用本机续播，不触发失败暂停或恢复 QQ 模式。
 生成完毕先保存三十首，再尝试播放；首次接管或点歌失败不会丢失本机已生成歌单。
 """
 
@@ -285,11 +286,22 @@ class QQPlaylist:
                 self.native_queue.dispatch(client, self.entries, self.entries.index(candidate))
             kwargs['dispatch_candidate'] = dispatch
         result = self.player.play_candidate(selected, **kwargs)
+        if result.error_code is MusicPlaybackError.CLIENT_NOT_READY:
+            self.block_unready_client()
         if self.native_queue is not None:
             self.native_loaded = (result.success and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED
                                   and not self.player.cancelled())
             self._native_pending = None
         return result
+
+    def block_unready_client(self):
+        """尚未投递时只停止本机轮播，不发送失败清理命令。"""
+        self._start_stopped = True
+        self.auto_advance = self.native_loaded = False
+        self._reset_completion()
+        abandon = getattr(self.queue_mode, 'abandon', None)
+        if callable(abandon):
+            abandon()
 
     def observe_native(self, track):
         """只跟随 QQ 的实际曲目；普通曲终不发送暂停或下一首。"""

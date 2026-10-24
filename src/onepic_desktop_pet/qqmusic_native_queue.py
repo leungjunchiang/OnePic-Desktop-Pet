@@ -4,6 +4,7 @@
 元数据按 ID 缓存，优先复用经相同比对验证的公开歌手目录，换轮无需重新联网。
 UTF-16 临时文件延迟清理，防止异步命令读到已删除的文件。
 未运行的 QQ 仅在进程启动时请求后台显示；已有窗口、后续换曲和用户打开窗口均不处理。
+队列命令仅投递已运行客户端；不以带后台或队列参数的进程恢复账号登录。
 """
 from __future__ import annotations
 
@@ -18,14 +19,15 @@ from urllib.parse import urlencode
 import uuid
 
 from .qqmusic_online import QQCatalogError, _request_json, candidate_matches
-from .music_background import qq_background_startup_options
+from .qqmusic_startup import require_running_qq
 
 
 class QQNativeQueue:
-    def __init__(self, *, request_json=None, cancelled=lambda: False, popen=None):
+    def __init__(self, *, request_json=None, cancelled=lambda: False, popen=None, running_check=None):
         self.request_json = request_json or _request_json
         self.cancelled = cancelled
         self.popen = popen or subprocess.Popen
+        self.running_check = running_check or require_running_qq
         self._rows = {}
         self._directory = None
 
@@ -104,12 +106,12 @@ class QQNativeQueue:
             raise OSError('当前临时目录不兼容 QQ 命令，请更换不含单引号的临时目录。')
         path.write_bytes(raw)
         # QQ has its own single-quote parser; no shell interprets this string.
-        options = qq_background_startup_options(executable)
-        command = subprocess.list2cmdline([str(executable)]) + " /background /ParseXMLFile '" + str(path) + "'"
+        self.running_check(executable)
+        command = subprocess.list2cmdline([str(executable)]) + " /ParseXMLFile '" + str(path) + "'"
         self.popen(command, executable=str(executable), shell=False,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-            **options)
+            cwd=str(executable.parent))
         for old in folder.glob('*.xml'):
             try:
                 if old != path and time.time() - old.stat().st_mtime > 60:

@@ -83,7 +83,7 @@ def test_native_queue_reuses_validated_artist_metadata_and_refuses_wrong_embedde
     entries = QQMusicCatalog(request_json=lambda _: artist_response(count=30, total=30)).artist_candidates('陈楚生')
     commands = []
     native = QQNativeQueue(request_json=lambda _: pytest.fail('Artist list already contains complete metadata'),
-                           popen=lambda *a, **k: commands.append(a))
+                           popen=lambda *a, **k: commands.append(a), running_check=lambda _: None)
     executable = tmp_path / 'QQMusic.exe'
     executable.touch()
     native.dispatch(executable, entries, 7)

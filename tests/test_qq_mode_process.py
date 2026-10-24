@@ -1,4 +1,4 @@
-"""验证 QQ 模式工作进程不导入 Qt、不越界回传，并在 Windows 实际隔离启动。"""
+"""验证 QQ 模式及启动状态工作进程不导入 Qt、不越界回传，并在 Windows 实际隔离启动。"""
 import subprocess
 import sys
 import pytest
@@ -23,3 +23,4 @@ def test_worker_rejects_results_outside_its_owned_temp_directory(tmp_path):
 def test_windows_helper_runs_without_gui_or_installed_qq():
     backend = WindowsQQModeBackend(lambda: None)
     assert backend._request('probe') == 'ready'
+    assert backend._request('startup') == 'loading'

@@ -1,4 +1,4 @@
-"""验证 Mac 搜索子角色、按钮回退、广度读取、只读诊断、冷启动归属和设置线程安全关闭。"""
+"""验证 Mac 登录未就绪不搜索、AX 回退、只读诊断、启动归属和设置线程安全关闭。"""
 import plistlib
 from pathlib import Path
 import sys
@@ -20,6 +20,16 @@ def app_bundle(tmp_path):
     (path / 'Contents' / 'Info.plist').write_bytes(plistlib.dumps({
         'CFBundleIdentifier': BUNDLE_ID, 'CFBundleExecutable': 'QQMusic', 'CFBundleShortVersionString': '11.test'}))
     return path
+
+
+@pytest.mark.parametrize('label', ['点击登录', '登录', '安全验证'])
+def test_mac_login_or_verification_does_not_type_search_or_press_any_button(tmp_path, label):
+    from onepic_desktop_pet.qqmusic_startup import QQClientNotReady
+    root = AXNode('AXWindow', children=[AXNode('AXTextField', subrole='AXSearchField'), static(label), region()])
+    backend = Backend(root)
+    with pytest.raises(QQClientNotReady, match='未输入搜索'):
+        QQMusicMacBridge(backend=backend).play_candidate(app_bundle(tmp_path), SongCandidate('qq', '光', '陈楚生', identifier='1'))
+    assert not backend.actions
 
 
 def test_search_subrole_and_real_search_button_work_without_confirm_or_global_keys(tmp_path):

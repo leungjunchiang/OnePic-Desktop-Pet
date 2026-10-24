@@ -1,4 +1,4 @@
-"""核对 QQ 临时队列模式并保留窗口；Windows 原生缓存查询，Mac 只操作已识别播放栏。"""
+"""核对 QQ 临时队列模式并保留窗口；登录未就绪不投递，Windows 命令不带后台自启动参数。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -36,9 +36,9 @@ def dispatch_native_mode(executable, target, *, popen=None):
         return False
     # Do not wait for or terminate the client: an existing process can exit
     # between discovery and dispatch, turning this invocation into a new client.
-    (popen or subprocess.Popen)([str(executable), '/background', '/playmode', str(NATIVE_MODES[target])],
+    (popen or subprocess.Popen)([str(executable), '/playmode', str(NATIVE_MODES[target])],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        shell=False, creationflags=0x08000000 if sys.platform == 'win32' else 0)
+        shell=False, creationflags=0x08000000 if sys.platform == 'win32' else 0, cwd=str(executable.parent))
     return True
 
 
@@ -89,6 +89,10 @@ class QQQueueMode:
             return True
         except Exception:
             return False
+
+    def abandon(self):
+        """登录/进程失去就绪状态时仅放弃本机归属，绝不为恢复模式再拉起 QQ。"""
+        self.original, self.isolated = None, False
 
 
 class WindowsQQModeBackend:
@@ -181,6 +185,38 @@ class _WindowsQQModeNativeBackend:
                     pending.extend((child, depth + 1) for child in control.GetChildren())
             except Exception:
                 continue  # QQ can rebuild the playback bar while changing modes.
+
+    def startup_state(self):
+        """只查询固定登录标记、搜索框类型和前后曲按钮，不导出账号或完整界面。"""
+        if self.executable() is None:
+            return 'loading'
+        import uiautomation as auto
+        from uiautomation.uiautomation import _AutomationClient
+        from .qqmusic_startup import LOGIN_LABELS, BUSY_LABELS, classify_startup
+        with auto.UIAutomationInitializerInThread():
+            api = _AutomationClient.instance().IUIAutomation
+            condition = api.CreatePropertyCondition(auto.PropertyId.ControlTypeProperty, auto.ControlType.EditControl)
+            names = LOGIN_LABELS | BUSY_LABELS | {'上一曲', '上一首', '下一曲', '下一首'}
+            for name in sorted(names):
+                condition = api.CreateOrCondition(condition, api.CreatePropertyCondition(auto.PropertyId.NameProperty, name))
+            cache = api.CreateCacheRequest()
+            cache.AddProperty(auto.PropertyId.NameProperty)
+            cache.AddProperty(auto.PropertyId.ControlTypeProperty)
+            controls = []
+            for root in self._roots(auto):
+                if self.cancelled():
+                    return 'loading'
+                elements = root.Element.FindAllBuildCache(4, condition, cache)
+                if elements is None:
+                    continue
+                if elements.Length > 150:
+                    return 'loading'
+                for index in range(elements.Length):
+                    element = elements.GetElement(index)
+                    role = 'EditControl' if element.CachedControlType == auto.ControlType.EditControl else 'Other'
+                    # Do not return or persist the current search-field value.
+                    controls.append((role, element.CachedName.strip() if role != 'EditControl' else ''))
+            return classify_startup(controls)
 
     def _cached_controls(self, auto, roots):
         """只在已核对路径的 QQ 窗口中原生查询五种模式名，不逐个跨进程枚举网页节点。"""

@@ -6,6 +6,7 @@ Adapter 使用 UI Automation 定位“歌曲”结果；网易云 3.x 不公开 
 使用绑定用户 Default 桌面的 DPI-aware 本机交互回退。macOS 优先使用 Apple Events，
 并在需要时使用已授权的 Accessibility。严格点歌返回明确失败码；随机歌手播放在播放
 动作已执行但媒体 Session 暂不可读时标记为未验证启动；结果携带六毛歌单位置及轮次。
+客户端未就绪单独标记，尚未投递的请求不应暂停或修改登录中的 QQ。
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ class MusicPlaybackError(str, Enum):
     PLAY_ACTION_FAILED = "PLAY_ACTION_FAILED"
     MEDIA_SESSION_TIMEOUT = "MEDIA_SESSION_TIMEOUT"
     TRACK_VERIFY_FAILED = "TRACK_VERIFY_FAILED"
+    CLIENT_NOT_READY = "CLIENT_NOT_READY"
 
 
 class MusicPlaybackOutcome(str, Enum):
@@ -128,6 +130,7 @@ def _failure_message(code: MusicPlaybackError, *, random_artist: bool = False) -
         MusicPlaybackError.PLAY_ACTION_FAILED: "已找到歌曲，但播放器没有开始播放。",
         MusicPlaybackError.MEDIA_SESSION_TIMEOUT: "播放器没有返回当前歌曲信息，暂时无法确认是否播放成功。",
         MusicPlaybackError.TRACK_VERIFY_FAILED: "实际播放的不是目标歌曲，已停止重试。",
+        MusicPlaybackError.CLIENT_NOT_READY: "QQ 尚未就绪，未投递歌曲；请完成客户端登录后重试。",
     }
     return messages[code]
 
