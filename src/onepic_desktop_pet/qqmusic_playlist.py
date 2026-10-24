@@ -4,6 +4,8 @@
 所有修改和媒体查询复用串行音乐线程；持久化失败不会丢失内存中的队列。
 Windows 完整临时队列由 QQ 顺序衔接；六毛同步实际曲目，不再曲终抢切。
 其他适配保留单曲隔离和保守曲终判断。
+随机使用公开歌手候选池及系统熵，最近十次已确认首曲跨重启避让；不固定验收歌曲。
+原生队列首次预备整个候选池的元数据，后续换轮从该池重新抽取三十首且不曲终联网。
 模式设置安排在客户端最小化之前；失败说明给出播放栏的设置位置。
 生成完毕先保存三十首，再尝试播放；首次接管或点歌失败不会丢失本机已生成歌单。
 """
@@ -20,6 +22,11 @@ import time
 from .music_playback import MusicPlaybackError, MusicPlaybackOutcome, SongCandidate, SongPlaybackResult
 from .qqmusic_online import QQCatalogError, artist_names, canonical, candidate_matches
 from .resources import resource_path
+
+
+def song_title_key(title):
+    """同一首歌的现场/录音版本共享首曲避重键。"""
+    return canonical(re.split(r'[（(]', title, maxsplit=1)[0])
 
 
 def bundled_candidates():
@@ -58,6 +65,7 @@ class QQPlaylist:
         self.entries: tuple[SongCandidate, ...] = ()
         self.index = -1
         self.round_number = 0
+        self.recent_starts = []
         self.auto_advance = False
         self._near_end = False
         self._end_not_before = None
@@ -80,19 +88,30 @@ class QQPlaylist:
         songs = {}
         def collect(rows):
             for candidate in rows:
-                key = canonical(re.split(r'[（(]', candidate.title, maxsplit=1)[0])
-                if key and (key not in songs or self._paid(songs[key]) > self._paid(candidate)
+                key = song_title_key(candidate.title)
+                same_id_metadata = (key in songs and songs[key].identifier == candidate.identifier
+                                    and (candidate.native or {}).get('track_info') is not None)
+                if key and (key not in songs or same_id_metadata or self._paid(songs[key]) > self._paid(candidate)
                             or (self._paid(songs[key]) == self._paid(candidate)
                                 and (songs[key].native or {}).get('primary_artist_only'))):
                     songs[key] = candidate
         if reuse_catalog:
-            collect(self.entries if self.native_queue is not None else (self._catalog or self.entries))
+            collect(self._catalog or self.entries)
         if self.fallback_loader and not (reuse_catalog and self.native_queue is not None) and canonical(artist) == canonical('陈楚生'):
             collect(self.fallback_loader())
         try:
+            loaded_artist = False
+            artist_loader = getattr(self.player.catalog, 'artist_candidates', None)
+            if not reuse_catalog and callable(artist_loader) and self.clock() >= self._catalog_retry_after:
+                try:
+                    collect(artist_loader(artist, cancelled=self.player.cancelled))
+                    loaded_artist = len(songs) >= self.SIZE
+                except QQCatalogError:
+                    if self.player.cancelled():
+                        return self.failure('音乐操作已取消。')
             has_fallback = sum(not self._paid(s) for s in songs.values()) >= self.SIZE
             cached_native = reuse_catalog and self.native_queue is not None and len(songs) >= self.SIZE
-            pages = () if cached_native or has_fallback and (reuse_catalog or self.clock() < self._catalog_retry_after) else range(1, 6)
+            pages = () if loaded_artist or cached_native or has_fallback and (reuse_catalog or self.clock() < self._catalog_retry_after) else range(1, 6)
             for page in pages:
                 if self.player.cancelled():
                     return self.failure('音乐操作已取消。')
@@ -119,11 +138,22 @@ class QQPlaylist:
         available.sort(key=self._paid)  # 优先选择无需订阅的版本，授权仍由 QQ 判断。
         chosen = available[:self.SIZE]
         self.shuffle(chosen)
-        if self.entries:
-            previous = self.entries[self.index]
-            if (chosen[0].identifier == previous.identifier
-                    or canonical(chosen[0].title) == canonical(previous.title)):
-                chosen[0], chosen[1] = chosen[1], chosen[0]
+        avoid = set(self.recent_starts)
+        if self.entries and 0 <= self.index < len(self.entries):
+            avoid.add(song_title_key(self.entries[self.index].title))
+        # The real client can be on another queue after a restart or manual listening.
+        reader = getattr(self.player, 'track_reader', None)
+        if callable(reader):
+            try:
+                actual = reader()
+                if actual is not None:
+                    avoid.add(song_title_key(actual.title))
+            except Exception:
+                pass
+        if song_title_key(chosen[0].title) in avoid:
+            replacement = next((i for i, song in enumerate(chosen) if song_title_key(song.title) not in avoid), None)
+            if replacement is not None:
+                chosen[0], chosen[replacement] = chosen[replacement], chosen[0]
         if self.player.cancelled():
             return self.failure('音乐操作已取消。')
         self._catalog = tuple(available)
@@ -141,6 +171,8 @@ class QQPlaylist:
             return self.decorate(self._mode_failure(), created=True)
         self.auto_advance = (not self.player.cancelled()
                              and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
+        if self.auto_advance:
+            self.recent_starts = (self.recent_starts + [song_title_key(chosen[0].title)])[-10:]
         self._near_end = False
         self._reset_completion()
         self.save()
@@ -246,6 +278,9 @@ class QQPlaylist:
         if self.native_queue is not None:
             self.native_loaded = False
             def dispatch(client, candidate):
+                prepare = getattr(self.native_queue, 'prepare', None)
+                if self._catalog and callable(prepare):
+                    prepare(self._catalog)
                 self.native_queue.dispatch(client, self.entries, self.entries.index(candidate))
             kwargs['dispatch_candidate'] = dispatch
         result = self.player.play_candidate(selected, **kwargs)
@@ -403,7 +438,8 @@ class QQPlaylist:
     def save(self):
         if self.store_path is None:
             return
-        data = {'version': 1, 'index': self.index, 'round': self.round_number, 'songs': [
+        data = {'version': 1, 'index': self.index, 'round': self.round_number,
+                'recent_starts': self.recent_starts[-10:], 'songs': [
             {'id': s.identifier, 'title': s.title, 'artist': s.artist,
              'album': (s.native or {}).get('album', ''), 'requires_subscription': self._paid(s),
              'primary_artist_only': bool((s.native or {}).get('primary_artist_only'))}
@@ -447,5 +483,8 @@ class QQPlaylist:
             self.entries, self.index = tuple(songs), index
             number = data.get('round', 1)
             self.round_number = number if type(number) is int and 1 <= number <= 1_000_000 else 1
+            starts = data.get('recent_starts', [])
+            if isinstance(starts, list):
+                self.recent_starts = [canonical(s) for s in starts[-10:] if isinstance(s, str) and 0 < len(s) <= 200]
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return

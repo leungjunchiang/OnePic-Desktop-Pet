@@ -1,4 +1,4 @@
-"""验证原生命令、深层网页不遮挡播放栏、读回确认及曲终隔离兜底。"""
+"""验证原生命令、批量模式查找与深层网页兜底、真实读回及曲终隔离。"""
 from contextlib import nullcontext
 from pathlib import Path
 import sys
@@ -283,6 +283,25 @@ def test_large_web_branch_cannot_consume_budget_before_shallow_playback_bar():
     backend=_WindowsQQModeNativeBackend(lambda:None)
     backend._roots=lambda _api:[root]
     assert list(backend._controls(None))==[(SINGLE,mode)]
+
+
+def test_native_cached_query_does_not_walk_every_web_child():
+    backend = _WindowsQQModeNativeBackend(lambda: None)
+    root = SimpleNamespace(GetChildren=lambda: pytest.fail('Native filter must avoid Python web traversal'))
+    button = object()
+    backend._roots = lambda _api: [root]
+    backend._cached_controls = lambda _api, roots: [(SINGLE, button)] if roots == [root] else []
+    assert list(backend._controls(SimpleNamespace())) == [(SINGLE, button)]
+
+
+def test_unavailable_native_cache_falls_back_to_bounded_tree_walk():
+    backend = _WindowsQQModeNativeBackend(lambda: None)
+    button = SimpleNamespace(ControlTypeName='ButtonControl', Name=SINGLE, GetChildren=lambda: [])
+    backend._roots = lambda _api: [button]
+    def unavailable(*_):
+        raise AttributeError('Client version has no native cache binding')
+    backend._cached_controls = unavailable
+    assert list(backend._controls(SimpleNamespace())) == [(SINGLE, button)]
 
 
 @pytest.mark.parametrize('previous,next_', [('上一曲','下一曲'),('上一首','下一首')])

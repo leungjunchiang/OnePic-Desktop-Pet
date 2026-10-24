@@ -1,4 +1,4 @@
-"""核对 QQ 临时队列的顺序模式；旧适配保留单曲隔离并恢复用户原模式。"""
+"""核对 QQ 临时队列顺序模式，以原生缓存查询避免深层网页耗时；暂停恢复用户原模式。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -158,7 +158,16 @@ class _WindowsQQModeNativeBackend:
         return roots
 
     def _controls(self, auto):
-        pending = deque((root, 0) for root in self._roots(auto))
+        roots = self._roots(auto)
+        if auto is not None:
+            try:
+                controls = self._cached_controls(auto, roots)
+            except Exception:
+                controls = None
+            if controls is not None:
+                yield from controls
+                return
+        pending = deque((root, 0) for root in roots)
         deadline, visited = time.monotonic() + 2.5, 0
         while pending and visited < 2500 and time.monotonic() < deadline and not self.cancelled():
             control, depth = pending.popleft()
@@ -172,6 +181,32 @@ class _WindowsQQModeNativeBackend:
                     pending.extend((child, depth + 1) for child in control.GetChildren())
             except Exception:
                 continue  # QQ can rebuild the playback bar while changing modes.
+
+    def _cached_controls(self, auto, roots):
+        """只在已核对路径的 QQ 窗口中原生查询五种模式名，不逐个跨进程枚举网页节点。"""
+        from uiautomation.uiautomation import _AutomationClient
+        api = _AutomationClient.instance().IUIAutomation
+        names = sorted(MODES)
+        condition = api.CreatePropertyCondition(auto.PropertyId.NameProperty, names[0])
+        for name in names[1:]:
+            condition = api.CreateOrCondition(condition, api.CreatePropertyCondition(auto.PropertyId.NameProperty, name))
+        cache = api.CreateCacheRequest()
+        cache.AddProperty(auto.PropertyId.NameProperty)
+        controls = []
+        for root in roots:
+            if self.cancelled():
+                return []
+            elements = root.Element.FindAllBuildCache(4, condition, cache)  # TreeScope_Descendants
+            if elements is None:
+                continue
+            if elements.Length > 30:
+                raise OSError('QQ 暴露过多同名模式控件，不能确认播放栏。')
+            for index in range(elements.Length):
+                element = elements.GetElement(index)
+                control = auto.Control.CreateControlFromElement(element)
+                if control is not None:
+                    controls.append((element.CachedName.strip(), control))
+        return controls
 
     def read(self):
         import uiautomation as auto

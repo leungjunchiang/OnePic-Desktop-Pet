@@ -1,7 +1,8 @@
-"""验证 Lili 的应用感知、本地音乐、提醒和每小时娃衣功能。"""
+"""验证 Lili 的应用感知、经真实包元数据校验的音乐程序、提醒和每小时娃衣功能。"""
 
 from datetime import datetime
 import os
+import plistlib
 import sys
 
 import pytest
@@ -66,7 +67,10 @@ def test_user_selected_music_program_has_priority(tmp_path) -> None:
         executable.write_bytes(b"MZ")
     elif sys.platform == "darwin":
         executable = tmp_path / "QQMusic.app"
-        executable.mkdir()
+        (executable / 'Contents' / 'MacOS').mkdir(parents=True)
+        (executable / 'Contents' / 'Info.plist').write_bytes(plistlib.dumps({
+            'CFBundleIdentifier': 'com.tencent.QQMusicMac', 'CFBundleExecutable': 'QQMusic'}))
+        (executable / 'Contents' / 'MacOS' / 'QQMusic').touch()
     else:
         pytest.skip("Lili currently supports local music clients on Windows and macOS")
 

@@ -1,4 +1,4 @@
-"""设置支持从点歌入口定位 QQ 程序地址；勾选配置使用统一矢量绘制。
+"""设置支持从点歌入口定位 QQ 程序地址；Mac 用文件选择器选应用包并核对真实 QQ。
 
 本模块实现六毛的半透明聊天面板、AI 设置与生活提醒面板。
 
@@ -1100,6 +1100,12 @@ class AISettingsDialog(QDialog):
         qq_pick = QPushButton("选择…"); qq_pick.setObjectName("softButton"); qq_pick.clicked.connect(self._choose_qq_music)
         qq_layout.addWidget(self.qq_music_path, 1); qq_layout.addWidget(qq_pick)
         form.addRow("QQ 音乐程序", qq_row)
+        if sys.platform == 'darwin':
+            qq_note = QLabel('选择“应用程序”里的 QQMusic.app，无需进入包内。首次使用请打开并登录 QQ 音乐，'
+                             '再在系统设置的“隐私与安全性 → 辅助功能”允许 Lili。完成设置后，六毛自行点歌和续播。')
+            qq_note.setWordWrap(True)
+            qq_note.setObjectName('status')
+            form.addRow('', qq_note)
 
         self.netease_music_path = QLineEdit(settings.netease_music_path)
         self.netease_music_path.setPlaceholderText("自动寻找，或选择 cloudmusic.exe / 网易云音乐.app")
@@ -1240,11 +1246,17 @@ class AISettingsDialog(QDialog):
             self.token_status.setText("未检测到可打开的 ChatGPT Desktop App。")
 
     def _choose_qq_music(self) -> None:
-        """选择本机 QQ 音乐程序，不读取程序内容。"""
+        """选择并校验真实 QQ；Mac 包内文件统一归到应用包，选错不覆盖原值。"""
 
         path = self._choose_music_program("选择 QQ 音乐程序", self.qq_music_path.text())
         if path:
-            self.qq_music_path.setText(path)
+            from .music import normalize_music_client_path
+            selected = normalize_music_client_path('qq', path)
+            if selected is None:
+                QMessageBox.information(self, '请选择 QQ 音乐',
+                    '请选择已安装的 QQMusic.app（Mac）或 QQMusic.exe（Windows）。应用目录和其他程序不能作为 QQ 音乐地址。')
+                return
+            self.qq_music_path.setText(str(selected))
 
     def _choose_netease_music(self) -> None:
         """选择本机网易云音乐程序，不读取程序内容。"""
@@ -1275,10 +1287,12 @@ class AISettingsDialog(QDialog):
             self.spotify_music_path.setText(path)
 
     def _choose_music_program(self, title: str, current: str) -> str:
-        """Windows 选择 EXE，macOS 选择应用包目录；输入框仍允许手工粘贴路径。"""
+        """Mac 原生面板将 .app 视作文件；不使用无法选中应用包的目录选择器。"""
 
         if sys.platform == "darwin":
-            return QFileDialog.getExistingDirectory(self, title, current or "/Applications")
+            path, _ = QFileDialog.getOpenFileName(
+                self, title, current or '/Applications', '应用程序 (*.app);;所有文件 (*)')
+            return path
         path, _ = QFileDialog.getOpenFileName(
             self,
             title,

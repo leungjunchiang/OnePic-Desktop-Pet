@@ -3,6 +3,8 @@
 支持 QQ、网易云、酷狗、Apple Music 与 Spotify。本模块不内置歌词、音频或非公开曲库接口。
 开发启动器可保留原 LOCALAPPDATA 供客户端检测，不受独立桌宠数据目录影响。
 QQ Windows 客户端也可能安装在 QQMusic 目录下的版本子目录中。
+Mac 允许选择应用包或包内程序并统一归到 .app；QQ 必须核对包标识和可执行文件，
+另用 LaunchServices 寻找重命名或不在默认目录的已安装客户端，不保存别台电脑的地址。
 快捷“随机听一首”只负责从本地曲库选歌，然后直接尝试平台 Deep Link；Deep Link 失效、客户端
 未安装或系统拒绝唤起时，降级到正版 HTTPS 页面。打开客户端不等于已确认播放，基础播放命令
 仍由 music_control.py 读取系统媒体 Session 或发送媒体键。
@@ -14,6 +16,7 @@ import ctypes
 from ctypes import wintypes
 import json
 import os
+import plistlib
 import random
 import re
 import subprocess
@@ -701,6 +704,47 @@ def music_client_candidates(service: str) -> tuple[Path, ...]:
     return ()
 
 
+def normalize_music_client_path(service: str, value: str | Path, *, platform_name=None) -> Path | None:
+    """校验当前平台程序；Mac Finder 拖入的应用包内路径也归到应用根目录。"""
+    platform = platform_name or sys.platform
+    text = str(value or '').strip().strip('"').strip("'")
+    if not text:
+        return None
+    path = Path(text).expanduser()
+    if platform == 'darwin':
+        path = next((p for p in (path, *path.parents) if p.suffix.casefold() == '.app'), path)
+        if not path.is_dir() or path.suffix.casefold() != '.app':
+            return None
+        if service != 'qq':
+            return path
+        try:
+            info_file = path / 'Contents' / 'Info.plist'
+            if info_file.stat().st_size > 100_000:
+                return None
+            info = plistlib.loads(info_file.read_bytes())
+            name = info.get('CFBundleExecutable')
+            if (info.get('CFBundleIdentifier') != 'com.tencent.QQMusicMac' or not isinstance(name, str)
+                    or not name or any(c in name for c in '/\\\x00') or name in {'.', '..'}):
+                return None
+            return path if (path / 'Contents' / 'MacOS' / name).is_file() else None
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+    if platform == 'win32' and path.is_file() and path.suffix.casefold() == '.exe':
+        return path if service != 'qq' or path.name.casefold() == 'qqmusic.exe' else None
+    return None
+
+
+def _macos_registered_music_client(service):
+    if sys.platform != 'darwin' or service != 'qq':
+        return None
+    try:
+        from AppKit import NSWorkspace
+        url = NSWorkspace.sharedWorkspace().URLForApplicationWithBundleIdentifier_('com.tencent.QQMusicMac')
+        return normalize_music_client_path(service, str(url.path())) if url is not None else None
+    except (ImportError, OSError, AttributeError, TypeError):
+        return None
+
+
 def find_music_client(service: str, custom_path: str = "") -> Path | None:
     """优先返回用户选择的程序，否则返回首个自动检测到的客户端。
 
@@ -710,16 +754,14 @@ def find_music_client(service: str, custom_path: str = "") -> Path | None:
     ``"cloudmusic.exe"--webcmd="%1"`` 这种缺少空格的坏注册命令。
     """
 
-    selected = Path(custom_path).expanduser() if custom_path.strip() else None
-    if selected is not None and selected.exists():
-        if (os.name == "nt" and selected.is_file() and selected.suffix.casefold() == ".exe") or (
-            sys.platform == "darwin" and selected.is_dir() and selected.suffix.casefold() == ".app"
-        ):
-            return selected
+    selected = normalize_music_client_path(service, custom_path)
+    if selected is not None:
+        return selected
     # URL Scheme 是 Windows 当前真正选择的客户端；优先于机器上可能遗留的
     # 旧 Program Files 副本（本机就同时存在一个旧版 C: 副本和 D: 的活动副本）。
-    registered = _registered_music_client(service)
-    detected = next((path for path in music_client_candidates(service) if path.exists()), None)
+    registered = _registered_music_client(service) or _macos_registered_music_client(service)
+    detected = next((valid for path in music_client_candidates(service)
+                     if (valid := normalize_music_client_path(service, path)) is not None), None)
     return registered or detected
 
 

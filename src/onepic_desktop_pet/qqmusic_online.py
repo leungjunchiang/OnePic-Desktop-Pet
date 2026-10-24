@@ -4,6 +4,7 @@
 登录和会员限制交给客户端处理。命令只投递一次；元数据匹配不等于精确 ID 或完整
 播放权限已获确认。所有阻塞操作由既有 MusicCommandThread 调用；分页收集歌单，切歌复用候选元数据。
 连续轮播先完成模式设置，再最小化客户端；Windows 可传入原生完整队列投递器。
+陈楚生随机歌单优先分页读取公开歌手目录，缓存完整版本元数据，不依赖本机诊断脚本。
 """
 
 from __future__ import annotations
@@ -106,6 +107,65 @@ class QQMusicCatalog:
 
     def __init__(self, request_json=None) -> None:
         self.request_json = request_json or _request_json
+        self._artist_cache = None
+
+    def artist_candidates(self, artist: str, *, cancelled=lambda: False) -> tuple[SongCandidate, ...]:
+        """读取歌手目录的各页，不把搜索热度前四十首当成整个随机曲库。"""
+        if canonical(artist) != canonical('陈楚生'):
+            raise QQCatalogError('当前随机歌手目录只支持陈楚生。')
+        if self._artist_cache and time.monotonic() - self._artist_cache[0] < 600:
+            if cancelled():
+                raise QQCatalogError('音乐操作已取消。')
+            return self._artist_cache[1]
+        songs = {}
+        for begin in range(0, 1040, 80):
+            if cancelled():
+                raise QQCatalogError('音乐操作已取消。')
+            query = {'comm': {'ct': 24, 'cv': 0}, 'req': {
+                'module': 'musichall.song_list_server', 'method': 'GetSingerSongList',
+                'param': {'singerMid': '002PZBgg1S9xPX', 'begin': begin, 'num': 80, 'order': 1}}}
+            response = self.request_json('https://u.y.qq.com/cgi-bin/musicu.fcg?' +
+                urlencode({'data': json.dumps(query, separators=(',', ':'))}))
+            try:
+                result = response['req']
+                data = result['data']
+                rows, total = data['songList'], data['totalNum']
+                if (result.get('code') != 0 or data.get('singerMid') != '002PZBgg1S9xPX'
+                        or not isinstance(rows, list) or type(total) is not int or total < 0
+                        or len(rows) > 80):
+                    raise ValueError('unexpected artist catalog')
+                for wrapped in rows:
+                    row = wrapped['songInfo']
+                    song_id = str(row.get('id', ''))
+                    title = row.get('title') or row.get('name')
+                    singers = row.get('singer')
+                    if (not re.fullmatch(r'[1-9][0-9]{0,9}', song_id) or int(song_id) > 4294967295
+                            or row.get('type') != 0 or not isinstance(title, str) or not title.strip() or len(title) > 200
+                            or not isinstance(singers, list) or not singers
+                            or re.search(r'伴奏|纯音乐|卡拉\s*OK|\b(?:instrumental|karaoke)\b', title, re.I)):
+                        continue
+                    names = [s['name'] for s in singers if isinstance(s.get('name'), str)]
+                    if canonical(artist) not in artist_names(' / '.join(names)):
+                        continue
+                    if (not isinstance(row.get('file'), dict) or not row['file'] or not row.get('mid')
+                            or type(row.get('interval')) is not int or row['interval'] <= 0):
+                        continue
+                    album = row['album']['name']
+                    if not isinstance(album, str) or len(album) > 500:
+                        continue
+                    songs[song_id] = SongCandidate('qq', title.strip(), ' / '.join(names), identifier=song_id,
+                        native={'album': album, 'requires_subscription': bool(row.get('pay', {}).get('pay_play', 0)),
+                                'track_info': row})
+                if not rows or begin + len(rows) >= total:
+                    break
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                raise QQCatalogError('QQ 音乐歌手目录格式已变化，已保留备用目录。') from exc
+        if cancelled():
+            raise QQCatalogError('音乐操作已取消。')
+        if not songs:
+            raise QQCatalogError('QQ 音乐歌手目录暂未返回可用歌曲。')
+        self._artist_cache = (time.monotonic(), tuple(songs.values()))
+        return self._artist_cache[1]
 
     def search(self, title: str, artist: str, *, page: int = 1) -> tuple[SongCandidate, ...]:
         query = f'{artist} {title}'.strip()
