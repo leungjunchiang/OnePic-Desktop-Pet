@@ -1,7 +1,7 @@
 """管理 QQ 后台连续轮播；Windows 会话和实验性 macOS 已授权 AX 均只核对目标客户端。
 
-连续轮播接管 QQ 单曲模式以隔离原队列；恢复歌单选曲先锁定 QQ，优先暂停不误控其他播放器。
-暂停恢复原模式；新鲜曲末时间轴配合加密轮询，在完整截止时暂停旧曲后衔接下一首。
+Windows 通过 QQ 原生临时队列顺序衔接，六毛跟随实际曲目；其他适配保留单曲隔离。
+恢复歌单选曲先锁定 QQ，暂停恢复原模式；普通 Windows 曲终不由六毛暂停或重发歌曲。
 
 QQ 在线点歌复用音乐工作线程，后续控制只使用唯一 QQMusic.exe Session，禁止全局媒体键回退。
 已经暂停或播放时，幂等控制先确认状态，不因客户端禁用重复按钮而误报失败。
@@ -734,6 +734,7 @@ class MusicProviderManager:
         playlist_path: Path | None = None,
         mac_qq_bridge=None,
         qq_queue_mode=None,
+        qq_native_queue=None,
     ) -> None:
         self.settings = settings
         self.platform_name = platform_name or sys.platform
@@ -769,14 +770,18 @@ class MusicProviderManager:
         if self.mac_qq_bridge is not None:
             self.qq_online_player.backgrounder = self.mac_qq_bridge.background
         from .qqmusic_queue_mode import QQQueueMode, WindowsQQModeBackend, MacQQModeBackend
+        if self.platform_name == 'win32' and windows_bridge is None and qq_native_queue is None:
+            from .qqmusic_native_queue import QQNativeQueue
+            qq_native_queue = QQNativeQueue(cancelled=self.qq_online_player.cancelled)
         self.qq_queue_mode = qq_queue_mode or QQQueueMode(
             MacQQModeBackend(self.mac_qq_bridge) if self.mac_qq_bridge is not None else
             WindowsQQModeBackend(lambda: self.client_finder('qq', self.settings.qq_music_path),
                                  cancelled=lambda: QThread.currentThread().isInterruptionRequested()),
-            cancelled=lambda: QThread.currentThread().isInterruptionRequested())
+            cancelled=lambda: QThread.currentThread().isInterruptionRequested(),
+            target='顺序播放' if qq_native_queue is not None else '单曲循环')
         self.qq_playlist = QQPlaylist(self.qq_online_player, store_path=playlist_path,
             fallback_loader=bundled_candidates, queue_mode=self.qq_queue_mode,
-            stopper=lambda: self._control_qq_online('pause'))
+            stopper=lambda: self._control_qq_online('pause'), native_queue=qq_native_queue)
         self.playback_manager = ExactMusicPlaybackManager(
             adapters,
             self.current_track,
@@ -1105,6 +1110,20 @@ class MusicProviderManager:
         except Exception:
             return None
         mode = getattr(self.qq_playlist, 'queue_mode', None)
+        if self.qq_playlist.native_queue is not None:
+            event = self.qq_playlist.observe_native(track)
+            if isinstance(event, SongPlaybackResult):
+                return event
+            if event == 'foreign':
+                paused = self._control_qq_online('pause')
+                return replace(paused, success=False, message='QQ 已离开六毛临时歌单，已暂停，请重新随机。')
+            if event != 'round':
+                return None
+            self.qq_playlist.auto_advance = False
+            result = replace(self.qq_playlist.create(reuse_catalog=True), playlist_created=False)
+            if not self.qq_playlist.auto_advance:
+                self._control_qq_online('pause')
+            return result
         if (getattr(mode, 'isolated', False) and self.qq_playlist._near_end
                 and track is not None and track.title and not self.qq_playlist.matches(track)):
             self.qq_playlist.auto_advance = False
@@ -1199,6 +1218,10 @@ class MusicProviderManager:
 
         if before is None:
             return result(False, status.message)
+        if (action in {'play', 'toggle'} and self.qq_playlist.native_queue is not None
+                and not self.qq_playlist.native_loaded and self.qq_playlist.entries
+                and before.track.playback_status.casefold() != 'playing'):
+            return self.qq_playlist.select(self.qq_playlist.index)
         if action == 'status':
             track = before.track
             state = {'playing': '正在播放', 'paused': '已暂停', 'stopped': '已停止'}.get(
@@ -1212,7 +1235,7 @@ class MusicProviderManager:
                 self.qq_playlist.auto_advance = False
                 paused = self._control_qq_online('pause')
                 return replace(paused, success=False, action=action,
-                    message='未确认 QQ 单曲模式，请先选择单曲循环。' + (
+                    message=f'未确认 QQ {getattr(self.qq_queue_mode, "target", "单曲循环")}模式。' + (
                         '已暂停。' if paused.success else '暂停尚未确认，请查看 QQ。'))
         if desired and before.track.playback_status.casefold() == desired:
             return result(True, 'QQ 音乐已经在播放。' if desired == 'playing' else 'QQ 音乐已经暂停。')
@@ -1228,7 +1251,7 @@ class MusicProviderManager:
                 self.qq_playlist.auto_advance = False
                 paused = self._control_qq_online('pause')
                 return replace(paused, success=False, action=action,
-                    message='未确认 QQ 单曲模式，请先选择单曲循环。' + (
+                    message=f'未确认 QQ {getattr(self.qq_queue_mode, "target", "单曲循环")}模式。' + (
                         '已暂停。' if paused.success else '暂停尚未确认，请查看 QQ。'))
         if QThread.currentThread().isInterruptionRequested():
             return result(False, '音乐操作已取消。')

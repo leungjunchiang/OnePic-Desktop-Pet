@@ -2,7 +2,8 @@
 
 只存歌曲元数据，不下载音频或保存登录信息。歌单属于六毛，不写入 QQ 云端收藏。
 所有修改和媒体查询复用串行音乐线程；持久化失败不会丢失内存中的队列。
-连续轮播先确认 QQ 单曲模式隔离旧队列；新鲜曲末进度完整到期即可衔接，不必等重唱开头。
+Windows 完整临时队列由 QQ 顺序衔接；六毛同步实际曲目，不再曲终抢切。
+其他适配保留单曲隔离和保守曲终判断。
 模式设置安排在客户端最小化之前；失败说明给出播放栏的设置位置。
 生成完毕先保存三十首，再尝试播放；首次接管或点歌失败不会丢失本机已生成歌单。
 """
@@ -43,13 +44,16 @@ class QQPlaylist:
     SIZE = 30
 
     def __init__(self, player, *, store_path: Path | None = None, shuffle=None, fallback_loader=None,
-                 clock=time.monotonic, queue_mode=None, stopper=lambda: None):
+                 clock=time.monotonic, queue_mode=None, stopper=lambda: None, native_queue=None):
         self.player = player
         self.store_path = store_path
         self.shuffle = shuffle or random.SystemRandom().shuffle
         self.fallback_loader = fallback_loader
         self.clock = clock
         self.queue_mode, self.stopper = queue_mode, stopper
+        self.native_queue = native_queue
+        self.native_loaded = False
+        self._native_pending = None
         self._catalog_retry_after = 0.0
         self.entries: tuple[SongCandidate, ...] = ()
         self.index = -1
@@ -82,12 +86,13 @@ class QQPlaylist:
                                 and (songs[key].native or {}).get('primary_artist_only'))):
                     songs[key] = candidate
         if reuse_catalog:
-            collect(self._catalog or self.entries)
-        if self.fallback_loader and canonical(artist) == canonical('陈楚生'):
+            collect(self.entries if self.native_queue is not None else (self._catalog or self.entries))
+        if self.fallback_loader and not (reuse_catalog and self.native_queue is not None) and canonical(artist) == canonical('陈楚生'):
             collect(self.fallback_loader())
         try:
             has_fallback = sum(not self._paid(s) for s in songs.values()) >= self.SIZE
-            pages = () if has_fallback and (reuse_catalog or self.clock() < self._catalog_retry_after) else range(1, 6)
+            cached_native = reuse_catalog and self.native_queue is not None and len(songs) >= self.SIZE
+            pages = () if cached_native or has_fallback and (reuse_catalog or self.clock() < self._catalog_retry_after) else range(1, 6)
             for page in pages:
                 if self.player.cancelled():
                     return self.failure('音乐操作已取消。')
@@ -237,7 +242,67 @@ class QQPlaylist:
         self._start_stopped = False
         if self.queue_mode is not None:
             kwargs['prepare_queue'] = self._prepare_queue_mode
-        return self.player.play_candidate(selected, **kwargs)
+            kwargs['queue_failure_message'] = self._mode_failure().message
+        if self.native_queue is not None:
+            self.native_loaded = False
+            def dispatch(client, candidate):
+                self.native_queue.dispatch(client, self.entries, self.entries.index(candidate))
+            kwargs['dispatch_candidate'] = dispatch
+        result = self.player.play_candidate(selected, **kwargs)
+        if self.native_queue is not None:
+            self.native_loaded = (result.success and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED
+                                  and not self.player.cancelled())
+            self._native_pending = None
+        return result
+
+    def observe_native(self, track):
+        """只跟随 QQ 的实际曲目；普通曲终不发送暂停或下一首。"""
+        if not self.auto_advance or not self.native_loaded or track is None:
+            return None
+        now = self.clock()
+        state = track.playback_status.casefold()
+        if state == 'playing' and track.title:
+            matched = next((i for i, s in enumerate(self.entries) if candidate_matches(s, track)), None)
+            if matched is not None:
+                self._native_pending = None
+                if matched != self.index:
+                    self.index = matched
+                    self._reset_completion()
+                    self.save()
+                    return self.decorate(SongPlaybackResult(True, 'qq', '', '陈楚生',
+                        f'QQ 音乐：{track.artist}《{track.title}》', selected=self.entries[matched],
+                        current_title=track.title, current_artist=track.artist,
+                        outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED))
+                raw = getattr(track, 'raw_position_ms', None)
+                raw = track.position_ms if raw is None else raw
+                if track.duration_ms > 0 and 0 <= track.duration_ms - raw <= 2500:
+                    self._near_end = True
+                    age = getattr(track, 'timeline_age_ms', None) or 0
+                    deadline = now + max(0, track.duration_ms - raw - min(2000, max(0, age))) / 1000
+                    self._end_not_before = max(self._end_not_before or deadline, deadline)
+                else:
+                    self._near_end = False
+                    self._end_not_before = None
+                return None
+            # QQ can publish the new title before its album/artist update.
+            if self._native_pending is None or self._native_pending[0] != 'foreign':
+                self._native_pending = ('foreign', now)
+            if now - self._native_pending[1] >= 2:
+                return 'foreign'
+            return None
+        if state == 'paused' and not self._near_end:
+            self.auto_advance = False
+            self._native_pending = None
+            if self.queue_mode is not None:
+                self.queue_mode.release()
+            return None
+        if (state in {'paused', 'stopped'} and self.matches(track) and self._near_end
+                and self.index == len(self.entries) - 1 and self._end_not_before is not None):
+            if self._native_pending is None or self._native_pending[0] != 'end':
+                self._native_pending = ('end', now)
+            if now >= self._end_not_before and now - self._native_pending[1] >= 1.2:
+                return 'round'
+        return None
 
     def _prepare_queue_mode(self):
         if not self.player.cancelled() and self.queue_mode.acquire():
@@ -256,8 +321,9 @@ class QQPlaylist:
                 self.queue_mode.release()
 
     def _mode_failure(self):
-        from .qqmusic_queue_mode import MODE_SETUP_MESSAGE
-        return SongPlaybackResult(False, 'qq', '', '陈楚生', MODE_SETUP_MESSAGE,
+        from .qqmusic_queue_mode import mode_setup_message
+        return SongPlaybackResult(False, 'qq', '', '陈楚生',
+                                  mode_setup_message(getattr(self.queue_mode, 'target', '单曲循环')),
                                   MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
 
     def ended(self, track):

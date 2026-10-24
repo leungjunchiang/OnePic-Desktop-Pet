@@ -1,4 +1,4 @@
-"""QQ 模式读回兼容首页与歌曲详情页，优先遍历浅层播放栏并确认相邻切歌控件。"""
+"""核对 QQ 临时队列的顺序模式；旧适配保留单曲隔离并恢复用户原模式。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -15,6 +15,14 @@ NATIVE_MODES = {SINGLE: 1, '顺序播放': 2, '列表循环': 3, '随机播放':
 MODE_SETUP_MESSAGE = ('已找到 QQ 音乐，但没能确认“单曲循环”模式。'
     '请展开 QQ 音乐，在底部播放栏选择“单曲循环”，再点一次随机听陈楚生。'
     '已请求暂停，避免原队列插入其他歌曲。')
+
+
+def mode_setup_message(target=SINGLE):
+    if target == SINGLE:
+        return MODE_SETUP_MESSAGE
+    return ('已找到 QQ 音乐，但没能确认临时歌单的“顺序播放”模式。'
+            '请展开 QQ 音乐，在底部播放栏选择“顺序播放”，再点一次随机听陈楚生。'
+            '已请求暂停，六毛歌单已保留。')
 
 
 def dispatch_native_mode(executable, target, *, popen=None):
@@ -35,10 +43,11 @@ def dispatch_native_mode(executable, target, *, popen=None):
 
 
 class QQQueueMode:
-    """以明确读回的单曲循环隔离客户端队列，不把点击成功当作模式成功。"""
+    """读回确认临时队列所需模式，暂停后恢复原模式，不把投递当作成功。"""
 
-    def __init__(self, backend, cancelled=lambda: False):
+    def __init__(self, backend, cancelled=lambda: False, *, target=SINGLE):
         self.backend, self.cancelled = backend, cancelled
+        self.target = target
         self.original = None
         self.isolated = False
         self.last_error = ''
@@ -52,11 +61,11 @@ class QQQueueMode:
                 raise OSError('QQ 未公开明确的播放模式。')
             if self.original is None:
                 self.original = current
-            if current != SINGLE and not self.backend.set(SINGLE):
-                raise OSError('QQ 未接受单曲模式。')
-            self.isolated = not self.cancelled() and self.backend.read() == SINGLE
+            if current != self.target and not self.backend.set(self.target):
+                raise OSError('QQ 未接受' + self.target + '模式。')
+            self.isolated = not self.cancelled() and self.backend.read() == self.target
             if not self.isolated:
-                raise OSError('未确认 QQ 单曲模式。')
+                raise OSError('未确认 QQ ' + self.target + '模式。')
             self.last_error = ''
             return True
         except Exception as exc:
@@ -73,7 +82,7 @@ class QQQueueMode:
             # The user can change QQ while listening. Do not overwrite a mode
             # they selected after we acquired the client.
             current = self.backend.read()
-            if (current == SINGLE or force) and original != current:
+            if (current == self.target or force) and original != current:
                 if not self.backend.set(original) or self.backend.read() != original:
                     return False
             self.original = None

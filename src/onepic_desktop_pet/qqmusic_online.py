@@ -3,7 +3,7 @@
 仅传递歌曲元数据与客户端命令，不下载音频。目录属于可变化的客户端接口；错误、
 登录和会员限制交给客户端处理。命令只投递一次；元数据匹配不等于精确 ID 或完整
 播放权限已获确认。所有阻塞操作由既有 MusicCommandThread 调用；分页收集歌单，切歌复用候选元数据。
-连续轮播先完成模式设置，再最小化客户端，避免后台隐藏导致可访问性动作失败。
+连续轮播先完成模式设置，再最小化客户端；Windows 可传入原生完整队列投递器。
 """
 
 from __future__ import annotations
@@ -210,7 +210,8 @@ class QQMusicOnlinePlayer:
         return self.play_candidate(selected, title=title, artist=artist)
 
     def play_candidate(self, selected: SongCandidate, *, title: str = '',
-                       artist: str = '陈楚生', prepare_queue=None) -> SongPlaybackResult:
+                       artist: str = '陈楚生', prepare_queue=None, dispatch_candidate=None,
+                       queue_failure_message=None) -> SongPlaybackResult:
         """投递确定歌曲；连续轮播的准备动作必须早于后台隐藏。"""
 
         def failed(message, code):
@@ -223,8 +224,9 @@ class QQMusicOnlinePlayer:
             return failed('未找到 QQ 音乐，请在设置中选择 QQ 音乐客户端。',
                           MusicPlaybackError.PLAY_ACTION_FAILED)
         try:
-            if self.candidate_dispatcher is not None:
-                self.candidate_dispatcher(client, selected)
+            candidate_dispatcher = dispatch_candidate or self.candidate_dispatcher
+            if candidate_dispatcher is not None:
+                candidate_dispatcher(client, selected)
             else:
                 self.dispatcher(client, selected.identifier)
             if prepare_queue is None:
@@ -253,7 +255,7 @@ class QQMusicOnlinePlayer:
                         return failed('音乐操作已取消，正在执行暂停。', MusicPlaybackError.PLAY_ACTION_FAILED)
                     if not ready:
                         from .qqmusic_queue_mode import MODE_SETUP_MESSAGE
-                        return failed(MODE_SETUP_MESSAGE, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
+                        return failed(queue_failure_message or MODE_SETUP_MESSAGE, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
                 return SongPlaybackResult(
                     True, 'qq', title, artist,
                     f'QQ 音乐正在播放：{latest.artist}《{latest.title}》，六毛陪你一起听♪',
