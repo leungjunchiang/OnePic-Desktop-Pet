@@ -1,4 +1,4 @@
-"""按完整路径识别 QQ；仅本次冷启动且无后续用户输入时收起一次，已有窗口和后续换曲不处理。"""
+"""按完整路径识别 QQ，原生读取最小化/隐藏状态；仅本次冷启动允许收起一次，已有窗口不处理。"""
 from pathlib import Path
 import subprocess
 import sys
@@ -42,6 +42,18 @@ def music_client_windows(executable: Path) -> tuple[int, ...]:
         return True
     user.EnumWindows(visit, 0)
     return tuple(handles)
+
+
+def music_window_is_background(hwnd):
+    """只读原生窗口状态；QQ 最小化时 UIA 的根节点离屏属性可能仍为假。"""
+    if sys.platform != 'win32' or not hwnd:
+        return False
+    import ctypes
+    from ctypes import wintypes
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    user.IsIconic.argtypes = [wintypes.HWND]
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
+    return bool(user.IsIconic(hwnd) or not user.IsWindowVisible(hwnd))
 
 
 def qq_background_startup_options(executable: Path) -> dict:

@@ -1,4 +1,4 @@
-"""核对 QQ 临时队列模式并保留窗口；登录未就绪不投递，Windows 命令不带后台自启动参数。"""
+"""核对 QQ 模式并保留窗口；启动检查兼容无搜索框播放栏，排除展开窗口内已隐藏的登录节点。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -187,25 +187,33 @@ class _WindowsQQModeNativeBackend:
                 continue  # QQ can rebuild the playback bar while changing modes.
 
     def startup_state(self):
-        """只查询固定登录标记、搜索框类型和前后曲按钮，不导出账号或完整界面。"""
+        """查询固定就绪标记；展开窗口排除隐藏节点，后台主窗口仍可只读检测。"""
         if self.executable() is None:
             return 'loading'
         import uiautomation as auto
         from uiautomation.uiautomation import _AutomationClient
-        from .qqmusic_startup import LOGIN_LABELS, BUSY_LABELS, classify_startup
+        from .music_background import music_window_is_background
+        from .qqmusic_startup import LOGIN_LABELS, BUSY_LABELS, PLAYBAR_LABELS, classify_startup
         with auto.UIAutomationInitializerInThread():
             api = _AutomationClient.instance().IUIAutomation
             condition = api.CreatePropertyCondition(auto.PropertyId.ControlTypeProperty, auto.ControlType.EditControl)
-            names = LOGIN_LABELS | BUSY_LABELS | {'上一曲', '上一首', '下一曲', '下一首'}
+            condition = api.CreateOrCondition(condition, api.CreatePropertyCondition(
+                auto.PropertyId.ControlTypeProperty, auto.ControlType.ComboBoxControl))
+            names = LOGIN_LABELS | BUSY_LABELS | PLAYBAR_LABELS | {'上一曲', '上一首', '下一曲', '下一首'}
             for name in sorted(names):
                 condition = api.CreateOrCondition(condition, api.CreatePropertyCondition(auto.PropertyId.NameProperty, name))
             cache = api.CreateCacheRequest()
             cache.AddProperty(auto.PropertyId.NameProperty)
             cache.AddProperty(auto.PropertyId.ControlTypeProperty)
+            cache.AddProperty(auto.PropertyId.IsOffscreenProperty)
             controls = []
             for root in self._roots(auto):
                 if self.cancelled():
                     return 'loading'
+                background = root.IsOffscreen or music_window_is_background(root.NativeWindowHandle)
+                root_name = root.Name.strip()
+                if root_name in LOGIN_LABELS | BUSY_LABELS:
+                    controls.append(('WindowControl', root_name))
                 elements = root.Element.FindAllBuildCache(4, condition, cache)
                 if elements is None:
                     continue
@@ -213,9 +221,13 @@ class _WindowsQQModeNativeBackend:
                     return 'loading'
                 for index in range(elements.Length):
                     element = elements.GetElement(index)
-                    role = 'EditControl' if element.CachedControlType == auto.ControlType.EditControl else 'Other'
+                    if not background and element.CachedIsOffscreen:
+                        continue
+                    role = {auto.ControlType.EditControl: 'EditControl',
+                            auto.ControlType.ComboBoxControl: 'ComboBoxControl',
+                            auto.ControlType.TextControl: 'TextControl'}.get(element.CachedControlType, 'Other')
                     # Do not return or persist the current search-field value.
-                    controls.append((role, element.CachedName.strip() if role != 'EditControl' else ''))
+                    controls.append((role, '' if role in {'EditControl', 'ComboBoxControl'} else element.CachedName.strip()))
             return classify_startup(controls)
 
     def _cached_controls(self, auto, roots):

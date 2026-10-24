@@ -1,4 +1,4 @@
-"""验证先普通启动、等待登录恢复、复用实际版本、取消和未投递失败不误改播放器。"""
+"""验证登录与界面故障分开、跨版本播放栏就绪、瞬时登录恢复及未投递时不改播放器。"""
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,11 +17,26 @@ from test_qqmusic_playlist import Player, song
 READY = [('EditControl', ''), ('ButtonControl', '上一曲'), ('ButtonControl', '下一曲')]
 
 
-@pytest.mark.parametrize('label,state', [('点击登录','login-required'), ('登录','login-required'), ('正在登录','signing-in'), ('安全验证','login-required')])
+@pytest.mark.parametrize('label,state', [('点击登录','login-required'), ('正在登录','signing-in'), ('安全验证','login-required')])
 def test_login_marker_blocks_even_with_cached_player_and_search(label, state):
     assert classify_startup(READY + [('TextControl', label)]) == state
     assert classify_startup(READY) == 'ready'
     assert classify_startup(READY[1:]) == 'loading'
+
+
+@pytest.mark.parametrize('label', ['登录', 'Login', 'Log in', 'Sign in'])
+def test_generic_text_cannot_override_a_complete_player_but_real_login_controls_still_block(label):
+    assert classify_startup(READY + [('TextControl', label)]) == 'ready'
+    assert classify_startup([('TextControl', label)]) == 'login-required'
+    for role in ('ButtonControl', 'WindowControl', 'Other'):
+        assert classify_startup(READY + [(role, label)]) == 'login-required'
+
+
+@pytest.mark.parametrize('third', [('ComboBoxControl', ''), ('ButtonControl', '暂停'),
+                                  ('ButtonControl', '播放'), ('ButtonControl', '顺序播放')])
+def test_versions_without_edit_search_can_confirm_their_complete_player(third):
+    assert classify_startup(READY[1:] + [third]) == 'ready'
+    assert classify_startup([third]) == 'loading'
 
 
 def harness(tmp_path, monkeypatch, states, paths=(), timeout=4):
@@ -55,6 +70,24 @@ def test_existing_actual_version_is_reused_instead_of_saved_old_executable(tmp_p
     actual = tmp_path / 'current' / 'QQMusic.exe'
     exe, startup, events, polls, now = harness(tmp_path, monkeypatch, ['ready'], paths=(actual,))
     assert startup.ensure(exe) == actual and not events and polls == [actual, actual]
+
+
+def test_transient_login_label_during_existing_client_rebuild_can_recover(tmp_path, monkeypatch):
+    exe, startup, events, polls, _ = harness(tmp_path, monkeypatch,
+        ['login-required', 'ready', 'ready'], paths=(tmp_path / 'QQMusic.exe',))
+    assert startup.ensure(exe) == exe and not events and len(polls) == 3
+
+
+@pytest.mark.parametrize('state,detail', [('loading', '这不表示账号未登录'), ('unavailable', '界面读取失败或超时'),
+                                        ('login-required', '持续显示登录或验证'), ('signing-in', '仍显示正在登录')])
+def test_not_ready_messages_explain_the_observed_reason_instead_of_asserting_logout(tmp_path, monkeypatch, state, detail):
+    exe, startup, events, _, _ = harness(tmp_path, monkeypatch, [state], paths=(tmp_path / 'QQMusic.exe',))
+    if state == 'unavailable':
+        def unreadable(_): raise OSError('Private implementation detail must not appear in the message')
+        startup.probe = unreadable
+    with pytest.raises(QQClientNotReady, match=detail) as error:
+        startup.ensure(exe)
+    assert 'Private' not in str(error.value) and '未发送歌单' in str(error.value) and not events
 
 
 @pytest.mark.parametrize('state', ['login-required', 'signing-in', 'loading'])
