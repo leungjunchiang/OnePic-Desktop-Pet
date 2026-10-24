@@ -4,7 +4,8 @@
 所有修改和媒体查询复用串行音乐线程；持久化失败不会丢失内存中的队列。
 Windows 完整临时队列由 QQ 顺序衔接；六毛同步实际曲目，不再曲终抢切。
 其他适配保留单曲隔离和保守曲终判断。
-每轮用系统随机重新抽三十首，轮内不重复；允许跨轮及首曲重复，不按历史记录强制换曲。
+每轮热门前五十对应歌曲随机十五首、完整曲库随机十五首，按歌名和 ID 去重并混合打乱。
+完整曲库部分排除已选曲目，仍可抽到其他热门歌；跨轮及首曲可重复。
 原生队列首次预备整个候选池的元数据，后续换轮从该池重新抽取三十首且不曲终联网。
 模式设置不改变 QQ 窗口状态；Mac 失败保留对应阶段原因及自检入口提示。
 未确认实际歌曲的结果保留原始原因，不能误报成播放模式失败。
@@ -32,25 +33,32 @@ def song_title_key(title):
 
 
 def bundled_candidates():
-    """公开目录元数据备用表，音频始终由 QQ 客户端在线播放。"""
-    try:
-        data = json.loads(resource_path('resources/music/qq-chenchusheng.json').read_text(encoding='utf-8'))
-        songs = []
-        for row in data['songs']:
-            song_id = str(row['id'])
-            if (not re.fullmatch(r'[1-9][0-9]{0,9}', song_id) or int(song_id) > 4294967295
-                    or canonical('陈楚生') not in artist_names(row['artist'])):
-                continue
-            songs.append(SongCandidate('qq', row['title'], row['artist'], identifier=song_id,
-                native={'album': row.get('album', ''), 'requires_subscription': bool(row.get('requires_subscription')),
-                        'primary_artist_only': bool(row.get('primary_artist_only'))}))
-        return tuple(songs)
-    except (OSError, ValueError, KeyError, TypeError):
-        return ()
+    """随包公开元数据和明确日期的热歌快照；不包含音频、账户或凭据。"""
+    songs = {}
+    for name in ('qq-chenchusheng.json', 'qq-chenchusheng-hot.json'):
+        try:
+            data = json.loads(resource_path('resources/music/' + name).read_text(encoding='utf-8'))
+            for row in data['songs']:
+                song_id = str(row['id'])
+                if (not re.fullmatch(r'[1-9][0-9]{0,9}', song_id) or int(song_id) > 4294967295
+                        or canonical('陈楚生') not in artist_names(row['artist'])):
+                    continue
+                native = {'album': row.get('album', ''), 'requires_subscription': bool(row.get('requires_subscription')),
+                          'primary_artist_only': bool(row.get('primary_artist_only'))}
+                rank = row.get('popularity_rank')
+                if type(rank) is int and 1 <= rank <= 50:
+                    native['popularity_rank'] = rank
+                if isinstance(row.get('track_info'), dict):
+                    native['track_info'] = row['track_info']
+                songs[song_id] = SongCandidate('qq', row['title'], row['artist'], identifier=song_id, native=native)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return tuple(songs.values())
 
 
 class QQPlaylist:
     SIZE = 30
+    HOT_SIZE = 15
 
     def __init__(self, player, *, store_path: Path | None = None, shuffle=None, fallback_loader=None,
                  clock=time.monotonic, queue_mode=None, stopper=lambda: None, native_queue=None):
@@ -74,6 +82,8 @@ class QQPlaylist:
         self._pending_end = None
         self._start_stopped = False
         self._catalog = ()
+        self._popular_keys = set()
+        self._popular_snapshot = False
         self.load()
         self._reset_completion()
 
@@ -87,6 +97,8 @@ class QQPlaylist:
         if self.player.client_finder('qq', self.player.settings.qq_music_path) is None:
             return self.failure('未找到 QQ 音乐，请先安装并在设置中选择 QQ 音乐客户端。')
         songs = {}
+        popular_keys = set(self._popular_keys) if reuse_catalog and self._catalog else set()
+        popular_snapshot = self._popular_snapshot if reuse_catalog and self._catalog else False
         def collect(rows):
             for candidate in rows:
                 key = song_title_key(candidate.title)
@@ -98,14 +110,22 @@ class QQPlaylist:
                     songs[key] = candidate
         if reuse_catalog:
             collect(self._catalog or self.entries)
-        if self.fallback_loader and not (reuse_catalog and self.native_queue is not None) and canonical(artist) == canonical('陈楚生'):
-            collect(self.fallback_loader())
+        if self.fallback_loader and not (reuse_catalog and self.native_queue is not None and self._catalog) and canonical(artist) == canonical('陈楚生'):
+            fallback = self.fallback_loader()
+            collect(fallback)
+            popular_keys.update(self._top_fifty_keys(fallback))
+            popular_snapshot = len(popular_keys) >= self.HOT_SIZE
         try:
             loaded_artist = False
             artist_loader = getattr(self.player.catalog, 'artist_candidates', None)
             if not reuse_catalog and callable(artist_loader) and self.clock() >= self._catalog_retry_after:
                 try:
-                    collect(artist_loader(artist, cancelled=self.player.cancelled))
+                    artist_rows = artist_loader(artist, cancelled=self.player.cancelled)
+                    collect(artist_rows)
+                    ranked = self._top_fifty_keys(artist_rows)
+                    if len(ranked) >= self.HOT_SIZE:
+                        popular_keys = ranked  # Fresh official ordering replaces the bundled snapshot.
+                        popular_snapshot = False
                     loaded_artist = len(songs) >= self.SIZE
                 except QQCatalogError:
                     if self.player.cancelled():
@@ -124,6 +144,7 @@ class QQPlaylist:
                     self.player.sleep(0.2)
                     rows = self.player.catalog.search('', artist, page=page)
                 collect(rows)
+                popular_keys.update(self._top_fifty_keys(rows))
                 if sum(not self._paid(s) for s in songs.values()) >= self.SIZE:
                     break
                 if not rows:
@@ -132,16 +153,32 @@ class QQPlaylist:
             if len(songs) < self.SIZE:
                 return self.failure(str(exc))
             self._catalog_retry_after = self.clock() + 60
-        available = list(songs.values())
+        by_id = {}
+        for candidate in songs.values():
+            previous = by_id.get(candidate.identifier)
+            if previous is None or (candidate.native or {}).get('track_info') is not None:
+                by_id[candidate.identifier] = candidate
+        available = list(by_id.values())
         if len(available) < self.SIZE:
             return self.failure(f'在线目录只找到 {len(available)} 首不同歌曲，未满 30 首；原歌单已保留，请稍后重试。')
-        self.shuffle(available)
-        available.sort(key=self._paid)  # 优先选择无需订阅的版本，授权仍由 QQ 判断。
-        chosen = available[:self.SIZE]
+        popular_keys.update(self._top_fifty_keys(available) if not popular_keys else ())
+        hot = [s for s in available if song_title_key(s.title) in popular_keys]
+        if len(hot) < self.HOT_SIZE:
+            return self.failure('热门前 50 的可用歌曲不足 15 首，原歌单已保留，请稍后重试。')
+        self.shuffle(hot)
+        hot.sort(key=self._paid)  # Random among complete unrestricted versions before subscription-only choices.
+        chosen = hot[:self.HOT_SIZE]
+        selected_ids = {s.identifier for s in chosen}
+        remaining = [s for s in available if s.identifier not in selected_ids]
+        self.shuffle(remaining)
+        remaining.sort(key=self._paid)
+        chosen += remaining[:self.SIZE - self.HOT_SIZE]
         self.shuffle(chosen)
         if self.player.cancelled():
             return self.failure('音乐操作已取消。')
         self._catalog = tuple(available)
+        self._popular_keys = popular_keys
+        self._popular_snapshot = popular_snapshot
         self.entries, self.index = tuple(chosen), 0
         self.round_number += 1
         self.auto_advance = False
@@ -162,11 +199,19 @@ class QQPlaylist:
         return self.decorate(result, created=True)
 
     @staticmethod
+    def _top_fifty_keys(songs):
+        return {song_title_key(s.title) for s in songs
+                if type((s.native or {}).get('popularity_rank')) is int
+                and 1 <= s.native['popularity_rank'] <= 50}
+
+    @staticmethod
     def _paid(song):
         return bool((song.native or {}).get('requires_subscription'))
 
     def decorate(self, result, *, created=False):
         prefix = f'六毛歌单 第 {self.round_number} 轮 {self.index + 1}/{len(self.entries)} · '
+        if self._popular_snapshot:
+            prefix += '使用随包热歌快照 · '
         return replace(result, playlist_size=len(self.entries), playlist_index=self.index,
                        playlist_created=created, playlist_round=self.round_number,
                        message=prefix + result.message)

@@ -1,4 +1,4 @@
-"""验证原生命令和模式查找、真实读回与隔离，点歌成功或失败均不隐藏用户窗口。"""
+"""验证带热门排序的歌单模式、原生命令及真实读回隔离，点歌不隐藏用户窗口。"""
 from contextlib import nullcontext
 from pathlib import Path
 import sys
@@ -131,7 +131,7 @@ def online_queue(*, accept=True):
                 return False
             return super().set(value)
     mode = QQQueueMode(VisibleBackend(accept=accept))
-    songs = tuple(SongCandidate('qq', f'歌曲{i}', '陈楚生', identifier=str(i)) for i in range(1,31))
+    songs = tuple(SongCandidate('qq', f'歌曲{i}', '陈楚生', identifier=str(i), native={'popularity_rank':i}) for i in range(1,31))
     def dispatch(_exe, identifier):
         events.append('dispatch')
         selected[:] = [next(song for song in songs if song.identifier == identifier)]

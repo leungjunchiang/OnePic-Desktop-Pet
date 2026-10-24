@@ -1,4 +1,4 @@
-"""验证三十首允许跨轮重复、先保存后播放、失败恢复、曲终换轮与独立界面控制。"""
+"""验证热门与全曲库混合三十首、允许跨轮重复、失败恢复、曲终换轮与界面控制。"""
 
 from dataclasses import replace
 import json
@@ -14,7 +14,7 @@ from onepic_desktop_pet.qqmusic_playlist import QQPlaylist, bundled_candidates
 
 def song(i, *, paid=False, title=None):
     return SongCandidate('qq', title or f'歌曲{i}', '陈楚生', identifier=str(i),
-                         native={'album': '专辑', 'requires_subscription': paid})
+                         native={'album': '专辑', 'requires_subscription': paid, 'popularity_rank': i})
 
 
 class Player:

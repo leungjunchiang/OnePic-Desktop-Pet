@@ -5,6 +5,7 @@
 播放权限已获确认。所有阻塞操作由既有 MusicCommandThread 调用；分页收集歌单，切歌复用候选元数据。
 已有 QQ 窗口不处理；仅本次成功冷启动且无用户新输入时收起一次，不在轮询或曲终反复隐藏。
 陈楚生随机歌单优先分页读取公开歌手目录，缓存完整版本元数据，不依赖本机诊断脚本。
+保留官方热门排序的原始名次，用于前五十热门与完整曲库各抽十五首。
 可信平台快照缺专辑不再误判为播放失败，非空专辑、完整版本标题和歌手仍须匹配。
 冷启动先普通打开并等待登录界面就绪，歌曲命令只交给已运行客户端，不使用后台自启动参数。
 """
@@ -137,7 +138,7 @@ class QQMusicCatalog:
                         or not isinstance(rows, list) or type(total) is not int or total < 0
                         or len(rows) > 80):
                     raise ValueError('unexpected artist catalog')
-                for wrapped in rows:
+                for offset, wrapped in enumerate(rows):
                     row = wrapped['songInfo']
                     song_id = str(row.get('id', ''))
                     title = row.get('title') or row.get('name')
@@ -156,9 +157,9 @@ class QQMusicCatalog:
                     album = row['album']['name']
                     if not isinstance(album, str) or len(album) > 500:
                         continue
-                    songs[song_id] = SongCandidate('qq', title.strip(), ' / '.join(names), identifier=song_id,
+                    songs.setdefault(song_id, SongCandidate('qq', title.strip(), ' / '.join(names), identifier=song_id,
                         native={'album': album, 'requires_subscription': bool(row.get('pay', {}).get('pay_play', 0)),
-                                'track_info': row})
+                                'popularity_rank': begin + offset + 1, 'track_info': row}))
                 if not rows or begin + len(rows) >= total:
                     break
             except (KeyError, TypeError, ValueError, AttributeError) as exc:
