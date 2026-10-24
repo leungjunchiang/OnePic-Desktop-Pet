@@ -61,6 +61,24 @@ def test_accompaniment_does_not_replace_vocal_recordings_with_free_backing_track
     assert [s.title for s in songs] == ['经过 (Live)']
 
 
+def test_explicit_thirty_second_preview_and_excerpt_are_not_random_full_songs():
+    response = artist_response(count=3, total=3)
+    rows = response['req']['data']['songList']
+    rows[0]['songInfo']['title'] = '空 (30秒试听版)'
+    rows[1]['songInfo']['title'] = '一夜 (Preview)'
+    rows[2]['songInfo']['title'] = '一夜 (Live)'
+    assert [s.title for s in QQMusicCatalog(request_json=lambda _: response).artist_candidates('陈楚生')] == ['一夜 (Live)']
+
+
+def test_short_greetings_and_unlabelled_clips_are_not_random_full_songs():
+    response = artist_response(count=3, total=3)
+    rows = response['req']['data']['songList']
+    rows[0]['songInfo'].update(title='和陈楚生一起拜年啦', interval=20)
+    rows[1]['songInfo'].update(title='即兴片段', interval=70)
+    rows[2]['songInfo'].update(title='山高水长', interval=219)
+    assert [s.title for s in QQMusicCatalog(request_json=lambda _: response).artist_candidates('陈楚生')] == ['山高水长']
+
+
 def test_native_queue_reuses_validated_artist_metadata_and_refuses_wrong_embedded_row(tmp_path):
     entries = QQMusicCatalog(request_json=lambda _: artist_response(count=30, total=30)).artist_candidates('陈楚生')
     commands = []

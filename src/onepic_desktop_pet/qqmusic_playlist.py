@@ -6,7 +6,8 @@ Windows 完整临时队列由 QQ 顺序衔接；六毛同步实际曲目，不�
 其他适配保留单曲隔离和保守曲终判断。
 随机使用公开歌手候选池及系统熵，最近十次已确认首曲跨重启避让；不固定验收歌曲。
 原生队列首次预备整个候选池的元数据，后续换轮从该池重新抽取三十首且不曲终联网。
-模式设置安排在客户端最小化之前；失败说明给出播放栏的设置位置。
+模式设置不改变 QQ 窗口状态；Mac 失败保留对应阶段原因及自检入口提示。
+未确认实际歌曲的结果保留原始原因，不能误报成播放模式失败。
 生成完毕先保存三十首，再尝试播放；首次接管或点歌失败不会丢失本机已生成歌单。
 """
 
@@ -168,7 +169,7 @@ class QQPlaylist:
                 self._stop_unisolated()
             return self.decorate(result, created=True)
         if not self._acquire_mode(result):
-            return self.decorate(self._mode_failure(), created=True)
+            return self.decorate(self._unready_result(result), created=True)
         self.auto_advance = (not self.player.cancelled()
                              and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
         if self.auto_advance:
@@ -203,7 +204,7 @@ class QQPlaylist:
         result = self._play_candidate(self.entries[target])
         if result.success:
             if not self._acquire_mode(result):
-                return self.decorate(self._mode_failure())
+                return self.decorate(self._unready_result(result))
             self.index = target
             self.auto_advance = (not self.player.cancelled()
                                  and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
@@ -274,7 +275,7 @@ class QQPlaylist:
         self._start_stopped = False
         if self.queue_mode is not None:
             kwargs['prepare_queue'] = self._prepare_queue_mode
-            kwargs['queue_failure_message'] = self._mode_failure().message
+            kwargs['queue_failure_message'] = lambda: self._mode_failure().message
         if self.native_queue is not None:
             self.native_loaded = False
             def dispatch(client, candidate):
@@ -369,9 +370,22 @@ class QQPlaylist:
 
     def _mode_failure(self):
         from .qqmusic_queue_mode import mode_setup_message
+        mode = self.queue_mode
+        if getattr(getattr(mode, 'backend', None), 'platform', '') == 'darwin':
+            detail = getattr(mode, 'last_error', '')
+            return SongPlaybackResult(False, 'qq', '', '陈楚生',
+                '[Mac QQ / 模式] 尚未确认连续播放所需模式，已请求暂停并保留歌单。'
+                '请在设置中点“检查 QQ 适配”。' + (f' 原因：{detail}' if detail else ''),
+                MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
         return SongPlaybackResult(False, 'qq', '', '陈楚生',
                                   mode_setup_message(getattr(self.queue_mode, 'target', '单曲循环')),
                                   MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
+
+    def _unready_result(self, result):
+        if result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED:
+            return self._mode_failure()
+        return replace(result, success=False, error_code=MusicPlaybackError.MEDIA_SESSION_TIMEOUT,
+                       message=result.message + ' 未启用连续播放，已请求暂停，六毛歌单已保留。')
 
     def ended(self, track):
         """新鲜曲末到期及时衔接；无可靠时间轴时保留真实回绕/稳定结束的保守判断。"""

@@ -1,4 +1,4 @@
-"""设置支持从点歌入口定位 QQ 程序地址；Mac 用文件选择器选应用包并核对真实 QQ。
+"""设置支持 Mac QQ 应用包选择和异步只读适配检查；等待检查线程清理后才关闭设置。
 
 本模块实现六毛的半透明聊天面板、AI 设置与生活提醒面板。
 
@@ -148,6 +148,25 @@ class ConnectionCheckThread(QThread):
             self.failed.emit("检测遇到意外问题，请稍后重试。")
         else:
             self.succeeded.emit(result)
+
+
+class QQMusicCheckThread(QThread):
+    """本机只读诊断；不播放、启动、隐藏 QQ，不访问账号、凭据或网络。"""
+    completed = Signal(str)
+
+    def __init__(self, executable, parent=None):
+        super().__init__(parent)
+        self.executable = executable
+
+    def run(self):
+        try:
+            from .qqmusic_macos import QQMusicMacBridge
+            bridge = QQMusicMacBridge(cancelled=self.isInterruptionRequested)
+            result = bridge.diagnostics(self.executable)
+        except Exception:
+            result = 'QQ 适配检查未完成，请重新选择 QQMusic.app 后重试。'
+        if not self.isInterruptionRequested():
+            self.completed.emit(result)
 
 
 class ChatDialog(QDialog):
@@ -851,6 +870,8 @@ class AISettingsDialog(QDialog):
         self.agent_manager = agent_manager
         self.music_manager = music_manager
         self._connection_thread: ConnectionCheckThread | None = None
+        self._qq_check_thread = None
+        self._qq_check_pending_done = None
         self.setWindowTitle(f"Lili · {PET_NAME}设置")
         self.setObjectName("liliPanel")
         self.setMinimumWidth(500)
@@ -1101,11 +1122,22 @@ class AISettingsDialog(QDialog):
         qq_layout.addWidget(self.qq_music_path, 1); qq_layout.addWidget(qq_pick)
         form.addRow("QQ 音乐程序", qq_row)
         if sys.platform == 'darwin':
+            self.qq_check_button = QPushButton('检查 QQ 适配')
+            self.qq_check_button.setObjectName('softButton')
+            self.qq_check_button.clicked.connect(self._check_qq_music)
+            qq_layout.addWidget(self.qq_check_button)
             qq_note = QLabel('选择“应用程序”里的 QQMusic.app，无需进入包内。首次使用请打开并登录 QQ 音乐，'
                              '再在系统设置的“隐私与安全性 → 辅助功能”允许 Lili。完成设置后，六毛自行点歌和续播。')
             qq_note.setWordWrap(True)
             qq_note.setObjectName('status')
             form.addRow('', qq_note)
+            self.qq_check_result = QLabel()
+            self.qq_check_result.setTextFormat(Qt.TextFormat.PlainText)
+            self.qq_check_result.setWordWrap(True)
+            self.qq_check_result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.qq_check_result.setObjectName('status')
+            self.qq_check_result.hide()
+            form.addRow('', self.qq_check_result)
 
         self.netease_music_path = QLineEdit(settings.netease_music_path)
         self.netease_music_path.setPlaceholderText("自动寻找，或选择 cloudmusic.exe / 网易云音乐.app")
@@ -1179,8 +1211,50 @@ class AISettingsDialog(QDialog):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API
         lifecycle_log("settings.close_event.begin", self)
+        if self._qq_check_thread is not None:
+            self.reject()
+            event.ignore()
+            return
         super().closeEvent(event)
         lifecycle_log("settings.close_event.end", self)
+
+    def done(self, result):
+        if self._qq_check_thread is not None:
+            self._qq_check_pending_done = result
+            self._qq_check_thread.requestInterruption()
+            return
+        super().done(result)
+
+    def _check_qq_music(self):
+        if self._qq_check_thread is not None or self._connection_thread is not None:
+            return
+        self.qq_check_result.setText('正在检查本机 QQ 版本、辅助功能权限和公开控件…')
+        self.qq_check_result.show()
+        self.qq_check_button.setEnabled(False)
+        self.connection_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
+        self.save_button.setEnabled(False)
+        self._qq_check_thread = QQMusicCheckThread(self.qq_music_path.text(), self)
+        self._qq_check_thread.completed.connect(self.qq_check_result.setText)
+        self._qq_check_thread.finished.connect(self._qq_check_finished)
+        self._qq_check_thread.start()
+
+    def _qq_check_finished(self):
+        thread = self._qq_check_thread
+        if thread is not None and not thread.wait(0):
+            QTimer.singleShot(10, self._qq_check_finished)
+            return
+        self._qq_check_thread = None
+        self.qq_check_button.setEnabled(True)
+        self.connection_button.setEnabled(True)
+        self.cancel_button.setEnabled(self._connection_thread is None)
+        self.save_button.setEnabled(self._connection_thread is None)
+        if thread is not None:
+            thread.deleteLater()
+        pending = self._qq_check_pending_done
+        self._qq_check_pending_done = None
+        if pending is not None:
+            self.done(pending)
 
     def focus_qq_music_path(self) -> None:
         """由明确点歌动作定位 QQ 地址输入框，保存后由原调用继续播放。"""
@@ -1318,11 +1392,13 @@ class AISettingsDialog(QDialog):
     def _test_connection(self) -> None:
         """在后台检测本机 Agent 登录或 API，不阻塞其余设置选项。"""
 
-        if self._connection_thread is not None and self._connection_thread.isRunning():
+        if self._qq_check_thread is not None or self._connection_thread is not None:
             return
         provider = str(self.provider.currentData())
         self.connection_button.setEnabled(False)
         self.connection_button.setText("正在检测…")
+        if hasattr(self, 'qq_check_button'):
+            self.qq_check_button.setEnabled(False)
         self.cancel_button.setEnabled(False)
         self.save_button.setEnabled(False)
         self._connection_thread = ConnectionCheckThread(
@@ -1363,8 +1439,10 @@ class AISettingsDialog(QDialog):
         self._connection_thread = None
         self.connection_button.setEnabled(True)
         self.connection_button.setText("检测是否连接")
-        self.cancel_button.setEnabled(True)
-        self.save_button.setEnabled(True)
+        if hasattr(self, 'qq_check_button'):
+            self.qq_check_button.setEnabled(self._qq_check_thread is None)
+        self.cancel_button.setEnabled(self._qq_check_thread is None)
+        self.save_button.setEnabled(self._qq_check_thread is None)
         if thread is not None:
             thread.deleteLater()
 

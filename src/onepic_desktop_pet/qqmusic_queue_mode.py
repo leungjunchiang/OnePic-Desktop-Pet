@@ -1,4 +1,4 @@
-"""核对 QQ 临时队列顺序模式，以原生缓存查询避免深层网页耗时；暂停恢复用户原模式。"""
+"""核对 QQ 临时队列模式并保留窗口；Windows 原生缓存查询，Mac 只操作已识别播放栏。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -36,7 +36,7 @@ def dispatch_native_mode(executable, target, *, popen=None):
         return False
     # Do not wait for or terminate the client: an existing process can exit
     # between discovery and dispatch, turning this invocation into a new client.
-    (popen or subprocess.Popen)([str(executable), '/playmode', str(NATIVE_MODES[target])],
+    (popen or subprocess.Popen)([str(executable), '/background', '/playmode', str(NATIVE_MODES[target])],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         shell=False, creationflags=0x08000000 if sys.platform == 'win32' else 0)
     return True
@@ -141,12 +141,12 @@ class _WindowsQQModeNativeBackend:
         self.executable, self.cancelled = executable, cancelled
 
     def _roots(self, auto):
-        from .music_background import music_client_windows
+        from .music_background import music_client_mode_windows
         executable = self.executable()
         if executable is None:
             raise OSError('未找到已配置的 QQ 音乐。')
         roots = []
-        for hwnd in music_client_windows(Path(executable)):
+        for hwnd in music_client_mode_windows(Path(executable)):
             try:
                 root = auto.ControlFromHandle(hwnd)
                 if root is not None:
@@ -287,15 +287,23 @@ class MacQQModeBackend:
 
     def __init__(self, bridge):
         self.bridge = bridge
+        self.platform = 'darwin'
 
     def _controls(self):
+        from .qqmusic_macos import MODE_ROLES, player_region
         _app, tree = self.bridge._read()
-        return [n for n in tree.descendants() if n.role in {'AXButton', 'AXMenuItem'} and n.text in MODES]
+        region = player_region(tree)
+        if region is None:
+            raise OSError('[Mac QQ / 模式] 未识别播放栏，未修改其他位置的同名按钮。')
+        # A mode menu can be a sibling popover, but the current button must belong to the player bar.
+        buttons = [n for n in region[0].descendants() if n.role in MODE_ROLES and n.text in MODES]
+        menus = [n for n in tree.descendants() if n.role == 'AXMenuItem' and n.text in MODES]
+        return buttons + menus
 
     def read(self):
-        buttons = [n for n in self._controls() if n.role == 'AXButton']
+        buttons = [n for n in self._controls() if n.role != 'AXMenuItem']
         if len(buttons) != 1:
-            raise OSError('当前 Mac QQ 未公开唯一的播放模式按钮。')
+            raise OSError('[Mac QQ / 模式] QQ 播放栏未公开唯一的模式按钮，请运行“检查 QQ 适配”。')
         return buttons[0].text
 
     def set(self, target):
@@ -303,12 +311,15 @@ class MacQQModeBackend:
             if self.bridge.cancelled():
                 return False
             controls = self._controls()
-            buttons = [n for n in controls if n.role == 'AXButton']
+            buttons = [n for n in controls if n.role != 'AXMenuItem']
             if len(buttons) == 1 and buttons[0].text == target:
                 return True
             choices = [n for n in controls if n.text == target]
             node = choices[0] if len(choices) == 1 else buttons[0] if len(buttons) == 1 else None
-            if node is None or not self.bridge.backend.action(node):
+            if node is None:
                 return False
+            if not self.bridge.backend.action(node):
+                if node.role not in {'AXPopUpButton', 'AXMenuButton'} or not self.bridge.backend.action(node, 'AXShowMenu'):
+                    return False
             self.bridge.sleep(0.15)
         return False

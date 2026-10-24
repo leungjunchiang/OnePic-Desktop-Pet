@@ -3,8 +3,9 @@
 仅传递歌曲元数据与客户端命令，不下载音频。目录属于可变化的客户端接口；错误、
 登录和会员限制交给客户端处理。命令只投递一次；元数据匹配不等于精确 ID 或完整
 播放权限已获确认。所有阻塞操作由既有 MusicCommandThread 调用；分页收集歌单，切歌复用候选元数据。
-连续轮播先完成模式设置，再最小化客户端；Windows 可传入原生完整队列投递器。
+已有 QQ 窗口不处理；仅本次成功冷启动且无用户新输入时收起一次，不在轮询或曲终反复隐藏。
 陈楚生随机歌单优先分页读取公开歌手目录，缓存完整版本元数据，不依赖本机诊断脚本。
+可信平台快照缺专辑不再误判为播放失败，非空专辑、完整版本标题和歌手仍须匹配。
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .music import ShuffleBag, SongEntry, find_music_client
-from .music_background import background_music_client
+from .music_background import QQColdStartPolicy, qq_background_startup_options
 from .music_playback import (
     MusicPlaybackError, MusicPlaybackOutcome, SongCandidate, SongPlaybackResult,
 )
@@ -42,7 +43,7 @@ def artist_names(value: str) -> frozenset[str]:
 
 
 def candidate_matches(selected: SongCandidate, track) -> bool:
-    """完整版目录比对全部歌手和专辑；备用目录核对主歌手与完整版本标题。"""
+    """完整标题和歌手必须一致；仅可信平台未提供专辑时容许缺值，非空仍严格比对。"""
     if track is None:
         return False
     native = selected.native or {}
@@ -50,7 +51,7 @@ def candidate_matches(selected: SongCandidate, track) -> bool:
     artists_match = expected <= actual if native.get('primary_artist_only') else expected == actual
     return (canonical(track.title) == canonical(selected.title) and artists_match
             and (not native.get('album') or canonical(track.album) == canonical(native['album'])
-                 or (getattr(track, 'metadata_scope', '') == 'mac-accessibility' and not track.album)))
+                 or (getattr(track, 'metadata_scope', '') in {'mac-accessibility', 'windows-gsmtc'} and not track.album)))
 
 
 def _fetch_json(url: str) -> dict:
@@ -142,13 +143,13 @@ class QQMusicCatalog:
                     if (not re.fullmatch(r'[1-9][0-9]{0,9}', song_id) or int(song_id) > 4294967295
                             or row.get('type') != 0 or not isinstance(title, str) or not title.strip() or len(title) > 200
                             or not isinstance(singers, list) or not singers
-                            or re.search(r'伴奏|纯音乐|卡拉\s*OK|\b(?:instrumental|karaoke)\b', title, re.I)):
+                            or re.search(r'伴奏|纯音乐|卡拉\s*OK|试听|片段|预告|\b(?:instrumental|karaoke|preview|snippet|teaser|trailer)\b', title, re.I)):
                         continue
                     names = [s['name'] for s in singers if isinstance(s.get('name'), str)]
                     if canonical(artist) not in artist_names(' / '.join(names)):
                         continue
                     if (not isinstance(row.get('file'), dict) or not row['file'] or not row.get('mid')
-                            or type(row.get('interval')) is not int or row['interval'] <= 0):
+                            or type(row.get('interval')) is not int or row['interval'] < 90):
                         continue
                     album = row['album']['name']
                     if not isinstance(album, str) or len(album) > 500:
@@ -210,26 +211,31 @@ def dispatch_song(executable: Path, song_id: str, *, popen=None) -> None:
     if not re.fullmatch(r'[1-9][0-9]{0,9}', song_id) or int(song_id) > 4294967295:
         raise ValueError('无效的 QQ 音乐数字歌曲 ID。')
     # 不 wait/kill：冷启动时该进程可能成为客户端主进程。
-    (popen or subprocess.Popen)(
-        [str(executable), '/playbysongid', f'cmd_count==1&&id_0=={song_id}&&songtype_0==0'],
+    options = qq_background_startup_options(executable)
+    args = [str(executable), '/background']
+    args += ['/playbysongid', f'cmd_count==1&&id_0=={song_id}&&songtype_0==0']
+    (popen or subprocess.Popen)(args,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        shell=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        shell=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+        **options)
 
 
 class QQMusicOnlinePlayer:
     """在线随机袋与精确点歌共用单次投递和有上限的状态确认。"""
 
     def __init__(self, settings, track_reader, *, catalog=None, client_finder=find_music_client,
-                 dispatcher=dispatch_song, verify_timeout=6.0, poll_interval=0.35,
+                 dispatcher=dispatch_song, verify_timeout=10.0, poll_interval=0.35,
                  sleep=time.sleep, clock=time.monotonic, cancelled=lambda: False,
-                 candidate_dispatcher=None, backgrounder=background_music_client) -> None:
+                 candidate_dispatcher=None, backgrounder=None, verification_detail=None, window_policy=None) -> None:
         self.settings = settings
         self.track_reader = track_reader
         self.catalog = catalog or QQMusicCatalog()
         self.client_finder = client_finder
         self.dispatcher = dispatcher
         self.candidate_dispatcher = candidate_dispatcher
-        self.backgrounder = backgrounder
+        self.verification_detail = verification_detail or (lambda: '')
+        self.window_policy = window_policy or QQColdStartPolicy()
+        # Retain the old keyword for integrations; playback never calls a window-hiding callback.
         self.verify_timeout = max(0.0, verify_timeout)
         self.poll_interval = max(0.01, poll_interval)
         self.sleep, self.clock = sleep, clock
@@ -272,7 +278,7 @@ class QQMusicOnlinePlayer:
     def play_candidate(self, selected: SongCandidate, *, title: str = '',
                        artist: str = '陈楚生', prepare_queue=None, dispatch_candidate=None,
                        queue_failure_message=None) -> SongPlaybackResult:
-        """投递确定歌曲；连续轮播的准备动作必须早于后台隐藏。"""
+        """投递、核对确定歌曲及播放模式，保持用户现有窗口状态。"""
 
         def failed(message, code):
             return SongPlaybackResult(False, 'qq', title, artist, message, code)
@@ -283,15 +289,14 @@ class QQMusicOnlinePlayer:
         if client is None:
             return failed('未找到 QQ 音乐，请在设置中选择 QQ 音乐客户端。',
                           MusicPlaybackError.PLAY_ACTION_FAILED)
+        window_ticket = self.window_policy.begin(client)
         try:
             candidate_dispatcher = dispatch_candidate or self.candidate_dispatcher
             if candidate_dispatcher is not None:
                 candidate_dispatcher(client, selected)
             else:
                 self.dispatcher(client, selected.identifier)
-            if prepare_queue is None:
-                self._background(client)
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, ImportError, AttributeError) as exc:
             return failed(f'QQ 音乐歌曲投递失败：{exc}', MusicPlaybackError.PLAY_ACTION_FAILED)
         deadline = self.clock() + self.verify_timeout
         latest = None
@@ -302,20 +307,18 @@ class QQMusicOnlinePlayer:
                 latest = self.track_reader()
             except Exception:
                 latest = None
-            if prepare_queue is None:
-                self._background(client)
             if (not self.cancelled() and latest and str(latest.playback_status).casefold() == 'playing'
                     and candidate_matches(selected, latest)):
                 if prepare_queue is not None:
-                    try:
-                        ready = prepare_queue()
-                    finally:
-                        self._background(client)
+                    ready = prepare_queue()
                     if self.cancelled():
                         return failed('音乐操作已取消，正在执行暂停。', MusicPlaybackError.PLAY_ACTION_FAILED)
                     if not ready:
                         from .qqmusic_queue_mode import MODE_SETUP_MESSAGE
-                        return failed(queue_failure_message or MODE_SETUP_MESSAGE, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
+                        message = queue_failure_message() if callable(queue_failure_message) else queue_failure_message
+                        return failed(message or MODE_SETUP_MESSAGE, MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE)
+                if not self.cancelled():
+                    self.window_policy.finish(window_ticket)
                 return SongPlaybackResult(
                     True, 'qq', title, artist,
                     f'QQ 音乐正在播放：{latest.artist}《{latest.title}》，六毛陪你一起听♪',
@@ -325,20 +328,15 @@ class QQMusicOnlinePlayer:
             if remaining <= 0:
                 break
             self.sleep(min(self.poll_interval, remaining))
-        if prepare_queue is not None:
-            self._background(client)
         if self.cancelled():
             return failed('音乐操作已取消，正在执行暂停。', MusicPlaybackError.PLAY_ACTION_FAILED)
+        try:
+            detail = str(self.verification_detail() or '')[:600]
+        except Exception:
+            detail = ''
         return SongPlaybackResult(
             True, 'qq', title, artist,
             f'已向 QQ 音乐请求《{selected.title}》，尚未读到匹配的播放状态。'
-            '请检查客户端登录、会员权限或弹窗；可说“查看音乐状态”。',
+            '请检查客户端登录、会员权限或弹窗；可说“查看音乐状态”。' + (f' 原因：{detail}' if detail else ''),
             selected=selected, play_attempts=1,
             outcome=MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED)
-
-    def _background(self, client):
-        if not self.cancelled():
-            try:
-                self.backgrounder(client)
-            except (OSError, ValueError):
-                pass

@@ -1,10 +1,12 @@
 """管理 QQ 后台连续轮播；Windows 会话和实验性 macOS 已授权 AX 均只核对目标客户端。
 
 Windows 通过 QQ 原生临时队列顺序衔接，六毛跟随实际曲目；其他适配保留单曲隔离。
+不再为点歌、确认或曲终隐藏已有 QQ，客户端冷启动由各平台自身启动配置处理。
 恢复歌单选曲先锁定 QQ，暂停恢复原模式；普通 Windows 曲终不由六毛暂停或重发歌曲。
 
 QQ 在线点歌复用音乐工作线程，后续控制只使用唯一 QQMusic.exe Session，禁止全局媒体键回退。
 已经暂停或播放时，幂等控制先确认状态，不因客户端禁用重复按钮而误报失败。
+Windows 媒体会话明确标记来源；QQ 不返回专辑时仍须匹配完整版本标题和全部歌手。
 
 ``MusicSongResolver`` 只负责搜索歌手、选择内容并让一首歌开始播放；
 ``MusicTransportController`` 只负责已经开始播放后的 Play/Pause/Next/Previous 和元数据。
@@ -304,6 +306,7 @@ class WindowsGSMTCBridge:
                     playback_status=status_name.casefold(),
                     position_ms=position,
                     duration_ms=duration,
+                    metadata_scope='windows-gsmtc',
                     raw_position_ms=max(0, int((timeline.position - timeline.start_time).total_seconds() * 1000))
                         if duration else None,
                     timeline_age_ms=_windows_timeline_age_ms(timeline, status_name.casefold(),
@@ -726,7 +729,7 @@ class MusicProviderManager:
         window_checker: Callable[[str], bool] | None = None,
         client_launcher: Callable[[str, Path], bool] | None = None,
         playback_adapters: Mapping[str, MusicProviderAdapter] | None = None,
-        playback_verify_timeout: float = 5.0,
+        playback_verify_timeout: float | None = None,
         playback_poll_interval: float = 0.55,
         playback_sleep: Callable[[float], None] | None = None,
         transport_wait_timeout: float = 1.8,
@@ -755,6 +758,8 @@ class MusicProviderManager:
         self._playback_adapters = dict(adapters)
         self.active_provider: str | None = None
         self._online_qq_selected = False
+        qq_verify_timeout = 10.0 if playback_verify_timeout is None else playback_verify_timeout
+        other_verify_timeout = 5.0 if playback_verify_timeout is None else playback_verify_timeout
         self.mac_qq_bridge = mac_qq_bridge
         if self.platform_name == 'darwin' and self.mac_qq_bridge is None:
             from .qqmusic_macos import QQMusicMacBridge
@@ -762,13 +767,12 @@ class MusicProviderManager:
                 cancelled=lambda: QThread.currentThread().isInterruptionRequested())
         self.qq_online_player = QQMusicOnlinePlayer(
             settings, self._qq_online_track, client_finder=client_finder,
-            verify_timeout=playback_verify_timeout,
+            verify_timeout=qq_verify_timeout,
             poll_interval=playback_poll_interval, sleep=playback_sleep or time.sleep,
             cancelled=lambda: QThread.currentThread().isInterruptionRequested(),
             candidate_dispatcher=self.mac_qq_bridge.play_candidate if self.mac_qq_bridge else None,
+            verification_detail=(lambda: self.mac_qq_bridge.last_error) if self.mac_qq_bridge else None,
         )
-        if self.mac_qq_bridge is not None:
-            self.qq_online_player.backgrounder = self.mac_qq_bridge.background
         from .qqmusic_queue_mode import QQQueueMode, WindowsQQModeBackend, MacQQModeBackend
         if self.platform_name == 'win32' and windows_bridge is None and qq_native_queue is None:
             from .qqmusic_native_queue import QQNativeQueue
@@ -785,14 +789,14 @@ class MusicProviderManager:
         self.playback_manager = ExactMusicPlaybackManager(
             adapters,
             self.current_track,
-            verify_timeout_seconds=playback_verify_timeout,
+            verify_timeout_seconds=other_verify_timeout,
             poll_interval_seconds=playback_poll_interval,
             sleep=playback_sleep or time.sleep,
         )
         self.random_playback_manager = BasicRandomArtistPlaybackManager(
             adapters,
             self.current_track,
-            verify_timeout_seconds=playback_verify_timeout,
+            verify_timeout_seconds=other_verify_timeout,
             poll_interval_seconds=playback_poll_interval,
             sleep=playback_sleep or time.sleep,
         )

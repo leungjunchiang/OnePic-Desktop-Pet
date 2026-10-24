@@ -1,4 +1,4 @@
-"""验证原生命令、批量模式查找与深层网页兜底、真实读回及曲终隔离。"""
+"""验证原生命令和模式查找、真实读回与隔离，点歌成功或失败均不隐藏用户窗口。"""
 from contextlib import nullcontext
 from pathlib import Path
 import sys
@@ -146,24 +146,24 @@ def online_queue(*, accept=True):
     return playlist, mode, events
 
 
-def test_real_online_player_acquires_mode_before_minimizing_and_arms_exact_queue():
+def test_real_online_player_acquires_mode_without_hiding_existing_window():
     playlist, mode, events = online_queue()
     result = playlist.create()
     assert result.success and mode.isolated and playlist.auto_advance
     assert len(playlist.entries) == 30 and playlist.index == 0
-    assert events == ['dispatch', 'mode', 'background']
+    assert events == ['dispatch', 'mode']
     assert playlist.move(1).success and playlist.index == 1
     assert events.count('mode') == 1  # Already verified single mode needs no new button action.
 
 
-def test_failed_mode_action_pauses_before_backgrounding_and_explains_setup():
+def test_failed_mode_action_pauses_without_hiding_window_and_explains_setup():
     playlist, mode, events = online_queue(accept=False)
     result = playlist.create()
     assert not result.success and not mode.isolated and not playlist.auto_advance
     assert result.error_code is MusicPlaybackError.UI_AUTOMATION_UNAVAILABLE
     assert '已找到 QQ 音乐' in result.message and '底部播放栏' in result.message
     assert len(playlist.entries) == 30 and playlist.index == 0
-    assert events == ['dispatch', 'mode', 'pause', 'background']
+    assert events == ['dispatch', 'mode', 'pause']
 
 
 @pytest.mark.parametrize('failure', ['false', 'exception', 'lookup_exception'])
@@ -204,7 +204,7 @@ def test_native_mode_command_uses_only_validated_running_client_and_fixed_numeri
     calls=[]
     monkeypatch.setattr(music_background,'music_client_windows',lambda path:(123,) if path==client else ())
     assert dispatch_native_mode(client,target,popen=lambda *args,**kwargs:calls.append((args,kwargs)))
-    assert calls[0][0] == ([str(client),'/playmode',code],)
+    assert calls[0][0] == ([str(client),'/background','/playmode',code],)
     assert calls[0][1]['shell'] is False
     assert not dispatch_native_mode(client,'单曲播放',popen=lambda *_a,**_k:pytest.fail('unverified native mode'))
     monkeypatch.setattr(music_background,'music_client_windows',lambda _path:())
@@ -244,7 +244,7 @@ def test_cancellation_before_native_mode_never_dispatches(monkeypatch):
 
 def test_closed_native_command_window_does_not_hide_the_real_qq_root(monkeypatch):
     from onepic_desktop_pet import music_background
-    monkeypatch.setattr(music_background,'music_client_windows',lambda _path:(100,200))
+    monkeypatch.setattr(music_background,'music_client_mode_windows',lambda _path:(100,200))
     root=object()
     def control(hwnd):
         if hwnd==100:
