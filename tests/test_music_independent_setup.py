@@ -1,4 +1,5 @@
-"""验证换电脑的本机程序发现、Mac 应用包选择，以及随机首曲跨重启避重。"""
+"""验证换电脑的程序发现、Mac 应用包选择、随机三十首及兼容旧歌单并允许跨轮重复。"""
+import json
 import plistlib
 from types import SimpleNamespace
 
@@ -53,30 +54,32 @@ def test_mac_picker_uses_file_panel_for_app_packages(monkeypatch):
     assert calls[0][2:] == ('/Applications', '应用程序 (*.app);;所有文件 (*)')
 
 
-def test_recent_ten_confirmed_starts_survive_restarts_and_do_not_repeat(tmp_path):
+def test_legacy_start_history_loads_without_forcing_another_first_song(tmp_path):
     path = tmp_path / 'local-profile' / 'playlist.json'
-    starts = []
-    for _ in range(15):
-        queue = QQPlaylist(Player(), store_path=path, shuffle=lambda _: None)
-        result = queue.create()
-        assert result.success
-        starts.append(queue.entries[0].title)
-        assert starts[-1] not in starts[max(0, len(starts) - 11):-1]
-        assert len(queue.recent_starts) <= 10
+    queue = QQPlaylist(Player(), store_path=path, shuffle=lambda _: None)
+    assert queue.create().success
+    first = queue.entries
+    legacy = json.loads(path.read_text(encoding='utf-8'))
+    legacy['recent_starts'] = [s.title for s in first[:10]]
+    path.write_text(json.dumps(legacy, ensure_ascii=False), encoding='utf-8')
+    restored = QQPlaylist(Player(), store_path=path, shuffle=lambda _: None)
+    assert restored.entries == first and not restored.auto_advance
+    assert restored.create().success and restored.round_number == 2
+    assert restored.entries == first and len({s.identifier for s in restored.entries}) == 30
+    assert 'recent_starts' not in json.loads(path.read_text(encoding='utf-8'))
     # Every new machine starts with a clean local playlist; no test-selected song is shipped.
     fresh = QQPlaylist(Player(), store_path=tmp_path / 'second-computer' / 'playlist.json', shuffle=lambda _: None)
-    assert not fresh.entries and not fresh.recent_starts and not fresh.auto_advance
+    assert not fresh.entries and not fresh.auto_advance
     assert fresh.create().success and fresh.round_number == 1
 
 
-def test_actual_client_song_is_avoided_even_without_a_saved_playlist():
+@pytest.mark.parametrize('current_title', ['歌曲1', '歌曲1 (Live)'])
+def test_random_selection_allows_current_song_without_extra_media_lookup(current_title):
     player = Player()
-    player.track_reader = lambda: SimpleNamespace(title='歌曲1')
+    reads = []
+    player.track_reader = lambda: reads.append(True) or SimpleNamespace(title=current_title)
     queue = QQPlaylist(player, shuffle=lambda _: None)
-    assert queue.create().success and queue.entries[0].title != '歌曲1'
-    player.track_reader = lambda: SimpleNamespace(title='歌曲1 (Live)')
-    fresh = QQPlaylist(player, shuffle=lambda _: None)
-    assert fresh.create().success and fresh.entries[0].title != '歌曲1'
+    assert queue.create().success and queue.entries[0].title == '歌曲1' and not reads
 
 
 def test_automatic_native_round_draws_from_complete_cached_pool_without_catalog_io():

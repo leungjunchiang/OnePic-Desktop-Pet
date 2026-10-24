@@ -1,4 +1,4 @@
-"""验证先保存后播放、失败可恢复的新设备歌单，以及曲终换轮与独立界面控制。"""
+"""验证三十首允许跨轮重复、先保存后播放、失败恢复、曲终换轮与独立界面控制。"""
 
 from dataclasses import replace
 import json
@@ -208,13 +208,14 @@ def test_manager_natural_end_advances_once_and_failure_disarms():
     assert len(player.sent) == 2
 
 
-def test_every_random_click_replaces_thirty_songs_and_plays_a_fresh_first_song(tmp_path):
+def test_every_random_click_rebuilds_thirty_and_can_repeat_the_first_song(tmp_path):
     value, player = queue(tmp_path)
     first = player.sent[-1]
     result = value.create()
     assert result.playlist_created and result.playlist_size == 30
     assert result.playlist_round == value.round_number == 2
-    assert value.index == 0 and player.sent[-1] != first
+    assert value.index == 0 and player.sent[-1] == first
+    assert len({s.identifier for s in value.entries}) == 30
     restored = QQPlaylist(player, store_path=tmp_path / 'list.json')
     assert restored.round_number == 2 and not restored.auto_advance
 

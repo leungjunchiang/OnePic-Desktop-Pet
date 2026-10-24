@@ -4,7 +4,7 @@
 所有修改和媒体查询复用串行音乐线程；持久化失败不会丢失内存中的队列。
 Windows 完整临时队列由 QQ 顺序衔接；六毛同步实际曲目，不再曲终抢切。
 其他适配保留单曲隔离和保守曲终判断。
-随机使用公开歌手候选池及系统熵，最近十次已确认首曲跨重启避让；不固定验收歌曲。
+每轮用系统随机重新抽三十首，轮内不重复；允许跨轮及首曲重复，不按历史记录强制换曲。
 原生队列首次预备整个候选池的元数据，后续换轮从该池重新抽取三十首且不曲终联网。
 模式设置不改变 QQ 窗口状态；Mac 失败保留对应阶段原因及自检入口提示。
 未确认实际歌曲的结果保留原始原因，不能误报成播放模式失败。
@@ -27,7 +27,7 @@ from .resources import resource_path
 
 
 def song_title_key(title):
-    """同一首歌的现场/录音版本共享首曲避重键。"""
+    """同一首歌的现场/录音版本共享轮内去重键。"""
     return canonical(re.split(r'[（(]', title, maxsplit=1)[0])
 
 
@@ -67,7 +67,6 @@ class QQPlaylist:
         self.entries: tuple[SongCandidate, ...] = ()
         self.index = -1
         self.round_number = 0
-        self.recent_starts = []
         self.auto_advance = False
         self._near_end = False
         self._end_not_before = None
@@ -140,22 +139,6 @@ class QQPlaylist:
         available.sort(key=self._paid)  # 优先选择无需订阅的版本，授权仍由 QQ 判断。
         chosen = available[:self.SIZE]
         self.shuffle(chosen)
-        avoid = set(self.recent_starts)
-        if self.entries and 0 <= self.index < len(self.entries):
-            avoid.add(song_title_key(self.entries[self.index].title))
-        # The real client can be on another queue after a restart or manual listening.
-        reader = getattr(self.player, 'track_reader', None)
-        if callable(reader):
-            try:
-                actual = reader()
-                if actual is not None:
-                    avoid.add(song_title_key(actual.title))
-            except Exception:
-                pass
-        if song_title_key(chosen[0].title) in avoid:
-            replacement = next((i for i, song in enumerate(chosen) if song_title_key(song.title) not in avoid), None)
-            if replacement is not None:
-                chosen[0], chosen[replacement] = chosen[replacement], chosen[0]
         if self.player.cancelled():
             return self.failure('音乐操作已取消。')
         self._catalog = tuple(available)
@@ -173,8 +156,6 @@ class QQPlaylist:
             return self.decorate(self._unready_result(result), created=True)
         self.auto_advance = (not self.player.cancelled()
                              and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
-        if self.auto_advance:
-            self.recent_starts = (self.recent_starts + [song_title_key(chosen[0].title)])[-10:]
         self._near_end = False
         self._reset_completion()
         self.save()
@@ -464,8 +445,7 @@ class QQPlaylist:
     def save(self):
         if self.store_path is None:
             return
-        data = {'version': 1, 'index': self.index, 'round': self.round_number,
-                'recent_starts': self.recent_starts[-10:], 'songs': [
+        data = {'version': 1, 'index': self.index, 'round': self.round_number, 'songs': [
             {'id': s.identifier, 'title': s.title, 'artist': s.artist,
              'album': (s.native or {}).get('album', ''), 'requires_subscription': self._paid(s),
              'primary_artist_only': bool((s.native or {}).get('primary_artist_only'))}
@@ -509,8 +489,5 @@ class QQPlaylist:
             self.entries, self.index = tuple(songs), index
             number = data.get('round', 1)
             self.round_number = number if type(number) is int and 1 <= number <= 1_000_000 else 1
-            starts = data.get('recent_starts', [])
-            if isinstance(starts, list):
-                self.recent_starts = [canonical(s) for s in starts[-10:] if isinstance(s, str) and 0 < len(s) <= 200]
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return
