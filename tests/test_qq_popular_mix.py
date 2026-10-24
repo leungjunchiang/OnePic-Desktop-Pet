@@ -1,4 +1,4 @@
-"""验证两池各十五首、整轮去重、真实名次、缓存及快照降级仍遵守现场版上限。"""
+"""验证两池各十五首、整轮去重、会员同等随机及非现场授权快照降级。"""
 from dataclasses import replace
 import json
 
@@ -16,7 +16,7 @@ def mixed_player():
     return player
 
 
-def test_exactly_fifteen_hot_plus_fifteen_remaining_prioritizes_complete_unrestricted_versions():
+def test_exactly_fifteen_hot_plus_fifteen_remaining_does_not_penalize_subscription_songs():
     calls = []
     def shuffle(rows):
         calls.append(len(rows))
@@ -26,9 +26,9 @@ def test_exactly_fifteen_hot_plus_fifteen_remaining_prioritizes_complete_unrestr
     assert value.create().success
     ids = {s.identifier for s in value.entries}
     assert calls == [50,85,30]
-    assert ids == {str(i) for i in range(1,16)} | {str(i) for i in range(85,100)}
+    assert ids == {str(i) for i in range(1,16)} | {str(i) for i in range(86,101)}
     assert len(ids) == len({song_title_key(s.title) for s in value.entries}) == 30
-    assert '100' not in ids and all(not value._paid(s) for s in value.entries)
+    assert '100' in ids and any(value._paid(s) for s in value.entries)
 
 
 def test_full_catalog_half_can_include_other_hot_songs_and_rounds_may_repeat():
@@ -95,4 +95,4 @@ def test_bundled_hot_snapshot_contains_only_checked_top_fifty_complete_metadata(
     assert value.create().success and value._popular_snapshot
     assert '随包热歌快照' in value.create().message
     assert len({song_title_key(s.title) for s in value.entries})==30
-    assert sum(is_live_song(s) for s in value.entries)<=6
+    assert not any(is_live_song(s) for s in value.entries)

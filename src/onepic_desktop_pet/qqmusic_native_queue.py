@@ -5,6 +5,7 @@
 UTF-16 临时文件延迟清理，防止异步命令读到已删除的文件。
 未运行的 QQ 仅在进程启动时请求后台显示；已有窗口、后续换曲和用户打开窗口均不处理。
 队列命令仅投递已运行客户端；不以带后台或队列参数的进程恢复账号登录。
+资料校验同时要求明确播放或付费授权；会员曲保留，无版权或授权未知不发送。
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ import uuid
 
 from .qqmusic_online import QQCatalogError, _request_json, candidate_matches
 from .qqmusic_startup import require_running_qq
+from .qqmusic_eligibility import playback_rights
 
 
 class QQNativeQueue:
@@ -40,7 +42,7 @@ class QQNativeQueue:
             artist=' / '.join(s['name'] for s in row['singer']), album=row['album']['name'])
         if (not candidate_matches(song, observed) or not isinstance(row.get('file'), dict)
                 or not row['file'] or not row.get('mid') or type(row.get('interval')) is not int
-                or row['interval'] <= 0):
+                or row['interval'] <= 0 or playback_rights(row) is not True):
             raise ValueError('incomplete song metadata: ' + song.identifier)
         return row
 

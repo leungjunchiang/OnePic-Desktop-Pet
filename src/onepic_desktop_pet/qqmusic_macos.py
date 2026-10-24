@@ -4,6 +4,8 @@
 读取时确认播放；缺少权限或控件不匹配时明确失败，不猜测播放状态或改控其他应用。
 广度优先读取公开 AX 属性，兼容搜索子角色、占位文字与明确搜索按钮；只读自检不操作播放器。
 搜索前等待明确登录标记消失和搜索框就绪，不在登录恢复或验证界面输入歌曲。
+普通静态登录文字不覆盖完整播放栏证据；若客户端公开 AXHidden 则过滤隐藏子控件。
+登录、登录中与窗口未就绪分别说明，只读诊断输出阶段，不推测账户是否退出。
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ import re
 import time
 
 from .qqmusic_online import artist_names, canonical
-from .qqmusic_startup import QQClientNotReady, LOGIN_LABELS, BUSY_LABELS
+from .qqmusic_startup import QQClientNotReady, LOGIN_LABELS, BUSY_LABELS, AMBIGUOUS_LOGIN_LABELS
 
 BUNDLE_ID = 'com.tencent.QQMusicMac'
 PLAY = frozenset(('播放', '播放音乐', 'Play', 'Play music'))
@@ -33,8 +35,11 @@ class AXNode:
     children: list = field(default_factory=list)
     native: object = None
     subrole: str = ''
+    hidden: bool = False
 
     def descendants(self):
+        if self.hidden and self.role not in {'AXApplication', 'AXWindow'}:
+            return
         yield self
         for child in self.children:
             yield from child.descendants()
@@ -93,6 +98,21 @@ def search_fields(tree):
     return [n for n in tree.descendants() if n.role in {'AXSearchField', 'AXTextField', 'AXComboBox'}
             and (n.role == 'AXSearchField' or n.subrole == 'AXSearchField'
                  or re.search(r'搜索|search', n.text + n.identifier, re.I))]
+
+
+def startup_state(tree):
+    """不把普通登录静态字样当作退出账号；真正登录控件、窗口或验证仍阻断。"""
+    nodes = [n for n in tree.descendants() if not n.hidden]
+    labels = {n.text.strip() for n in nodes}
+    if labels & BUSY_LABELS:
+        return 'signing-in'
+    if labels & (LOGIN_LABELS - AMBIGUOUS_LOGIN_LABELS):
+        return 'login-required'
+    if any(n.text.strip() in AMBIGUOUS_LOGIN_LABELS and n.role != 'AXStaticText' for n in nodes):
+        return 'login-required'
+    if labels & AMBIGUOUS_LOGIN_LABELS and parse_track(tree) is None:
+        return 'login-required'
+    return 'ready' if len(search_fields(tree)) == 1 else 'loading'
 
 
 def parse_track(root):
@@ -157,7 +177,7 @@ class NativeAX:
         result = None
         self.truncated = False
         names = ('AXRole', 'AXSubrole', 'AXValue', 'AXTitle', 'AXDescription',
-                 'AXPlaceholderValue', 'AXIdentifier')
+                 'AXPlaceholderValue', 'AXIdentifier', 'AXHidden')
         while pending and count < 1600 and time.monotonic() < deadline and not self.cancelled():
             element, parent, depth = pending.popleft()
             if depth > 24:
@@ -173,12 +193,14 @@ class NativeAX:
             if role in MODE_ROLES:
                 text = next((value for value in (string('AXValue'), string('AXDescription'), text)
                              if value in MODE_LABELS | PLAY | PAUSE), text)
-            node = AXNode(role, text[:600], string('AXIdentifier'), native=element, subrole=string('AXSubrole'))
+            node = AXNode(role, text[:600], string('AXIdentifier'), native=element, subrole=string('AXSubrole'),
+                          hidden=attrs.get('AXHidden') is True)
             if parent is None:
                 result = node
             else:
                 parent.children.append(node)
-            children = self.attribute(element, 'AXWindows' if role == 'AXApplication' else 'AXChildren', ())
+            children = (() if node.hidden and role not in {'AXApplication', 'AXWindow'} else
+                        self.attribute(element, 'AXWindows' if role == 'AXApplication' else 'AXChildren', ()))
             if children:
                 pending.extend((child, node, depth + 1) for child in children)
         self.truncated = self.truncated or bool(pending)
@@ -275,21 +297,25 @@ class QQMusicMacBridge:
         ensure = getattr(self.backend, 'ensure_running', None)
         launched = bool(ensure(executable)) if callable(ensure) else False
         deadline = self.clock() + 25
-        stable = 0
+        stable = blocked_reads = 0
         while True:
             if self.cancelled():
                 raise OSError('音乐操作已取消。')
             try:
                 _app, tree = self._read()
-                labels = {n.text.strip() for n in tree.descendants()}
-                blocked = bool(labels & (LOGIN_LABELS | BUSY_LABELS))
-                stable = stable + 1 if not blocked and len(search_fields(tree)) == 1 else 0
+                state = startup_state(tree)
+                blocked = state in {'login-required', 'signing-in'}
+                stable = stable + 1 if state == 'ready' else 0
+                blocked_reads = blocked_reads + 1 if state == 'login-required' else 0
                 if stable >= 2:
                     break
                 if not launched and not blocked and len(search_fields(tree)) != 1:
                     break  # Preserve the precise search-control diagnostic, without waiting for login.
-                if (not launched and labels & LOGIN_LABELS) or self.clock() >= deadline:
-                    raise QQClientNotReady('[Mac QQ / 登录] QQ 尚未登录或界面未就绪，未输入搜索或请求播放。请在 QQ 完成登录后重试。')
+                if (not launched and blocked_reads >= 2) or self.clock() >= deadline:
+                    detail = ('QQ 界面持续显示登录或验证提示，请在 QQ 完成对应操作后重试。' if state == 'login-required' else
+                              'QQ 界面仍显示正在登录，请等待客户端恢复完成。' if state == 'signing-in' else
+                              'QQ 界面或搜索控件尚未就绪，这不表示账号未登录；请运行“检查 QQ 适配”。')
+                    raise QQClientNotReady('[Mac QQ / 就绪] ' + detail + '未输入搜索或请求播放，也未操作登录窗口。')
             except PermissionError:
                 raise
             except QQClientNotReady:
@@ -344,6 +370,8 @@ class QQMusicMacBridge:
             track = parse_track(tree)
             fields = search_fields(tree)
             lines.append('辅助功能：已获授权；QQ 进程：唯一且可读取')
+            lines.append('就绪观察：' + {'ready': '可继续识别', 'loading': '窗口／搜索控件未就绪',
+                'signing-in': '界面显示登录中', 'login-required': '界面显示登录／验证提示'}[startup_state(tree)])
             lines.append(f'搜索框：{len(fields)} 个；播放栏：{"可识别" if region else "未识别"}；时间轴与歌曲：{"可读取" if track else "未识别"}')
             names = getattr(self.backend, 'action_names', None)
             confirm = bool(len(fields) == 1 and callable(names) and 'AXConfirm' in names(fields[0]))

@@ -1,4 +1,4 @@
-"""验证带热门排序的歌单模式、原生命令及真实读回隔离，点歌不隐藏用户窗口。"""
+"""验证已授权非现场歌单模式、原生命令及真实读回隔离，点歌不隐藏用户窗口。"""
 from contextlib import nullcontext
 from pathlib import Path
 import sys
@@ -131,12 +131,12 @@ def online_queue(*, accept=True):
                 return False
             return super().set(value)
     mode = QQQueueMode(VisibleBackend(accept=accept))
-    songs = tuple(SongCandidate('qq', f'歌曲{i}', '陈楚生', identifier=str(i), native={'popularity_rank':i}) for i in range(1,31))
+    songs = tuple(SongCandidate('qq', f'歌曲{i}', '陈楚生', identifier=str(i), native={'album':'专辑', 'popularity_rank':i, 'playback_rights':True}) for i in range(1,31))
     def dispatch(_exe, identifier):
         events.append('dispatch')
         selected[:] = [next(song for song in songs if song.identifier == identifier)]
     def read():
-        return TrackInfo(selected[0].title, '陈楚生', '', 'playing') if selected else None
+        return TrackInfo(selected[0].title, '陈楚生', '专辑', 'playing') if selected else None
     player = QQMusicOnlinePlayer(PetSettings(), read, verify_timeout=0,
         client_finder=lambda *_: Path('QQMusic.exe'), dispatcher=dispatch,
         catalog=SimpleNamespace(search=lambda *_args, **_kwargs: songs),

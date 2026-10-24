@@ -1,4 +1,4 @@
-"""验证热门与全曲库混合三十首、允许跨轮重复、失败恢复、曲终换轮与界面控制。"""
+"""验证获授权的非现场三十首混合、跨轮重复、失败恢复、曲终换轮与界面控制。"""
 
 from dataclasses import replace
 import json
@@ -14,7 +14,8 @@ from onepic_desktop_pet.qqmusic_playlist import QQPlaylist, bundled_candidates
 
 def song(i, *, paid=False, title=None):
     return SongCandidate('qq', title or f'歌曲{i}', '陈楚生', identifier=str(i),
-                         native={'album': '专辑', 'requires_subscription': paid, 'popularity_rank': i})
+                         native={'album': '专辑', 'requires_subscription': paid, 'popularity_rank': i,
+                                 'playback_rights': True})
 
 
 class Player:
@@ -70,13 +71,13 @@ def test_create_exactly_thirty_unique_songs_and_next_previous_follow_saved_order
     assert player.sent[-1] == expected[2]
 
 
-def test_collects_pages_deduplicates_versions_and_prefers_unrestricted():
-    player = Player({1: tuple(song(i, paid=True) for i in range(1, 31)),
-                     2: tuple(song(i + 100, title=f'歌曲{i}') for i in range(1, 31))})
+def test_collects_pages_deduplicates_versions_and_keeps_subscription_songs():
+    player = Player({1: tuple(song(i, paid=True) for i in range(1, 21)),
+                     2: tuple(song(i, paid=True) for i in range(11, 41))})
     value, _ = queue(player=player)
     assert player.searched == [1, 2]
-    assert all(not value._paid(s) for s in value.entries)
-    assert all(int(s.identifier) > 100 for s in value.entries)
+    assert all(value._paid(s) for s in value.entries)
+    assert len({s.identifier for s in value.entries}) == 30
 
 
 def test_partial_catalog_and_network_failure_keep_previous_playlist():

@@ -5,8 +5,8 @@
 Windows 完整临时队列由 QQ 顺序衔接；六毛同步实际曲目，不再曲终抢切。
 其他适配保留单曲隔离和保守曲终判断。
 每轮热门前五十对应歌曲随机十五首、完整曲库随机十五首，按歌名和 ID 去重并混合打乱。
-每轮现场版最多六首，结合曲名、专辑和原始元数据识别；同等订阅条件优先录音室版本。
-两个抽样部分共用现场版额度，素材不足时保留原歌单，不放宽上限。
+随机完全排除现场版，仅收公开元数据明确有播放/付费授权的歌曲，会员曲同等随机。
+现场、无版权或无法确认授权的候选在同名归并前排除，避免覆盖可用的录音室版本。
 完整曲库部分排除已选曲目，仍可抽到其他热门歌；跨轮及首曲可重复。
 原生队列首次预备整个候选池的元数据，后续换轮从该池重新抽取三十首且不曲终联网。
 模式设置不改变 QQ 窗口状态；Mac 失败保留对应阶段原因及自检入口提示。
@@ -27,6 +27,7 @@ import time
 from .music_playback import MusicPlaybackError, MusicPlaybackOutcome, SongCandidate, SongPlaybackResult
 from .qqmusic_online import QQCatalogError, artist_names, canonical, candidate_matches
 from .resources import resource_path
+from .qqmusic_eligibility import is_live_song, playback_rights, random_song_eligible
 
 
 def song_title_key(title):
@@ -34,25 +35,10 @@ def song_title_key(title):
     return canonical(re.split(r'[（(]', title, maxsplit=1)[0])
 
 
-def is_live_song(song):
-    """识别元数据明确标记的现场录音，避免将 Alive 等普通单词当成 Live。"""
-    native = song.native or {}
-    fields = [song.title, native.get('album', '')]
-    track = native.get('track_info')
-    if isinstance(track, dict):
-        fields.extend(track.get(key, '') for key in ('title', 'subtitle'))
-        album = track.get('album')
-        if isinstance(album, dict):
-            fields.extend(album.get(key, '') for key in ('name', 'title', 'subtitle'))
-    return any(re.search(r'(?<![a-z])(?:live(?:house)?|concert)(?![a-z])|'
-                         r'现场|現場|演唱会|演唱會|音乐会|音樂會|巡演', text, re.I)
-               for text in fields if isinstance(text, str))
-
-
 def bundled_candidates():
     """随包公开元数据和明确日期的热歌快照；不包含音频、账户或凭据。"""
     songs = {}
-    for name in ('qq-chenchusheng.json', 'qq-chenchusheng-hot.json'):
+    for name in ('qq-chenchusheng.json', 'qq-chenchusheng-hot.json', 'qq-chenchusheng-studio.json'):
         try:
             data = json.loads(resource_path('resources/music/' + name).read_text(encoding='utf-8'))
             for row in data['songs']:
@@ -67,6 +53,7 @@ def bundled_candidates():
                     native['popularity_rank'] = rank
                 if isinstance(row.get('track_info'), dict):
                     native['track_info'] = row['track_info']
+                    native['playback_rights'] = playback_rights(row['track_info'])
                 songs[song_id] = SongCandidate('qq', row['title'], row['artist'], identifier=song_id, native=native)
         except (OSError, ValueError, KeyError, TypeError):
             continue
@@ -76,7 +63,6 @@ def bundled_candidates():
 class QQPlaylist:
     SIZE = 30
     HOT_SIZE = 15
-    LIVE_LIMIT = 6
 
     def __init__(self, player, *, store_path: Path | None = None, shuffle=None, fallback_loader=None,
                  clock=time.monotonic, queue_mode=None, stopper=lambda: None, native_queue=None):
@@ -119,14 +105,13 @@ class QQPlaylist:
         popular_snapshot = self._popular_snapshot if reuse_catalog and self._catalog else False
         def collect(rows):
             for candidate in rows:
+                if not random_song_eligible(candidate):
+                    continue
                 key = song_title_key(candidate.title)
                 same_id_metadata = (key in songs and songs[key].identifier == candidate.identifier
                                     and (candidate.native or {}).get('track_info') is not None)
-                if key and (key not in songs or same_id_metadata or self._paid(songs[key]) > self._paid(candidate)
-                            or (self._paid(songs[key]) == self._paid(candidate)
-                                and (is_live_song(songs[key]) > is_live_song(candidate)
-                                     or (is_live_song(songs[key]) == is_live_song(candidate)
-                                         and (songs[key].native or {}).get('primary_artist_only'))))):
+                if key and (key not in songs or same_id_metadata
+                            or (songs[key].native or {}).get('primary_artist_only')):
                     songs[key] = candidate
         if reuse_catalog:
             collect(self._catalog or self.entries)
@@ -150,7 +135,7 @@ class QQPlaylist:
                 except QQCatalogError:
                     if self.player.cancelled():
                         return self.failure('音乐操作已取消。')
-            has_fallback = sum(not self._paid(s) for s in songs.values()) >= self.SIZE
+            has_fallback = len(songs) >= self.SIZE
             cached_native = reuse_catalog and self.native_queue is not None and len(songs) >= self.SIZE
             pages = () if loaded_artist or cached_native or has_fallback and (reuse_catalog or self.clock() < self._catalog_retry_after) else range(1, 6)
             for page in pages:
@@ -165,7 +150,7 @@ class QQPlaylist:
                     rows = self.player.catalog.search('', artist, page=page)
                 collect(rows)
                 popular_keys.update(self._top_fifty_keys(rows))
-                if sum(not self._paid(s) for s in songs.values()) >= self.SIZE:
+                if len(songs) >= self.SIZE:
                     break
                 if not rows:
                     break
@@ -180,19 +165,15 @@ class QQPlaylist:
                 by_id[candidate.identifier] = candidate
         available = list(by_id.values())
         if len(available) < self.SIZE:
-            return self.failure(f'在线目录只找到 {len(available)} 首不同歌曲，未满 30 首；原歌单已保留，请稍后重试。')
+            return self.failure(f'在线目录只找到 {len(available)} 首已获播放/付费授权的非现场歌曲，未满 30 首；原歌单已保留，请稍后重试。')
         popular_keys.update(self._top_fifty_keys(available) if not popular_keys else ())
         hot = [s for s in available if song_title_key(s.title) in popular_keys]
         if len(hot) < self.HOT_SIZE:
             return self.failure('热门前 50 的可用歌曲不足 15 首，原歌单已保留，请稍后重试。')
-        chosen = self._sample(hot, self.HOT_SIZE, self.LIVE_LIMIT)
+        chosen = self._sample(hot, self.HOT_SIZE)
         selected_ids = {s.identifier for s in chosen}
         remaining = [s for s in available if s.identifier not in selected_ids]
-        rest = self._sample(remaining, self.SIZE - self.HOT_SIZE,
-                            self.LIVE_LIMIT - sum(is_live_song(s) for s in chosen))
-        if len(chosen) != self.HOT_SIZE or len(rest) != self.SIZE - self.HOT_SIZE:
-            return self.failure('可用目录不足以同时生成 30 首、热门 15 首且现场版最多 6 首的歌单；'
-                                '原歌单已保留，请稍后重试。')
+        rest = self._sample(remaining, self.SIZE - self.HOT_SIZE)
         chosen += rest
         self.shuffle(chosen)
         if self.player.cancelled():
@@ -225,20 +206,10 @@ class QQPlaylist:
                 if type((s.native or {}).get('popularity_rank')) is int
                 and 1 <= s.native['popularity_rank'] <= 50}
 
-    def _sample(self, pool, count, live_limit):
-        """随机且优先无需订阅的候选；两部分共用整轮现场额度。"""
+    def _sample(self, pool, count):
+        """所有已获授权的候选同等洗牌；不再按会员标记排序。"""
         self.shuffle(pool)
-        pool.sort(key=self._paid)
-        chosen = []
-        for candidate in pool:
-            live = is_live_song(candidate)
-            if live and live_limit == 0:
-                continue
-            chosen.append(candidate)
-            live_limit -= live
-            if len(chosen) == count:
-                break
-        return chosen
+        return pool[:count]
 
     @staticmethod
     def _paid(song):
@@ -336,6 +307,9 @@ class QQPlaylist:
 
     def _play_candidate(self, selected, **kwargs):
         self._start_stopped = False
+        if any(not random_song_eligible(song) for song in self.entries):
+            self.block_unready_client()
+            return self.failure('旧歌单包含现场版、无版权或尚未确认授权的歌曲；请重新点击“随机听陈楚生”生成新歌单。')
         if self.queue_mode is not None:
             kwargs['prepare_queue'] = self._prepare_queue_mode
             kwargs['queue_failure_message'] = lambda: self._mode_failure().message
@@ -529,6 +503,7 @@ class QQPlaylist:
         data = {'version': 1, 'index': self.index, 'round': self.round_number, 'songs': [
             {'id': s.identifier, 'title': s.title, 'artist': s.artist,
              'album': (s.native or {}).get('album', ''), 'requires_subscription': self._paid(s),
+             'playback_rights': random_song_eligible(s),
              'primary_artist_only': bool((s.native or {}).get('primary_artist_only'))}
             for s in self.entries]}
         try:
@@ -564,6 +539,7 @@ class QQPlaylist:
                     return
                 songs.append(SongCandidate('qq', row['title'], row['artist'], identifier=song_id,
                     native={'album': album, 'requires_subscription': bool(row.get('requires_subscription')),
+                            'playback_rights': row.get('playback_rights') is True,
                             'primary_artist_only': bool(row.get('primary_artist_only'))}))
             if len({s.identifier for s in songs}) != self.SIZE:
                 return

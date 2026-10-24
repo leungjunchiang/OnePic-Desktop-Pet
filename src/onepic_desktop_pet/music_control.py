@@ -8,6 +8,7 @@ QQ 在线点歌复用音乐工作线程，后续控制只使用唯一 QQMusic.ex
 已经暂停或播放时，幂等控制先确认状态，不因客户端禁用重复按钮而误报失败。
 Windows 媒体会话明确标记来源；QQ 不返回专辑时仍须匹配完整版本标题和全部歌手。
 Windows 先复用唯一已运行版本，冷启动普通打开并等待登录就绪；未就绪不投递歌单。
+QQ 默认二十五秒确认慢加载，不重发点歌或以重启客户端处理未确认；取消与暂停仍优先。
 
 ``MusicSongResolver`` 只负责搜索歌手、选择内容并让一首歌开始播放；
 ``MusicTransportController`` 只负责已经开始播放后的 Play/Pause/Next/Previous 和元数据。
@@ -759,7 +760,8 @@ class MusicProviderManager:
         self._playback_adapters = dict(adapters)
         self.active_provider: str | None = None
         self._online_qq_selected = False
-        qq_verify_timeout = 10.0 if playback_verify_timeout is None else playback_verify_timeout
+        from .qqmusic_online import QQ_VERIFY_TIMEOUT
+        qq_verify_timeout = QQ_VERIFY_TIMEOUT if playback_verify_timeout is None else playback_verify_timeout
         other_verify_timeout = 5.0 if playback_verify_timeout is None else playback_verify_timeout
         self.mac_qq_bridge = mac_qq_bridge
         if self.platform_name == 'darwin' and self.mac_qq_bridge is None:

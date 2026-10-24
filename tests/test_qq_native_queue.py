@@ -1,4 +1,4 @@
-"""验证 QQ 临时队列协议边界、在线资料校验、按真实曲目跟随及暂停/换轮。"""
+"""验证 QQ 临时队列、播放授权资料校验、真实曲目跟随及暂停/换轮。"""
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +21,7 @@ from test_qqmusic_playlist import Player, song
 def metadata(item):
     return {'type': 0, 'id': int(item.identifier), 'mid': 'mid'+item.identifier,
         'name': item.title, 'singer': [{'name': item.artist}], 'album': {'name': '专辑'},
-        'file': {'size_128mp3': 1024}, 'interval': 200}
+        'file': {'size_128mp3': 1024}, 'interval': 200, 'action': {'switch': 3}}
 
 
 def native(entries, mutate=None):

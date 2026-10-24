@@ -6,8 +6,10 @@
 已有 QQ 窗口不处理；仅本次成功冷启动且无用户新输入时收起一次，不在轮询或曲终反复隐藏。
 陈楚生随机歌单优先分页读取公开歌手目录，缓存完整版本元数据，不依赖本机诊断脚本。
 保留官方热门排序的原始名次，用于前五十热门与完整曲库各抽十五首。
+公开字段明确无播放/付费授权的条目不进入目录，会员歌曲保留，不获取账户或媒体地址。
 可信平台快照缺专辑不再误判为播放失败，非空专辑、完整版本标题和歌手仍须匹配。
 冷启动先普通打开并等待登录界面就绪，歌曲命令只交给已运行客户端，不使用后台自启动参数。
+QQ 加载歌曲的状态确认默认等待二十五秒，避免慢网络十秒后才起播被提前判失败；取消仍优先。
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from urllib.request import Request, urlopen
 from .music import ShuffleBag, SongEntry, find_music_client
 from .music_background import QQColdStartPolicy
 from .qqmusic_startup import QQClientNotReady, require_running_qq
+from .qqmusic_eligibility import playback_rights
 from .music_playback import (
     MusicPlaybackError, MusicPlaybackOutcome, SongCandidate, SongPlaybackResult,
 )
@@ -33,6 +36,9 @@ from .music_playback import (
 
 class QQCatalogError(RuntimeError):
     """在线目录不可用、返回格式变化或没有符合条件的歌曲。"""
+
+
+QQ_VERIFY_TIMEOUT = 25.0
 
 
 def canonical(value: str) -> str:
@@ -154,12 +160,15 @@ class QQMusicCatalog:
                     if (not isinstance(row.get('file'), dict) or not row['file'] or not row.get('mid')
                             or type(row.get('interval')) is not int or row['interval'] < 90):
                         continue
+                    rights = playback_rights(row)
+                    if rights is False:
+                        continue
                     album = row['album']['name']
                     if not isinstance(album, str) or len(album) > 500:
                         continue
                     songs.setdefault(song_id, SongCandidate('qq', title.strip(), ' / '.join(names), identifier=song_id,
                         native={'album': album, 'requires_subscription': bool(row.get('pay', {}).get('pay_play', 0)),
-                                'popularity_rank': begin + offset + 1, 'track_info': row}))
+                                'playback_rights': rights, 'popularity_rank': begin + offset + 1, 'track_info': row}))
                 if not rows or begin + len(rows) >= total:
                     break
             except (KeyError, TypeError, ValueError, AttributeError) as exc:
@@ -197,9 +206,13 @@ class QQMusicCatalog:
                     continue
                 if title and canonical(title) != canonical(song_title):
                     continue
+                rights = playback_rights(row)
+                if rights is False:
+                    continue
                 candidates[song_id] = SongCandidate(
                     'qq', song_title, ' / '.join(singers), identifier=song_id,
                     native={'album': str(row.get('albumname') or ''),
+                            'playback_rights': rights,
                             'requires_subscription': bool(row.get('pay', {}).get('payplay', 0))})
             return tuple(candidates.values())
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
@@ -227,7 +240,7 @@ class QQMusicOnlinePlayer:
     """在线随机袋与精确点歌共用单次投递和有上限的状态确认。"""
 
     def __init__(self, settings, track_reader, *, catalog=None, client_finder=find_music_client,
-                 dispatcher=dispatch_song, verify_timeout=10.0, poll_interval=0.35,
+                 dispatcher=dispatch_song, verify_timeout=QQ_VERIFY_TIMEOUT, poll_interval=0.35,
                  sleep=time.sleep, clock=time.monotonic, cancelled=lambda: False,
                  candidate_dispatcher=None, backgrounder=None, verification_detail=None, window_policy=None,
                  client_preparer=None) -> None:
