@@ -1,8 +1,9 @@
-"""把公开元数据交给 QQ 临时播放队列，让客户端负责曲终衔接。
+"""以 QQ 官方网页的歌曲 ID 列表投递临时队列，由客户端按当前账号取得权益。
 
-省略 listId/listName，避免请求变成创建云歌单；不下载音频、不读取凭据。
-元数据按 ID 缓存，优先复用经相同比对验证的公开歌手目录，换轮无需重新联网。
-UTF-16 临时文件延迟清理，防止异步命令读到已删除的文件。
+公开元数据只用于本地曲目和版权校验，不把游客试听／付费状态发送给 QQ。
+官方多首格式为一个命令内使用竖线分隔 ID 和类型，不是多个独立播放命令。
+从所选位置发送剩余队列，保留六毛完整歌单及位置，曲终由 QQ 自然顺序衔接。
+不创建云歌单、不下载音频、不读取凭据；资料缓存供后续换轮及点选校验。
 未运行的 QQ 仅在进程启动时请求后台显示；已有窗口、后续换曲和用户打开窗口均不处理。
 队列命令仅投递已运行客户端；不以带后台或队列参数的进程恢复账号登录。
 资料校验同时要求明确播放或付费授权；会员曲保留，无版权或授权未知不发送。
@@ -13,11 +14,8 @@ import json
 from pathlib import Path
 import re
 import subprocess
-import tempfile
-import time
 from types import SimpleNamespace
 from urllib.parse import urlencode
-import uuid
 
 from .qqmusic_online import QQCatalogError, _request_json, candidate_matches
 from .qqmusic_startup import require_running_qq
@@ -31,7 +29,6 @@ class QQNativeQueue:
         self.popen = popen or subprocess.Popen
         self.running_check = running_check or require_running_qq
         self._rows = {}
-        self._directory = None
 
     @staticmethod
     def _validated(song, row):
@@ -84,7 +81,7 @@ class QQNativeQueue:
                 raise OSError('QQ 临时歌单资料未完整取得，已保留六毛歌单，请稍后重试。') from exc
 
     def dispatch(self, executable, entries, index):
-        """替换当前临时队列，明确省略会导向云歌单的两个字段。"""
+        """校验后仅发送剩余歌曲 ID，让已登录客户端解析完整曲目及会员权益。"""
         executable = Path(executable)
         if executable.name.casefold() != 'qqmusic.exe' or not executable.is_file():
             raise OSError('请在设置中选择真实的 QQMusic.exe。')
@@ -93,30 +90,13 @@ class QQNativeQueue:
         self.prepare(entries)
         if self.cancelled():
             raise OSError('音乐操作已取消。')
-        query = {'cmd': 'playSong', 'params': {
-            'songList': [self._rows[s.identifier] for s in entries], 'playIndex': index,
-            'clearLast': 1, 'bSingle': '0', 'depot': 0, 'justPlay': 0,
-            'recode': '0', 'errstring': '', 'isShowTips': 0}}
-        raw = json.dumps(query, ensure_ascii=False, separators=(',', ':')).encode('utf-16-le')
-        if len(raw) > 2_000_000:
-            raise OSError('QQ 临时歌单资料过大。')
-        if self._directory is None:
-            self._directory = tempfile.TemporaryDirectory(prefix='lili-qq-native-')
-        folder = Path(self._directory.name).resolve()
-        path = folder / (uuid.uuid4().hex + '.xml')
-        if any(c in str(path) for c in "'\r\n\x00"):
-            raise OSError('当前临时目录不兼容 QQ 命令，请更换不含单引号的临时目录。')
-        path.write_bytes(raw)
-        # QQ has its own single-quote parser; no shell interprets this string.
+        remaining = entries[index:]
+        ids = '|'.join(song.identifier for song in remaining)
+        types = '|'.join('0' for _ in remaining)
+        query = ('cmd_count==1&&cmd_0==playsong&&id_0==' + ids +
+                 '&&songtype_0==' + types + '&&info_0==&&quality_0==quality')
         self.running_check(executable)
-        command = subprocess.list2cmdline([str(executable)]) + " /ParseXMLFile '" + str(path) + "'"
-        self.popen(command, executable=str(executable), shell=False,
+        self.popen([str(executable), '/playbysongid', query], shell=False,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
             cwd=str(executable.parent))
-        for old in folder.glob('*.xml'):
-            try:
-                if old != path and time.time() - old.stat().st_mtime > 60:
-                    old.unlink()
-            except OSError:
-                pass

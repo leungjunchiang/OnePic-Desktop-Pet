@@ -2,7 +2,8 @@
 
 只存歌曲元数据，不下载音频或保存登录信息。歌单属于六毛，不写入 QQ 云端收藏。
 所有修改和媒体查询复用串行音乐线程；持久化失败不会丢失内存中的队列。
-Windows 完整临时队列由 QQ 顺序衔接；六毛同步实际曲目，不再曲终抢切。
+Windows 歌曲 ID 临时队列由 QQ 解析当前账号权益并顺序衔接，投递前先确认顺序模式。
+六毛同步实际曲目，不再曲终抢切；手动选曲仅投递该位置至轮末的剩余队列。
 其他适配保留单曲隔离和保守曲终判断。
 每轮热门前五十对应歌曲随机十五首、完整曲库随机十五首，按歌名和 ID 去重并混合打乱。
 随机完全排除现场版，仅收公开元数据明确有播放/付费授权的歌曲，会员曲同等随机。
@@ -317,8 +318,10 @@ class QQPlaylist:
             self.native_loaded = False
             def dispatch(client, candidate):
                 prepare = getattr(self.native_queue, 'prepare', None)
-                if self._catalog and callable(prepare):
-                    prepare(self._catalog)
+                if callable(prepare):
+                    prepare(self._catalog or self.entries)
+                if self.queue_mode is not None and not self._prepare_queue_mode():
+                    raise OSError(self._mode_failure().message)
                 self.native_queue.dispatch(client, self.entries, self.entries.index(candidate))
             kwargs['dispatch_candidate'] = dispatch
         result = self.player.play_candidate(selected, **kwargs)

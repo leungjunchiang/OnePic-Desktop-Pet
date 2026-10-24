@@ -1,7 +1,8 @@
-"""验证 QQ 临时队列、播放授权资料校验、真实曲目跟随及暂停/换轮。"""
+"""验证 QQ 身份 ID 队列、不投递游客权益、剩余顺序及暂停/换轮和资料门禁。"""
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from copy import deepcopy
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -40,21 +41,23 @@ def native(entries, mutate=None):
     return QQNativeQueue(request_json=fetch,popen=lambda *a,**k: commands.append((a,k)),running_check=lambda _:None),requests,commands
 
 
-def test_complete_thirty_keeps_order_selected_index_and_never_targets_cloud(tmp_path):
+def test_thirty_keeps_remaining_order_without_sending_guest_metadata_or_targeting_cloud(tmp_path):
     entries=tuple(song(i) for i in range(1,31))
     backend,requests,commands=native(entries)
     executable=tmp_path/'QQMusic.exe';executable.touch()
     backend.dispatch(executable,entries,12)
     assert len(requests)==3 and len(commands)==1
-    path=next(Path(backend._directory.name).glob('*.xml'))
-    payload=json.loads(path.read_bytes().decode('utf-16-le'))
-    assert [s['id'] for s in payload['params']['songList']]==list(range(1,31))
-    assert payload['cmd']=='playSong' and payload['params']['playIndex']==12
-    assert not {'listId','listName'} & payload['params'].keys()
-    assert payload['params']['depot']==0 and payload['params']['justPlay']==0
+    argv=commands[0][0][0]
+    assert argv[:2]==[str(executable),'/playbysongid']
+    fields=dict(pair.split('==',1) for pair in argv[2].split('&&'))
+    assert fields=={'cmd_count':'1','cmd_0':'playsong',
+        'id_0':'|'.join(str(i) for i in range(13,31)),
+        'songtype_0':'|'.join('0' for _ in range(18)),'info_0':'','quality_0':'quality'}
+    assert not any(token in argv[2] for token in ('pay','action','switch','try','listId','listName'))
     assert commands[0][1]['shell'] is False
     backend.dispatch(executable,tuple(reversed(entries)),0)
-    assert len(requests)==3 and path.exists()  # Cached metadata; delayed readers keep their file.
+    assert len(requests)==3
+    assert 'id_0=='+'|'.join(str(i) for i in range(30,0,-1))+'&&' in commands[1][0][0][2]
 
 
 @pytest.mark.parametrize('mutation',[
@@ -77,6 +80,27 @@ def test_cancel_during_metadata_lookup_does_not_play(tmp_path):
     executable=tmp_path/'QQMusic.exe';executable.touch()
     with pytest.raises(OSError):backend.dispatch(executable,entries,0)
     assert len(requests)==1 and commands==[]
+
+
+def test_vip_guest_status_is_validated_locally_but_never_forwarded_or_changed(tmp_path):
+    item=song(1,paid=True)
+    row=metadata(item)
+    row.update(action={'switch':1,'msgid':13},pay={'pay_play':1,'pay_status':0})
+    row['file'].update(size_try=960000,try_begin=30000,try_end=60000)
+    original=deepcopy(row)
+    item=SongCandidate('qq',item.title,item.artist,identifier=item.identifier,
+                       native={'track_info':row,'album':'专辑','playback_rights':True})
+    commands=[]
+    backend=QQNativeQueue(request_json=lambda _:pytest.fail('Embedded metadata should suffice'),
+        popen=lambda *a,**k:commands.append((a,k)),running_check=lambda _:None)
+    executable=tmp_path/'带 空格\'QQMusic'/'QQMusic.exe'
+    executable.parent.mkdir();executable.touch()
+    backend.dispatch(executable,(item,),0)
+    assert row==original and backend._rows['1']==original
+    argv=commands[0][0][0]
+    assert argv==[str(executable),'/playbysongid',
+        'cmd_count==1&&cmd_0==playsong&&id_0==1&&songtype_0==0&&info_0==&&quality_0==quality']
+    assert commands[0][1]['shell'] is False
 
 
 def playlist():
@@ -156,10 +180,10 @@ def test_real_player_dispatches_full_queue_and_manager_follows_without_reissuing
     backend,_,commands=native(entries)
     current=[None]
     def accept(command,**kwargs):
+        assert mode.backend.value=='顺序播放'  # ID batches obey QQ's current mode even for their first track.
         commands.append(command)
-        path=Path(command.split(" /ParseXMLFile '",1)[1][:-1])
-        params=json.loads(path.read_bytes().decode('utf-16-le'))['params']
-        row=params['songList'][params['playIndex']]
+        fields=dict(pair.split('==',1) for pair in command[2].split('&&'))
+        row=backend._rows[fields['id_0'].split('|')[0]]
         current[0]=TrackInfo(row['name'],'陈楚生','专辑','playing',1000,200000)
     backend.popen=accept
     executable=tmp_path/'QQMusic.exe';executable.touch()

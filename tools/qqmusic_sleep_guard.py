@@ -1,4 +1,4 @@
-"""本次真实播放验收的独立暂停守护：陈楚生播放 30 秒后暂停，失败时仅结束目标 QQ 客户端。"""
+"""真实播放验收的独立暂停守护；认可已停止，默认不关闭 QQ 或干扰账号会话。"""
 
 from __future__ import annotations
 
@@ -60,6 +60,8 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--seconds', type=float, default=30)
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--close-on-pause-failure', action='store_true',
+                        help='Only explicitly opted-in silence checks may close the verified QQ process')
     args = parser.parse_args()
     bridge = WindowsGSMTCBridge(timeout_seconds=2)
     started = time.monotonic()
@@ -106,8 +108,10 @@ def main():
                 time.sleep(0.5)
                 try:
                     current = sessions()
-                    if current and all(s.track.playback_status.casefold() == 'paused' for s in current):
-                        evidence.update(status='PAUSED_CONFIRMED', final_tracks=[
+                    states = [s.track.playback_status.casefold() for s in current]
+                    if states and all(state in ('paused', 'stopped', 'closed') for state in states):
+                        evidence.update(status='PAUSED_CONFIRMED' if all(state == 'paused' for state in states)
+                                        else 'STOPPED_CONFIRMED', final_tracks=[
                             {'title': s.track.title, 'artist': s.track.artist, 'state': s.track.playback_status}
                             for s in current])
                         write()
@@ -115,7 +119,12 @@ def main():
                         return 0
                 except Exception:
                     pass
-            # 无法确认暂停时，用户明确不希望整晚播放：只结束路径核验后的 QQ 主进程。
+            if not args.close_on_pause_failure:
+                evidence.update(status='PAUSE_NOT_CONFIRMED', client_close_attempted=False)
+                write()
+                print(json.dumps(evidence, ensure_ascii=False), flush=True)
+                return 1
+            # 强制关闭必须由调用者明确选择，默认保留客户端及登录会话。
             pids = qq_pids(args.qq_exe)
             for pid in pids:
                 subprocess.run(['taskkill', '/PID', str(pid), '/F'], capture_output=True, timeout=5)
