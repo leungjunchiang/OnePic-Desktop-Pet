@@ -1,8 +1,8 @@
-"""验证前五十抽十五首与全曲库抽十五首，组间去重、真实名次、缓存和快照降级。"""
+"""验证两池各十五首、整轮去重、真实名次、缓存及快照降级仍遵守现场版上限。"""
 from dataclasses import replace
 import json
 
-from onepic_desktop_pet.qqmusic_playlist import QQPlaylist, bundled_candidates, song_title_key
+from onepic_desktop_pet.qqmusic_playlist import QQPlaylist, bundled_candidates, is_live_song, song_title_key
 from onepic_desktop_pet.qqmusic_online import QQMusicCatalog
 from onepic_desktop_pet.qqmusic_native_queue import QQNativeQueue
 from onepic_desktop_pet.resources import resource_path
@@ -95,3 +95,4 @@ def test_bundled_hot_snapshot_contains_only_checked_top_fifty_complete_metadata(
     assert value.create().success and value._popular_snapshot
     assert '随包热歌快照' in value.create().message
     assert len({song_title_key(s.title) for s in value.entries})==30
+    assert sum(is_live_song(s) for s in value.entries)<=6

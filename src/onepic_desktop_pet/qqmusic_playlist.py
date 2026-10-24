@@ -5,6 +5,8 @@
 Windows 完整临时队列由 QQ 顺序衔接；六毛同步实际曲目，不再曲终抢切。
 其他适配保留单曲隔离和保守曲终判断。
 每轮热门前五十对应歌曲随机十五首、完整曲库随机十五首，按歌名和 ID 去重并混合打乱。
+每轮现场版最多六首，结合曲名、专辑和原始元数据识别；同等订阅条件优先录音室版本。
+两个抽样部分共用现场版额度，素材不足时保留原歌单，不放宽上限。
 完整曲库部分排除已选曲目，仍可抽到其他热门歌；跨轮及首曲可重复。
 原生队列首次预备整个候选池的元数据，后续换轮从该池重新抽取三十首且不曲终联网。
 模式设置不改变 QQ 窗口状态；Mac 失败保留对应阶段原因及自检入口提示。
@@ -30,6 +32,21 @@ from .resources import resource_path
 def song_title_key(title):
     """同一首歌的现场/录音版本共享轮内去重键。"""
     return canonical(re.split(r'[（(]', title, maxsplit=1)[0])
+
+
+def is_live_song(song):
+    """识别元数据明确标记的现场录音，避免将 Alive 等普通单词当成 Live。"""
+    native = song.native or {}
+    fields = [song.title, native.get('album', '')]
+    track = native.get('track_info')
+    if isinstance(track, dict):
+        fields.extend(track.get(key, '') for key in ('title', 'subtitle'))
+        album = track.get('album')
+        if isinstance(album, dict):
+            fields.extend(album.get(key, '') for key in ('name', 'title', 'subtitle'))
+    return any(re.search(r'(?<![a-z])(?:live(?:house)?|concert)(?![a-z])|'
+                         r'现场|現場|演唱会|演唱會|音乐会|音樂會|巡演', text, re.I)
+               for text in fields if isinstance(text, str))
 
 
 def bundled_candidates():
@@ -59,6 +76,7 @@ def bundled_candidates():
 class QQPlaylist:
     SIZE = 30
     HOT_SIZE = 15
+    LIVE_LIMIT = 6
 
     def __init__(self, player, *, store_path: Path | None = None, shuffle=None, fallback_loader=None,
                  clock=time.monotonic, queue_mode=None, stopper=lambda: None, native_queue=None):
@@ -106,7 +124,9 @@ class QQPlaylist:
                                     and (candidate.native or {}).get('track_info') is not None)
                 if key and (key not in songs or same_id_metadata or self._paid(songs[key]) > self._paid(candidate)
                             or (self._paid(songs[key]) == self._paid(candidate)
-                                and (songs[key].native or {}).get('primary_artist_only'))):
+                                and (is_live_song(songs[key]) > is_live_song(candidate)
+                                     or (is_live_song(songs[key]) == is_live_song(candidate)
+                                         and (songs[key].native or {}).get('primary_artist_only'))))):
                     songs[key] = candidate
         if reuse_catalog:
             collect(self._catalog or self.entries)
@@ -165,14 +185,15 @@ class QQPlaylist:
         hot = [s for s in available if song_title_key(s.title) in popular_keys]
         if len(hot) < self.HOT_SIZE:
             return self.failure('热门前 50 的可用歌曲不足 15 首，原歌单已保留，请稍后重试。')
-        self.shuffle(hot)
-        hot.sort(key=self._paid)  # Random among complete unrestricted versions before subscription-only choices.
-        chosen = hot[:self.HOT_SIZE]
+        chosen = self._sample(hot, self.HOT_SIZE, self.LIVE_LIMIT)
         selected_ids = {s.identifier for s in chosen}
         remaining = [s for s in available if s.identifier not in selected_ids]
-        self.shuffle(remaining)
-        remaining.sort(key=self._paid)
-        chosen += remaining[:self.SIZE - self.HOT_SIZE]
+        rest = self._sample(remaining, self.SIZE - self.HOT_SIZE,
+                            self.LIVE_LIMIT - sum(is_live_song(s) for s in chosen))
+        if len(chosen) != self.HOT_SIZE or len(rest) != self.SIZE - self.HOT_SIZE:
+            return self.failure('可用目录不足以同时生成 30 首、热门 15 首且现场版最多 6 首的歌单；'
+                                '原歌单已保留，请稍后重试。')
+        chosen += rest
         self.shuffle(chosen)
         if self.player.cancelled():
             return self.failure('音乐操作已取消。')
@@ -203,6 +224,21 @@ class QQPlaylist:
         return {song_title_key(s.title) for s in songs
                 if type((s.native or {}).get('popularity_rank')) is int
                 and 1 <= s.native['popularity_rank'] <= 50}
+
+    def _sample(self, pool, count, live_limit):
+        """随机且优先无需订阅的候选；两部分共用整轮现场额度。"""
+        self.shuffle(pool)
+        pool.sort(key=self._paid)
+        chosen = []
+        for candidate in pool:
+            live = is_live_song(candidate)
+            if live and live_limit == 0:
+                continue
+            chosen.append(candidate)
+            live_limit -= live
+            if len(chosen) == count:
+                break
+        return chosen
 
     @staticmethod
     def _paid(song):
