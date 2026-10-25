@@ -6,6 +6,7 @@
 搜索前等待明确登录标记消失和搜索框就绪，不在登录恢复或验证界面输入歌曲。
 普通静态登录文字不覆盖完整播放栏证据；若客户端公开 AXHidden 则过滤隐藏子控件。
 登录、登录中与窗口未就绪分别说明，只读诊断输出阶段，不推测账户是否退出。
+搜索结果按完整标题、歌手及已知专辑筛选，按钮不唯一时不点击；播放栏公开专辑则读取核对。
 """
 from __future__ import annotations
 
@@ -71,6 +72,8 @@ def player_region(root):
             candidates.append((len(children), node, buttons[0], times))
     if not candidates:
         return None
+    if len({id(value[2]) for value in candidates}) != 1:
+        return None  # Two independent player bars do not establish one playback state.
     candidates.sort(key=lambda value: value[0])
     return candidates[0][1:]
 
@@ -125,8 +128,10 @@ def parse_track(root):
               if clock_ms(n.text) is None and n.text not in {'HQ', 'SQ', '音质', '歌词'}]
     title = next((n.text for n in fields if re.search(r'(song|track).*title|songname', n.identifier, re.I)), '')
     artist = next((n.text for n in fields if re.search(r'artist|singer', n.identifier, re.I)), '')
-    if (not title or not artist) and len(fields) == 2:
-        title, artist = fields[0].text, fields[1].text
+    album = next((n.text for n in fields if re.search(r'album', n.identifier, re.I)), '')
+    identity_fields = [n for n in fields if not re.search(r'album', n.identifier, re.I)]
+    if (not title or not artist) and len(identity_fields) == 2:
+        title, artist = identity_fields[0].text, identity_fields[1].text
     if not title or not artist:
         return None
     time_labels = [n.text for n in node.descendants() if n.role == 'AXStaticText' and clock_ms(n.text) is not None]
@@ -136,8 +141,31 @@ def parse_track(root):
     else:
         position = max(0, times[1 - remaining])
         duration = position + abs(times[remaining])
-    return TrackInfo(title, artist, '', 'playing' if playback_label(button.text) in PAUSE else 'paused',
+    return TrackInfo(title, artist, album, 'playing' if playback_label(button.text) in PAUSE else 'paused',
                      max(0, min(position, duration)), duration, metadata_scope='mac-accessibility')
+
+
+def matching_song_buttons(tree, selected):
+    """返回去重的精确结果按钮；已知专辑必须在同一歌曲行出现，不能点击第一个同名版本。"""
+    matches = {}
+    album = canonical((selected.native or {}).get('album', ''))
+    for node in tree.descendants():
+        if node.role not in {'AXGroup', 'AXRow', 'AXCell'}:
+            continue
+        elements = list(node.descendants())
+        if len(elements) > 45:
+            continue
+        texts = [n.text for n in text_fields(node)]
+        artists = frozenset().union(*(artist_names(t) for t in texts))
+        if (not any(canonical(t) == canonical(selected.title) for t in texts)
+                or not artist_names(selected.artist) <= artists
+                or album and not any(canonical(t) == album for t in texts)):
+            continue
+        buttons = [n for n in elements if n.role == 'AXButton'
+                   and n.text in PLAY | {'播放歌曲', 'Play song'}]
+        if len(buttons) == 1:
+            matches[id(buttons[0])] = buttons[0]
+    return tuple(matches.values())
 
 
 class NativeAX:
@@ -334,25 +362,14 @@ class QQMusicMacBridge:
             buttons = [n for n in current.descendants() if n.role == 'AXButton' and n.text in {'搜索', 'Search', '执行搜索'}]
             if len(buttons) != 1 or not self.backend.action(buttons[0]):
                 raise OSError('[Mac QQ / 搜索确认] 搜索框不支持 AXConfirm，且没有唯一的可点击搜索按钮；未发送全局按键。')
-        deadline = self.clock() + 4
+        deadline = self.clock() + 8
         while not self.cancelled() and self.clock() < deadline:
             _app, tree = self._read()
-            for node in tree.descendants():
-                if node.role not in {'AXGroup', 'AXRow', 'AXCell'}:
-                    continue
-                elements = list(node.descendants())
-                if len(elements) > 45:
-                    continue
-                texts = [n.text for n in text_fields(node)]
-                artists = frozenset().union(*(artist_names(t) for t in texts))
-                if not any(canonical(t) == canonical(selected.title) for t in texts) or not artist_names(selected.artist) <= artists:
-                    continue
-                buttons = [n for n in elements if n.role == 'AXButton'
-                           and n.text in PLAY | {'播放歌曲', 'Play song'}]
-                if len(buttons) == 1 and not self.cancelled() and self.backend.action(buttons[0]):
-                    return
+            buttons = matching_song_buttons(tree, selected)
+            if len(buttons) == 1 and not self.cancelled() and self.backend.action(buttons[0]):
+                return
             self.sleep(0.25)
-        raise OSError('[Mac QQ / 搜索结果] 未找到同时匹配完整版本歌名、歌手和播放按钮的歌曲行；没有改播其他内容。')
+        raise OSError('[Mac QQ / 搜索结果] 未找到唯一匹配完整歌名、歌手及已知专辑的歌曲行；没有改播同名版本。')
 
     def diagnostics(self, executable):
         """仅在本机汇总版本、授权和控件能力；不启动、播放、隐藏、改模式或读取凭据。"""
@@ -373,6 +390,8 @@ class QQMusicMacBridge:
             lines.append('就绪观察：' + {'ready': '可继续识别', 'loading': '窗口／搜索控件未就绪',
                 'signing-in': '界面显示登录中', 'login-required': '界面显示登录／验证提示'}[startup_state(tree)])
             lines.append(f'搜索框：{len(fields)} 个；播放栏：{"可识别" if region else "未识别"}；时间轴与歌曲：{"可读取" if track else "未识别"}')
+            if track is not None:
+                lines.append('播放栏专辑：' + ('可读取并核对' if track.album else '未公开，无法仅凭播放栏确认同名专辑版本'))
             names = getattr(self.backend, 'action_names', None)
             confirm = bool(len(fields) == 1 and callable(names) and 'AXConfirm' in names(fields[0]))
             search_buttons = [n for n in tree.descendants() if n.role == 'AXButton' and n.text in {'搜索', 'Search', '执行搜索'}]

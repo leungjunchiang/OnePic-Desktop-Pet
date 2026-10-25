@@ -15,6 +15,7 @@ Windows 歌曲 ID 临时队列由 QQ 解析当前账号权益并顺序衔接，�
 登录未就绪的请求尚未投递，仅禁用本机续播，不触发失败暂停或恢复 QQ 模式。
 生成完毕先保存三十首，再尝试播放；首次接管或点歌失败不会丢失本机已生成歌单。
 重新随机的引导明确引用 QQ音乐渠道入口，与所有菜单和快捷按钮保持一致。
+原生队列任何暂停立即撤销续播；只有真实曲末停止才能换轮，卡住时限时提示而不擅自重播。
 """
 
 from __future__ import annotations
@@ -268,6 +269,7 @@ class QQPlaylist:
         self._tail_samples = 0
         self._handoff_deadline = None
         self.completion_reason = None
+        self._native_stall = None
 
     def _fresh_tail_complete(self, track, position, duration, now):
         """至少两次真实曲末推进且新鲜时间轴到完整时长，才允许不等回绕直接衔接。"""
@@ -347,11 +349,25 @@ class QQPlaylist:
 
     def observe_native(self, track):
         """只跟随 QQ 的实际曲目；普通曲终不发送暂停或下一首。"""
-        if not self.auto_advance or not self.native_loaded or track is None:
+        if not self.auto_advance or not self.native_loaded:
+            return None
+        if track is None:
+            self._native_pending = self._native_stall = None
             return None
         now = self.clock()
         state = track.playback_status.casefold()
+        # QQ's sequential queue reports Stopped at its natural end. Paused is
+        # always user intent here, even at the last millisecond; elapsed wall
+        # time must never turn a paused tail into a new round.
+        if state == 'paused':
+            self.auto_advance = False
+            self._native_pending = None
+            self._reset_completion()
+            if self.queue_mode is not None:
+                self.queue_mode.release()
+            return None
         if state == 'playing' and track.title:
+            self._native_stall = None
             matched = next((i for i, s in enumerate(self.entries) if candidate_matches(s, track)), None)
             if matched is not None:
                 self._native_pending = None
@@ -368,9 +384,11 @@ class QQPlaylist:
                     age = getattr(track, 'timeline_age_ms', None) or 0
                     deadline = now + max(0, track.duration_ms - raw - min(2000, max(0, age))) / 1000
                     self._end_not_before = max(self._end_not_before or deadline, deadline)
+                    self._last_end_position = (raw, track.duration_ms)
                 else:
                     self._near_end = False
                     self._end_not_before = None
+                    self._last_end_position = None
                 return None
             # QQ can publish the new title before its album/artist update.
             if self._native_pending is None or self._native_pending[0] != 'foreign':
@@ -378,18 +396,38 @@ class QQPlaylist:
             if now - self._native_pending[1] >= 2:
                 return 'foreign'
             return None
-        if state == 'paused' and not self._near_end:
-            self.auto_advance = False
-            self._native_pending = None
-            if self.queue_mode is not None:
-                self.queue_mode.release()
-            return None
-        if (state in {'paused', 'stopped'} and self.matches(track) and self._near_end
-                and self.index == len(self.entries) - 1 and self._end_not_before is not None):
+        raw = getattr(track, 'raw_position_ms', None)
+        raw = track.position_ms if raw is None else raw
+        terminal = (state == 'stopped' and self.matches(track) and self._near_end
+                    and self.index == len(self.entries) - 1 and self._end_not_before is not None
+                    and self._last_end_position is not None
+                    and track.duration_ms == self._last_end_position[1]
+                    and 0 <= track.duration_ms - raw <= 1000)
+        if terminal:
+            self._native_stall = None
             if self._native_pending is None or self._native_pending[0] != 'end':
                 self._native_pending = ('end', now)
             if now >= self._end_not_before and now - self._native_pending[1] >= 1.2:
                 return 'round'
+        else:
+            self._native_pending = None
+            # Stopped does not identify network failure versus a user Stop.
+            # A bounded warning offers explicit retry without inventing intent
+            # and silently restarting/advancing their music.
+            if state == 'stopped' and self.matches(track):
+                fingerprint = (self.index, raw, track.duration_ms)
+                if self._native_stall is None or self._native_stall[0] != fingerprint:
+                    self._native_stall = (fingerprint, now)
+                elif now - self._native_stall[1] >= 30:
+                    self.auto_advance = False
+                    self._reset_completion()
+                    if self.queue_mode is not None:
+                        self.queue_mode.release()
+                    return self.decorate(SongPlaybackResult(False, 'qq', '', '陈楚生',
+                        'QQ 已在当前歌曲停止 30 秒，六毛已停止自动续播并保留歌单；可点击下一首或重新随机。',
+                        MusicPlaybackError.MEDIA_SESSION_TIMEOUT))
+            else:
+                self._native_stall = None
         return None
 
     def sync_native_position(self, track):
@@ -478,7 +516,9 @@ class QQPlaylist:
             else:
                 self._reset_completion()
             return False
-        actual_end = matches and duration > 0 and 0 <= duration - position <= 200
+        # Mac AX uses the same Paused label for manual pause and natural end.
+        # Only a timeline actually at the full duration can count as the latter.
+        actual_end = matches and duration > 0 and position == duration
         if state == 'paused' and not actual_end:
             self.auto_advance = False
             self._reset_completion()

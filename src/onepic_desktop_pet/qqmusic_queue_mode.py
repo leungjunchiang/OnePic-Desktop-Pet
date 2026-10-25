@@ -1,4 +1,4 @@
-"""核对 QQ 模式并保留窗口；入口提示统一为QQ音乐渠道，兼容无搜索框与隐藏登录节点。"""
+"""核对 QQ 模式并保留窗口；隔离冷启动与操作超时，记录不含账号的阶段耗时。"""
 from __future__ import annotations
 
 from .music_labels import QQ_RANDOM_LABEL
@@ -6,10 +6,13 @@ from .music_labels import QQ_RANDOM_LABEL
 from pathlib import Path
 from collections import deque
 import json
+import logging
 import subprocess
 import sys
 import tempfile
 import time
+
+LOGGER = logging.getLogger(__name__)
 
 MODES = frozenset(('随机播放', '列表循环', '单曲循环', '顺序播放', '单曲播放'))
 SINGLE = '单曲循环'
@@ -102,29 +105,66 @@ class WindowsQQModeBackend:
 
     def __init__(self, executable, cancelled=lambda: False):
         self.executable, self.cancelled = executable, cancelled
+        self.last_diagnostics = {}
 
     def _request(self, action, target=''):
+        if self.cancelled():
+            raise OSError('QQ 播放模式访问已取消。')
         with tempfile.TemporaryDirectory(prefix='lili-qq-mode-') as directory:
             result = Path(directory)/'reply.json'
+            progress = Path(directory)/'progress.json'
             executable = self.executable()
             args = [action, str(executable or ''), target, str(result)]
             command = ([sys.executable, '--lili-qq-mode-worker'] if getattr(sys, 'frozen', False)
                        else [sys.executable, '-m', 'onepic_desktop_pet.qqmusic_mode_worker']) + args
+            started = time.monotonic()
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, creationflags=0x08000000 if sys.platform == 'win32' else 0)
-            deadline = time.monotonic() + (10 if action == 'set' else 6)
+            # UIA's first import may build COM bindings on a busy computer.
+            # Give that startup a separate budget, without extending a hung
+            # control operation or retrying any mutating command.
+            operation_budget = 10 if action == 'set' else 6
+            deadline, total_deadline = started + 15, started + 15 + operation_budget
+            operating = False
+            diagnostics = {'action': action, 'stage': 'process-start', 'stages': [], 'status': 'running'}
+            self.last_diagnostics = diagnostics
             try:
                 while process.poll() is None:
-                    if self.cancelled() or time.monotonic() >= deadline:
-                        raise OSError('QQ 播放模式访问已取消或超时。')
+                    try:
+                        current = json.loads(progress.read_text(encoding='utf-8'))
+                        diagnostics.update(stage=current['stage'], stages=current['stages'])
+                        if current.get('operating') and not operating:
+                            operating = True
+                            deadline = min(total_deadline, time.monotonic() + operation_budget)
+                    except (OSError, ValueError, KeyError, TypeError):
+                        pass
+                    if self.cancelled():
+                        diagnostics['status'] = 'cancelled'
+                        raise OSError('QQ 播放模式访问已取消。')
+                    if time.monotonic() >= deadline:
+                        diagnostics['status'] = 'timeout'
+                        phase = '控件操作' if operating else '辅助进程启动'
+                        raise OSError(f'QQ {phase}超时（阶段：{diagnostics["stage"]}），请稍后重试。')
                     time.sleep(0.04)
+                if self.cancelled():
+                    diagnostics['status'] = 'cancelled'
+                    raise OSError('QQ 播放模式访问已取消。')
+                diagnostics['returncode'] = process.poll()
                 if not result.is_file():
                     raise OSError('QQ 模式辅助未返回结果。')
                 reply = json.loads(result.read_text(encoding='utf-8'))
+                diagnostics.update(stage=reply.get('failed_stage', 'complete'),
+                                   stages=reply.get('stages', diagnostics['stages']))
                 if not reply.get('ok'):
                     raise OSError(reply.get('error') or 'QQ 播放模式暂不可用。')
+                diagnostics['status'] = 'ok'
                 return reply.get('value')
             finally:
+                if diagnostics['status'] == 'running':
+                    diagnostics['status'] = 'failed'
+                diagnostics['elapsed_ms'] = round((time.monotonic() - started) * 1000)
+                log = LOGGER.debug if diagnostics['status'] == 'ok' else LOGGER.warning
+                log('QQ mode helper: %s', json.dumps(diagnostics, ensure_ascii=False))
                 if process.poll() is None:
                     process.terminate()
                     try:
@@ -143,8 +183,9 @@ class WindowsQQModeBackend:
 class _WindowsQQModeNativeBackend:
     """优先投递原生命令并读回模式，兼容回退到标准可访问性动作，不移动鼠标。"""
 
-    def __init__(self, executable, cancelled=lambda: False):
+    def __init__(self, executable, cancelled=lambda: False, *, progress=lambda _: None):
         self.executable, self.cancelled = executable, cancelled
+        self.progress = progress
 
     def _roots(self, auto):
         from .music_background import music_client_mode_windows
@@ -190,6 +231,7 @@ class _WindowsQQModeNativeBackend:
 
     def startup_state(self):
         """查询固定就绪标记；展开窗口排除隐藏节点，后台主窗口仍可只读检测。"""
+        self.progress('startup-controls')
         if self.executable() is None:
             return 'loading'
         import uiautomation as auto
@@ -259,6 +301,7 @@ class _WindowsQQModeNativeBackend:
         return controls
 
     def read(self):
+        self.progress('read-controls')
         import uiautomation as auto
         with auto.UIAutomationInitializerInThread():
             modes = set()
@@ -295,6 +338,7 @@ class _WindowsQQModeNativeBackend:
         if self.cancelled():
             return False
         try:
+            self.progress('native-mode-command')
             accepted = dispatch_native_mode(self.executable(), target)
         except OSError:
             accepted = False
@@ -302,6 +346,7 @@ class _WindowsQQModeNativeBackend:
             deadline = time.monotonic() + 1.5
             while not self.cancelled():
                 try:
+                    self.progress('mode-readback')
                     if self.read() == target:
                         return True
                 except Exception:
@@ -322,6 +367,7 @@ class _WindowsQQModeNativeBackend:
                 if len(buttons) == 1 and buttons[0][0] == target:
                     return True
                 choices = [control for name, control in controls if name == target]
+                self.progress('uia-mode-action')
                 if len(choices) == 1:
                     self._invoke(auto, choices[0])
                 elif len(buttons) == 1:

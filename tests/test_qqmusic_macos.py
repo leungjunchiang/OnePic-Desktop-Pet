@@ -1,11 +1,11 @@
-"""验证 Mac QQ 的真实 AX 播放栏判定、权限拒绝和只操作目标客户端的后台路径。"""
+"""验证 Mac QQ 播放栏唯一性、专辑版本筛选、权限拒绝及目标客户端后台路径。"""
 from pathlib import Path
 import plistlib
 from types import SimpleNamespace
 import pytest
 
 from onepic_desktop_pet.qqmusic_macos import (
-    AXNode, BUNDLE_ID, QQMusicMacBridge, clock_ms, parse_track, player_region,
+    AXNode, BUNDLE_ID, QQMusicMacBridge, clock_ms, parse_track, player_region, matching_song_buttons,
 )
 from onepic_desktop_pet.qqmusic_online import candidate_matches
 from onepic_desktop_pet.music_control import MusicProviderManager, TrackInfo
@@ -50,6 +50,54 @@ def test_search_results_do_not_become_playback_proof():
     ambiguous = region()
     ambiguous.children.append(static('其他文本'))
     assert parse_track(ambiguous) is None
+
+
+def test_two_separate_player_bars_cannot_prove_unique_playback():
+    assert player_region(AXNode('AXWindow', children=[region(), region(title='光')])) is None
+
+
+def test_player_album_is_read_when_explicitly_exposed_and_wrong_album_is_rejected():
+    root = region()
+    root.children.append(static('央视亚运主题曲', 'player_album_name'))
+    selected = SongCandidate('qq', '山高水长', '陈楚生', native={'album': '央视亚运主题曲'})
+    assert parse_track(root).album == '央视亚运主题曲'
+    assert candidate_matches(selected, parse_track(root))
+    root.children[-1].text = '其他专辑'
+    assert not candidate_matches(selected, parse_track(root))
+
+
+def test_exact_album_result_is_selected_and_missing_or_duplicate_versions_are_refused():
+    def row(album):
+        button = AXNode('AXButton', '播放歌曲')
+        return AXNode('AXRow', children=[static('光'), static('陈楚生'), static(album), button]), button
+    wrong, wrong_button = row('其他专辑')
+    expected, expected_button = row('目标专辑')
+    selected = SongCandidate('qq', '光', '陈楚生', native={'album': '目标专辑'})
+    tree = AXNode('AXWindow', children=[wrong, expected])
+    assert matching_song_buttons(tree, selected) == (expected_button,)
+    assert not matching_song_buttons(wrong, selected)
+    # Nested AX groups that describe the same button are one result.
+    expected.children = [AXNode('AXGroup', children=expected.children)]
+    assert matching_song_buttons(tree, selected) == (expected_button,)
+    duplicate, duplicate_button = row('目标专辑')
+    tree.children.append(duplicate)
+    assert len(matching_song_buttons(tree, selected)) == 2
+
+
+def test_ambiguous_results_never_send_a_play_action(tmp_path):
+    app = tmp_path/'QQMusic.app'
+    (app/'Contents').mkdir(parents=True)
+    (app/'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': BUNDLE_ID}))
+    def row():
+        return AXNode('AXRow', children=[static('光'), static('陈楚生'), static('专辑'), AXNode('AXButton', '播放歌曲')])
+    root = AXNode('AXWindow', children=[AXNode('AXSearchField', '搜索'), row(), row()])
+    now = [0.0]
+    backend = Backend(root)
+    bridge = QQMusicMacBridge(backend=backend, clock=lambda: now[0],
+        sleep=lambda amount: now.__setitem__(0, now[0]+amount))
+    with pytest.raises(OSError, match='唯一匹配'):
+        bridge.play_candidate(app, SongCandidate('qq', '光', '陈楚生', native={'album': '专辑'}))
+    assert backend.actions == [('search', '陈楚生 光'), ('搜索', 'AXConfirm')]
 
 
 def test_missing_album_is_relaxed_only_for_explicit_mac_ax_scope():

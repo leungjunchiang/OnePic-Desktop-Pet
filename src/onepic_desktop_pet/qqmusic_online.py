@@ -10,11 +10,13 @@
 可信平台快照缺专辑不再误判为播放失败，非空专辑、完整版本标题和歌手仍须匹配。
 冷启动先普通打开并等待登录界面就绪，歌曲命令只交给已运行客户端，不使用后台自启动参数。
 QQ 加载歌曲的状态确认默认等待二十五秒，避免慢网络十秒后才起播被提前判失败；取消仍优先。
+未确认时区分媒体缺失、暂停和版本不匹配，记录歌曲元数据以便排查，不据此推断掉号或会员失效。
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 import queue
 import re
@@ -39,6 +41,7 @@ class QQCatalogError(RuntimeError):
 
 
 QQ_VERIFY_TIMEOUT = 25.0
+LOGGER = logging.getLogger(__name__)
 
 
 def canonical(value: str) -> str:
@@ -326,6 +329,7 @@ class QQMusicOnlinePlayer:
             return failed(f'QQ 音乐歌曲投递失败：{exc}', MusicPlaybackError.PLAY_ACTION_FAILED)
         deadline = self.clock() + self.verify_timeout
         latest = None
+        last_observed = None
         while True:
             if self.cancelled():
                 break
@@ -333,6 +337,8 @@ class QQMusicOnlinePlayer:
                 latest = self.track_reader()
             except Exception:
                 latest = None
+            if latest is not None:
+                last_observed = latest
             if (not self.cancelled() and latest and str(latest.playback_status).casefold() == 'playing'
                     and candidate_matches(selected, latest)):
                 if prepare_queue is not None:
@@ -360,9 +366,20 @@ class QQMusicOnlinePlayer:
             detail = str(self.verification_detail() or '')[:600]
         except Exception:
             detail = ''
+        observed = ({key: getattr(last_observed, key, '') for key in
+                     ('title', 'artist', 'album', 'playback_status')} if last_observed is not None else None)
+        LOGGER.warning('QQ playback unverified: selected=%s observed=%s',
+            {'id': selected.identifier, 'title': selected.title, 'artist': selected.artist,
+             'album': (selected.native or {}).get('album', '')}, observed)
+        if last_observed is None:
+            status_detail = '未读取到 QQ 媒体信息；这不表示账号未登录。'
+        elif str(last_observed.playback_status).casefold() == 'playing':
+            status_detail = f'QQ 媒体显示正在播放《{last_observed.title}》，但与所选版本信息不一致。'
+        else:
+            status_detail = 'QQ 媒体尚未处于可确认的播放状态，请查看客户端当前歌曲。'
         return SongPlaybackResult(
             True, 'qq', title, artist,
             f'已向 QQ 音乐请求《{selected.title}》，尚未读到匹配的播放状态。'
-            '请检查客户端登录、会员权限或弹窗；可说“查看音乐状态”。' + (f' 原因：{detail}' if detail else ''),
+            + status_detail + '可说“查看音乐状态”。' + (f' 原因：{detail}' if detail else ''),
             selected=selected, play_attempts=1,
             outcome=MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED)

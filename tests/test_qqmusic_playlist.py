@@ -1,9 +1,10 @@
-"""验证获授权的非现场三十首混合、跨轮重复、失败恢复、曲终换轮与界面控制。"""
+"""验证非现场三十首混合、曲尾暂停优先、真实曲终换轮与界面控制。"""
 
 from dataclasses import replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 from onepic_desktop_pet.music_control import MusicProviderManager, TrackInfo, WindowsSessionSnapshot
 from onepic_desktop_pet.config import PetSettings
@@ -178,6 +179,16 @@ def test_client_paused_at_actual_end_advances_but_explicit_pause_never_does():
     assert value.ended(track(value, 'paused', position=200000))
     value.auto_advance = False  # 六毛的优先暂停在系统状态返回前已经关闭续播。
     assert not value.ended(track(value, 'paused', position=200000))
+
+
+@pytest.mark.parametrize('remaining', [1, 100, 200, 2000])
+def test_mac_style_pause_before_exact_end_never_advances_after_wall_clock_deadline(remaining):
+    value, player = queue()
+    assert not value.ended(track(value, position=200000-remaining))
+    assert not value.ended(track(value, 'paused', position=200000-remaining))
+    value.test_time[0] += 60
+    assert not value.ended(track(value, 'paused', position=200000-remaining))
+    assert not value.auto_advance and len(player.sent) == 1
 
 
 def test_manager_next_never_sends_native_next_or_global_media_key():

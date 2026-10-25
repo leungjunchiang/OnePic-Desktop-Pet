@@ -1,4 +1,4 @@
-"""验证 QQ 身份 ID 队列、不投递游客权益、剩余顺序及暂停/换轮和资料门禁。"""
+"""验证 QQ 身份 ID 队列、曲尾手动暂停优先、稳定换轮及资料门禁。"""
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -136,6 +136,54 @@ def test_native_pause_and_reload_do_not_claim_an_active_queue():
     assert not value.auto_advance and value.queue_mode.backend.value=='随机播放'
     fresh=QQPlaylist(Player(),native_queue=SimpleNamespace())
     assert not fresh.native_loaded and not fresh.auto_advance
+
+
+@pytest.mark.parametrize('raw', [197600, 199000, 199700, 200000])
+def test_last_song_client_pause_never_starts_a_new_round_after_deadline(raw):
+    value, player, now = playlist()
+    value.index = 29
+    assert value.observe_native(track(value, raw=raw)) is None
+    assert value.observe_native(track(value, state='paused', raw=raw)) is None
+    for seconds in (1.3, 5, 60):
+        now[0] += seconds
+        assert value.observe_native(track(value, state='paused', raw=raw)) is None
+    assert not value.auto_advance and value.round_number == 1
+    assert len(player.sent) == 1
+
+
+def test_stopped_before_actual_tail_is_not_a_finished_round():
+    value, _, now = playlist()
+    value.index = 29
+    assert value.observe_native(track(value, raw=197600)) is None
+    assert value.observe_native(track(value, state='stopped', raw=197600)) is None
+    now[0] += 3
+    assert value.observe_native(track(value, state='stopped', raw=197600)) is None
+
+
+def test_continuous_stopped_state_warns_once_without_dispatching_a_recovery_song():
+    value, player, now = playlist()
+    assert value.observe_native(track(value, state='stopped', raw=90000)) is None
+    now[0] += 29
+    assert value.observe_native(track(value, state='stopped', raw=90000)) is None
+    now[0] += 1
+    result = value.observe_native(track(value, state='stopped', raw=90000))
+    assert not result.success and '30 秒' in result.message
+    assert not value.auto_advance and len(player.sent) == 1
+    assert value.observe_native(track(value, state='stopped', raw=90000)) is None
+
+
+@pytest.mark.parametrize('interruption', ['playing', 'buffering', 'missing', 'progress'])
+def test_buffering_or_new_evidence_resets_stop_watchdog(interruption):
+    value, player, now = playlist()
+    assert value.observe_native(track(value, state='stopped', raw=90000)) is None
+    now[0] += 20
+    sample = (None if interruption == 'missing' else
+              track(value, state='stopped' if interruption == 'progress' else interruption,
+                    raw=91000 if interruption == 'progress' else 90000))
+    assert value.observe_native(sample) is None
+    now[0] += 20
+    assert value.observe_native(track(value, state='stopped', raw=90000)) is None
+    assert value.auto_advance and len(player.sent) == 1
 
 
 def test_last_song_waits_for_stable_end_and_reuses_cached_thirty():

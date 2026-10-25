@@ -1,4 +1,4 @@
-"""验证在线目录、已运行客户端单次投递、取消竞态和真实播放确认，不操作登录。"""
+"""验证在线目录、单次投递、取消及真实播放确认，未确认诊断不误报登录或会员。"""
 
 from pathlib import Path
 from threading import Event
@@ -84,6 +84,20 @@ def test_random_online_bag_does_not_repeat_in_a_round_and_persists_ids():
         service.play()
     assert {item[1] for item in sent} == {'1', '2', '3'}
     assert all(item.startswith('qq:') for item in settings.music_recent_history)
+
+
+@pytest.mark.parametrize('observed,detail', [
+    (None, '不表示账号未登录'),
+    (TrackInfo('山楂花', '陈楚生', '其他专辑', 'playing'), '版本信息不一致'),
+    (TrackInfo('山楂花', '陈楚生', '冬去春来', 'paused'), '尚未处于可确认'),
+])
+def test_unverified_playback_reports_media_evidence_instead_of_guessing_account(observed, detail, caplog):
+    service, _, sent = player(observed)
+    result = service.play()
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED
+    assert detail in result.message and '会员权限' not in result.message
+    assert 'selected=' in caplog.text and 'observed=' in caplog.text
+    assert len(sent) == 1
 
 
 def test_random_prefers_catalog_tracks_marked_without_subscription():
