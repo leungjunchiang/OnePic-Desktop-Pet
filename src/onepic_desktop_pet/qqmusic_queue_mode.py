@@ -1,4 +1,4 @@
-"""核对 QQ 模式并保留窗口；隔离冷启动与操作超时，记录不含账号的阶段耗时。"""
+"""核对 QQ 模式并保留窗口；记录阶段耗时及匿名控件计数，排查不必要的就绪等待。"""
 from __future__ import annotations
 
 from .music_labels import QQ_RANDOM_LABEL
@@ -28,6 +28,18 @@ def mode_setup_message(target=SINGLE):
     return ('已找到 QQ 音乐，但没能确认临时歌单的“顺序播放”模式。'
             f'请展开 QQ 音乐，在底部播放栏选择“顺序播放”，再点一次“{QQ_RANDOM_LABEL}”。'
             '已请求暂停，六毛歌单已保留。')
+
+
+def startup_from_controls(visible, offscreen, read_mode):
+    """详情页会把可读播放栏误标为离屏；仅完整同栏证据且无认证阻断时只读复核。"""
+    from .qqmusic_startup import classify_startup
+    state = classify_startup(visible)
+    if state != 'loading' or not offscreen or classify_startup(tuple(visible) + tuple(offscreen)) != 'ready':
+        return state
+    try:
+        return 'ready' if read_mode() in MODES else state
+    except OSError:
+        return state
 
 
 def dispatch_native_mode(executable, target, *, popen=None):
@@ -68,7 +80,7 @@ class QQQueueMode:
                 self.original = current
             if current != self.target and not self.backend.set(self.target):
                 raise OSError('QQ 未接受' + self.target + '模式。')
-            self.isolated = not self.cancelled() and self.backend.read() == self.target
+            self.isolated = not self.cancelled() and (current == self.target or self.backend.read() == self.target)
             if not self.isolated:
                 raise OSError('未确认 QQ ' + self.target + '模式。')
             self.last_error = ''
@@ -156,6 +168,8 @@ class WindowsQQModeBackend:
                 diagnostics.update(stage=reply.get('failed_stage', 'complete'),
                                    stages=reply.get('stages', diagnostics['stages']),
                                    progress_write_failures=reply.get('progress_write_failures', 0))
+                if 'startup_diagnostics' in reply:
+                    diagnostics['startup_diagnostics'] = reply['startup_diagnostics']
                 if not reply.get('ok'):
                     raise OSError(reply.get('error') or 'QQ 播放模式暂不可用。')
                 diagnostics['status'] = 'ok'
@@ -187,6 +201,7 @@ class _WindowsQQModeNativeBackend:
     def __init__(self, executable, cancelled=lambda: False, *, progress=lambda _: None):
         self.executable, self.cancelled = executable, cancelled
         self.progress = progress
+        self.startup_diagnostics = {}
 
     def _roots(self, auto):
         from .music_background import music_client_mode_windows
@@ -252,7 +267,10 @@ class _WindowsQQModeNativeBackend:
             cache.AddProperty(auto.PropertyId.ControlTypeProperty)
             cache.AddProperty(auto.PropertyId.IsOffscreenProperty)
             controls = []
+            offscreen_controls = []
+            counts = self.startup_diagnostics = {'matched': 0, 'offscreen': 0, 'roots': 0, 'limited': False}
             for root in self._roots(auto):
+                counts['roots'] += 1
                 if self.cancelled():
                     return 'loading'
                 background = root.IsOffscreen or music_window_is_background(root.NativeWindowHandle)
@@ -262,18 +280,25 @@ class _WindowsQQModeNativeBackend:
                 elements = root.Element.FindAllBuildCache(4, condition, cache)
                 if elements is None:
                     continue
+                counts['matched'] += elements.Length
                 if elements.Length > 150:
+                    counts['limited'] = True
                     return 'loading'
                 for index in range(elements.Length):
                     element = elements.GetElement(index)
-                    if not background and element.CachedIsOffscreen:
-                        continue
                     role = {auto.ControlType.EditControl: 'EditControl',
                             auto.ControlType.ComboBoxControl: 'ComboBoxControl',
                             auto.ControlType.TextControl: 'TextControl'}.get(element.CachedControlType, 'Other')
                     # Do not return or persist the current search-field value.
-                    controls.append((role, '' if role in {'EditControl', 'ComboBoxControl'} else element.CachedName.strip()))
-            return classify_startup(controls)
+                    entry = (role, '' if role in {'EditControl', 'ComboBoxControl'} else element.CachedName.strip())
+                    if not background and element.CachedIsOffscreen:
+                        counts['offscreen'] += 1
+                        offscreen_controls.append(entry)
+                    else:
+                        controls.append(entry)
+            state = startup_from_controls(controls, offscreen_controls, self.read)
+            counts['offscreen_recovery'] = state == 'ready' and classify_startup(controls) == 'loading'
+            return state
 
     def _cached_controls(self, auto, roots):
         """只在已核对路径的 QQ 窗口中原生查询五种模式名，不逐个跨进程枚举网页节点。"""

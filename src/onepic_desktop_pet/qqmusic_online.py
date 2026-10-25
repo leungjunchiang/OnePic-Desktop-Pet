@@ -11,6 +11,7 @@
 冷启动先普通打开并等待登录界面就绪，歌曲命令只交给已运行客户端，不使用后台自启动参数。
 QQ 加载歌曲的状态确认默认等待二十五秒，避免慢网络十秒后才起播被提前判失败；取消仍优先。
 未确认时区分媒体缺失、暂停和版本不匹配，记录歌曲元数据以便排查，不据此推断掉号或会员失效。
+公开歌手目录在本机缓存十分钟，跨重启复用同一热门排序和完整资料；过期或损坏重新查询。
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from pathlib import Path
 import queue
 import re
 import subprocess
+import tempfile
 import threading
 import time
 import unicodedata
@@ -118,27 +120,97 @@ def _request_json(url: str, *, wall_timeout: float = 3.5) -> dict:
 class QQMusicCatalog:
     """只查询公开歌曲元数据，严格筛选歌手、类型和数字 ID。"""
 
-    def __init__(self, request_json=None) -> None:
+    def __init__(self, request_json=None, *, cache_path=None, wall_clock=time.time) -> None:
         self.request_json = request_json or _request_json
         self._artist_cache = None
+        self.cache_path = Path(cache_path) if cache_path is not None else None
+        self.wall_clock = wall_clock
+
+    def _read_artist_pages(self):
+        """仅接受十分钟内的完整匿名目录快照，仍经过正常歌曲解析与授权筛选。"""
+        if self.cache_path is None:
+            return None
+        try:
+            if self.cache_path.stat().st_size > 8_000_000:
+                return None
+            data = json.loads(self.cache_path.read_text(encoding='utf-8'))
+            age = self.wall_clock() - data['saved_at']
+            pages = data['pages']
+            if data['version'] != 1 or not 0 <= age < 600 or not isinstance(pages, list) or not 1 <= len(pages) <= 13:
+                return None
+            result = {}
+            total = None
+            for index, page in enumerate(pages):
+                if type(page['begin']) is not int or page['begin'] != index * 80:
+                    return None
+                response = page['response']['req']
+                info = response['data']
+                if (response['code'] != 0 or info['singerMid'] != '002PZBgg1S9xPX'
+                        or type(info['totalNum']) is not int or info['totalNum'] < 0
+                        or not isinstance(info['songList'], list) or len(info['songList']) > 80):
+                    return None
+                total = info['totalNum'] if total is None else total
+                if info['totalNum'] != total:
+                    return None
+                result[page['begin']] = page['response']
+            if len(result) != max(1, min(13, (total + 79) // 80)):
+                return None
+            return result, age
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return None
+
+    def _save_artist_pages(self, pages):
+        """缓存只含固定匿名请求的公开资料，写入失败不影响播放，不存账号或音频。"""
+        if self.cache_path is None:
+            return
+        temporary = None
+        try:
+            payload = json.dumps({'version': 1, 'saved_at': self.wall_clock(), 'pages': [
+                {'begin': begin, 'response': response} for begin, response in pages.items()]},
+                ensure_ascii=False, separators=(',', ':'))
+            if len(payload.encode('utf-8')) > 8_000_000:
+                return
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=self.cache_path.parent,
+                                             prefix='.qq-catalog-', suffix='.tmp', delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(payload)
+            temporary.replace(self.cache_path)
+        except (OSError, ValueError, TypeError):
+            pass
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def artist_candidates(self, artist: str, *, cancelled=lambda: False) -> tuple[SongCandidate, ...]:
         """读取歌手目录的各页，不把搜索热度前四十首当成整个随机曲库。"""
+        return self._artist_candidates(artist, cancelled=cancelled, read_disk=True)
+
+    def _artist_candidates(self, artist, *, cancelled, read_disk):
         if canonical(artist) != canonical('陈楚生'):
             raise QQCatalogError('当前随机歌手目录只支持陈楚生。')
+        if cancelled():
+            raise QQCatalogError('音乐操作已取消。')
         if self._artist_cache and time.monotonic() - self._artist_cache[0] < 600:
             if cancelled():
                 raise QQCatalogError('音乐操作已取消。')
             return self._artist_cache[1]
-        songs = {}
+        cached = self._read_artist_pages() if read_disk else None
+        cached_pages, cached_age = cached if cached else ({}, 0)
+        songs, fetched_pages = {}, {}
         for begin in range(0, 1040, 80):
             if cancelled():
                 raise QQCatalogError('音乐操作已取消。')
             query = {'comm': {'ct': 24, 'cv': 0}, 'req': {
                 'module': 'musichall.song_list_server', 'method': 'GetSingerSongList',
                 'param': {'singerMid': '002PZBgg1S9xPX', 'begin': begin, 'num': 80, 'order': 1}}}
-            response = self.request_json('https://u.y.qq.com/cgi-bin/musicu.fcg?' +
-                urlencode({'data': json.dumps(query, separators=(',', ':'))}))
+            response = (cached_pages[begin] if cached_pages else
+                self.request_json('https://u.y.qq.com/cgi-bin/musicu.fcg?' +
+                    urlencode({'data': json.dumps(query, separators=(',', ':'))})))
+            fetched_pages[begin] = response
             try:
                 result = response['req']
                 data = result['data']
@@ -175,12 +247,18 @@ class QQMusicCatalog:
                 if not rows or begin + len(rows) >= total:
                     break
             except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                if cached_pages:
+                    return self._artist_candidates(artist, cancelled=cancelled, read_disk=False)
                 raise QQCatalogError('QQ 音乐歌手目录格式已变化，已保留备用目录。') from exc
         if cancelled():
             raise QQCatalogError('音乐操作已取消。')
         if not songs:
+            if cached_pages:
+                return self._artist_candidates(artist, cancelled=cancelled, read_disk=False)
             raise QQCatalogError('QQ 音乐歌手目录暂未返回可用歌曲。')
-        self._artist_cache = (time.monotonic(), tuple(songs.values()))
+        self._artist_cache = (time.monotonic() - cached_age, tuple(songs.values()))
+        if not cached_pages:
+            self._save_artist_pages(fetched_pages)
         return self._artist_cache[1]
 
     def search(self, title: str, artist: str, *, page: int = 1) -> tuple[SongCandidate, ...]:
@@ -246,10 +324,10 @@ class QQMusicOnlinePlayer:
                  dispatcher=dispatch_song, verify_timeout=QQ_VERIFY_TIMEOUT, poll_interval=0.35,
                  sleep=time.sleep, clock=time.monotonic, cancelled=lambda: False,
                  candidate_dispatcher=None, backgrounder=None, verification_detail=None, window_policy=None,
-                 client_preparer=None) -> None:
+                 client_preparer=None, catalog_cache_path=None) -> None:
         self.settings = settings
         self.track_reader = track_reader
-        self.catalog = catalog or QQMusicCatalog()
+        self.catalog = catalog or QQMusicCatalog(cache_path=catalog_cache_path)
         self.client_finder = client_finder
         self.dispatcher = dispatcher
         self.candidate_dispatcher = candidate_dispatcher

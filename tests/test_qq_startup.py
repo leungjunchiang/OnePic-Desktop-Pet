@@ -1,4 +1,4 @@
-"""验证登录与界面故障分开、跨版本播放栏就绪、瞬时登录恢复及未投递时不改播放器。"""
+"""验证已有 QQ 单次完整就绪、详情页离屏复核、认证阻断及冷启动稳定等待。"""
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -69,13 +69,33 @@ def test_cold_start_is_one_plain_command_before_login_and_never_restarts(tmp_pat
 def test_existing_actual_version_is_reused_instead_of_saved_old_executable(tmp_path, monkeypatch):
     actual = tmp_path / 'current' / 'QQMusic.exe'
     exe, startup, events, polls, now = harness(tmp_path, monkeypatch, ['ready'], paths=(actual,))
-    assert startup.ensure(exe) == actual and not events and polls == [actual, actual]
+    assert startup.ensure(exe) == actual and not events and polls == [actual]
 
 
 def test_transient_login_label_during_existing_client_rebuild_can_recover(tmp_path, monkeypatch):
     exe, startup, events, polls, _ = harness(tmp_path, monkeypatch,
         ['login-required', 'ready', 'ready'], paths=(tmp_path / 'QQMusic.exe',))
-    assert startup.ensure(exe) == exe and not events and len(polls) == 3
+    assert startup.ensure(exe) == exe and not events and len(polls) == 2
+
+
+def test_detail_page_false_offscreen_needs_a_complete_bar_and_verified_mode():
+    from onepic_desktop_pet.qqmusic_queue_mode import startup_from_controls
+    player = [('ButtonControl', name) for name in ('上一首', '下一首', '播放', '随机播放')]
+    seen = []
+    assert startup_from_controls([], player, lambda: seen.append(True) or '随机播放') == 'ready'
+    assert seen == [True]
+    assert startup_from_controls([], player, lambda: '未知模式') == 'loading'
+    assert startup_from_controls([], player[:2], lambda: pytest.fail('Incomplete bar')) == 'loading'
+
+
+@pytest.mark.parametrize('label', ['点击登录', '安全验证', '正在登录'])
+def test_offscreen_recovery_never_overrides_visible_or_hidden_authentication_blocker(label):
+    from onepic_desktop_pet.qqmusic_queue_mode import startup_from_controls
+    player = [('ButtonControl', name) for name in ('上一首', '下一首', '播放')]
+    forbidden = lambda: pytest.fail('Authentication evidence cannot be replaced by cached mode')
+    expected = 'signing-in' if label == '正在登录' else 'login-required'
+    assert startup_from_controls([('TextControl', label)], player, forbidden) == expected
+    assert startup_from_controls([], player + [('TextControl', label)], forbidden) == 'loading'
 
 
 @pytest.mark.parametrize('state,detail', [('loading', '这不表示账号未登录'), ('unavailable', '界面读取失败或超时'),

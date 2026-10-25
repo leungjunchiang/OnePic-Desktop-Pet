@@ -1,4 +1,4 @@
-"""本机歌单提供空列表引导、明确的选曲控制及桌宠上方定位，播放失败仍可查看重试。"""
+"""本机歌单提供上方定位与即时切歌反馈，后台检查期间的点击仍可优先处理。"""
 
 from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtWidgets import (
@@ -76,7 +76,7 @@ class MusicPlaylistDialog(QDialog):
         self.songs.setUniformItemSizes(True)
         self.songs.setToolTip('双击播放 · 关闭窗口后继续在后台播放')
         self.songs.itemDoubleClicked.connect(
-            lambda item: controller.play_qq_playlist_index(self.songs.row(item)))
+            lambda item: self._select_index(self.songs.row(item)))
         layout.addWidget(self.songs, 1)
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -139,6 +139,10 @@ class MusicPlaylistDialog(QDialog):
         else:
             self.controller.play_qq_song()
 
+    def _select_index(self, index):
+        if self.controller.play_qq_playlist_index(index):
+            self.state.setText('正在切歌…')
+
     def _command(self, action):
         queue = self.controller.manager.qq_playlist
         if action == 'toggle':
@@ -146,7 +150,7 @@ class MusicPlaylistDialog(QDialog):
                 self.controller.perform('pause')
             elif queue.entries:
                 row = self.songs.currentRow()
-                self.controller.play_qq_playlist_index(row if row >= 0 else queue.index)
+                self._select_index(row if row >= 0 else queue.index)
             else:
                 self._new_round()
             return
@@ -156,7 +160,7 @@ class MusicPlaylistDialog(QDialog):
         if action == 'next' and target >= len(queue.entries):
             self._new_round()
         elif 0 <= target < len(queue.entries):
-            self.controller.play_qq_playlist_index(target)
+            self._select_index(target)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

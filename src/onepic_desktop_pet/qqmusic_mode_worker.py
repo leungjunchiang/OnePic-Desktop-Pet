@@ -1,4 +1,4 @@
-"""QQ 隔离工作入口：回传不含账号的耗时；诊断文件读写冲突不能中断播放控制。"""
+"""QQ 隔离入口回传阶段耗时和匿名控件计数；诊断写入冲突不能中断控制。"""
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -55,6 +55,8 @@ def run_mode_worker(args):
             else:
                 raise ValueError('不支持的 QQ 模式操作。')
         reply = {'ok': True, 'value': value}
+        if action == 'startup':
+            reply['startup_diagnostics'] = backend.startup_diagnostics
     except Exception as exc:
         reply = {'ok': False, 'error': f'QQ 模式访问失败（{type(exc).__name__}）。',
                  'failed_stage': stages[-1]['stage'] if stages else 'worker-start'}

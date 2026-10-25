@@ -1,4 +1,4 @@
-"""验证已授权非现场歌单模式、原生命令及真实读回隔离，点歌不隐藏用户窗口。"""
+"""验证真实模式隔离与用户模式恢复；已经读到目标模式时不重复启动只读辅助。"""
 from contextlib import nullcontext
 from pathlib import Path
 import sys
@@ -44,6 +44,14 @@ def test_user_single_mode_is_kept_and_user_later_mode_change_is_respected():
     assert mode.acquire()
     backend.value = '顺序播放'  # A new explicit user action owns the mode now.
     assert mode.release() and backend.value == '顺序播放'
+
+
+def test_already_target_mode_uses_one_fresh_read_and_never_sends_a_set():
+    backend = Backend('顺序播放')
+    reads = []
+    backend.read = lambda: reads.append(True) or backend.value
+    mode = QQQueueMode(backend, target='顺序播放')
+    assert mode.acquire() and mode.isolated and reads == [True] and not backend.changes
 
 
 def test_claimed_invoke_success_without_readback_never_arms():

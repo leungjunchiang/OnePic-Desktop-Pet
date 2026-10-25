@@ -3,6 +3,7 @@
 只复用唯一已运行版本，避免设置里的旧程序再次拉起另一版本。登录未就绪时没有
 播放、暂停、模式恢复或重试启动动作；用户完成 QQ 自身登录后可再次点击随机。
 兼容没有搜索框的播放栏，普通“登录”文字不覆盖完整播放栏证据；读取失败与登录提示分开说明。
+已运行客户端的完整就绪证据单次即可继续；冷启动仍等待两次稳定观察与登录恢复。
 """
 from pathlib import Path
 import subprocess
@@ -115,7 +116,7 @@ class WindowsQQStartup:
                 state = 'unavailable'
             stable = stable + 1 if state == 'ready' else 0
             blocked = blocked + 1 if state == 'login-required' else 0
-            if stable >= 2 and not self.cancelled() and (not cold or self.clock() - started >= 2):
+            if stable >= (2 if cold else 1) and not self.cancelled() and (not cold or self.clock() - started >= 2):
                 return client
             if (not cold and blocked >= 2) or self.clock() >= deadline:
                 break

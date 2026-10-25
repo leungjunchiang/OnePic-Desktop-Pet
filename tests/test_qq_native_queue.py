@@ -1,4 +1,4 @@
-"""验证 QQ 身份 ID 队列、曲尾手动暂停优先、稳定换轮及资料门禁。"""
+"""验证身份 ID 队列、每次投递仅准备一次模式、暂停优先及曲终资料门禁。"""
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -239,8 +239,15 @@ def test_real_player_dispatches_full_queue_and_manager_follows_without_reissuing
         catalog=SimpleNamespace(search=lambda *_a,**_k:entries),client_finder=lambda *_:executable,
         backgrounder=lambda *_:None)
     mode=QQQueueMode(Backend(),target='顺序播放')
+    acquired = []
+    original_acquire = mode.acquire
+    def acquire_once():
+        acquired.append(True)
+        return original_acquire()
+    mode.acquire = acquire_once
     value=QQPlaylist(player,shuffle=lambda rows:None,native_queue=backend,queue_mode=mode)
     assert value.create().success and value.native_loaded and value.auto_advance
+    assert len(acquired) == 1
     assert mode.backend.value=='顺序播放'
     manager=MusicProviderManager(PetSettings(),platform_name='win32',windows_bridge=SimpleNamespace())
     manager.qq_playlist=value
@@ -250,6 +257,7 @@ def test_real_player_dispatches_full_queue_and_manager_follows_without_reissuing
     result=manager._playlist_tick()
     assert result.success and value.index==1 and len(commands)==1
     value.select(12)
+    assert len(acquired) == 2
     assert current[0].title==value.entries[12].title and value.index==12
     assert len(commands)==2
     # QQ has just advanced again but the one-second pet poll has not run.
