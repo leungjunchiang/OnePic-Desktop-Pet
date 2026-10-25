@@ -1,4 +1,4 @@
-"""验证新设备选曲锁定 QQ、歌单重新打开及地址引导、上方锚定与优先暂停。"""
+"""验证 QQ音乐渠道入口、歌单重新打开、地址引导、上方锚定与优先暂停。"""
 
 import os
 import pytest
@@ -20,7 +20,7 @@ def test_random_menu_entry_calls_online_player_instead_of_browser():
         settings=SimpleNamespace(qq_music_path='QQMusic.exe'),
         music_controller=SimpleNamespace(play_qq_song=lambda: calls.append('online') or True),
         show_speech=lambda *_: None)
-    assert PetWindow.play_random_song(pet) == '陈楚生随机歌曲'
+    assert PetWindow.play_random_song(pet) == '随机听陈楚生（QQ音乐渠道）'
     assert calls == ['online']
 
 
@@ -43,7 +43,7 @@ def test_saving_qq_address_from_random_action_continues_playback_once():
         calls.append(kwargs['section'])
         pet.settings.qq_music_path = 'QQMusic.exe'
     pet.open_settings = settings
-    assert PetWindow.play_random_song(pet) == '陈楚生随机歌曲'
+    assert PetWindow.play_random_song(pet) == '随机听陈楚生（QQ音乐渠道）'
     assert calls == ['qq_music', 'play']
 
 

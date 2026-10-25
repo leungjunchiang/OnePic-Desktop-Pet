@@ -8,6 +8,7 @@ Mac 允许选择应用包或包内程序并统一归到 .app；QQ 必须核对�
 快捷“随机听一首”只负责从本地曲库选歌，然后直接尝试平台 Deep Link；Deep Link 失效、客户端
 未安装或系统拒绝唤起时，降级到正版 HTTPS 页面。打开客户端不等于已确认播放，基础播放命令
 仍由 music_control.py 读取系统媒体 Session 或发送媒体键。
+固定网页渠道可显式覆盖历史平台偏好，仅影响本次打开，不修改已保存设置。
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import urllib.parse
 import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, Mapping, Sequence
 
 from .resources import resource_path
@@ -399,11 +401,12 @@ def open_chen_artist_page(
     *,
     browser_opener: Callable[[str], object] | None = None,
     platform_name: str | None = None,
+    service: str | None = None,
 ) -> ArtistPageLaunch:
-    """Open the selected/default service in the system browser."""
+    """在浏览器打开明确指定或历史偏好的渠道，不改变保存的用户设置。"""
 
     service, used_auto_detection = resolve_artist_music_service(
-        settings,
+        settings if service is None else SimpleNamespace(artist_music_service=service),
         platform_name=platform_name,
     )
     url = chen_artist_url(service)

@@ -4,7 +4,8 @@
 
 设置入口只在用户点击快捷口袋按钮时发出 ``user_action`` 来源，供主窗口统一校验。
 播放、暂停、切歌和随机播放分别发出明确命令，不用“打开音乐客户端”冒充播放控制。
-快捷音乐菜单提供 QQ 在线随机点歌和真实媒体状态查询。
+快捷音乐菜单将 QQ音乐渠道放在网易云网页渠道上方，其他网页渠道使用独立子菜单。
+悬停按钮和操作提示共用渠道名称，并提供真实媒体状态查询。
 快捷口袋使用代码绘制的红黄蓝矢量图标，不依赖平台 Emoji 或低清位图。
 独立宠物图层继续使用透明窗口；工作控制、状态和提示框使用实色窗口承载圆角样式，确保在深色桌面上边框与文字始终可见。
 工作报告与随机听陈楚生共用悬停延迟、跨按钮余量和隐藏规则，二级按钮对齐各自入口。
@@ -19,8 +20,9 @@ import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QActionGroup, QBrush, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from .work_timer import format_elapsed_clock
+from .music_labels import NETEASE_WEB_LABEL, OTHER_WEB_CHANNELS, OTHER_WEB_LABEL, QQ_RANDOM_LABEL
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -767,7 +769,7 @@ class QuickControlPanel(QWidget):
         secondary_layout.addWidget(self.report_button)
         # Separate fixed column slots preserve the primary row's geometry.
         # Only one secondary button is shown, above its own primary shortcut.
-        self.random_music_button = self._button("music_random", "随机听陈楚生", None)
+        self.random_music_button = self._button("music_random", QQ_RANDOM_LABEL, None)
         self.random_music_button.clicked.connect(lambda: self._choose(self.music_requested))
         secondary_layout.addSpacing(3 * (42 + shortcut_gap))
         secondary_layout.addWidget(self.random_music_button)
@@ -862,7 +864,7 @@ class QuickControlPanel(QWidget):
         self._window_behavior_callback = callback
 
     def set_artist_music_service(self, service: str) -> None:
-        """Refresh the check mark used by the quick music submenu."""
+        """兼容旧调用保留网页偏好，固定入口和其他渠道动作不依赖该值。"""
 
         value = str(service or "auto").strip().casefold()
         self._artist_music_service = value if value in {
@@ -1178,11 +1180,19 @@ class QuickControlPanel(QWidget):
         """Open only actionable music controls; no Now Playing panel."""
 
         menu = QMenu(self)
+        random_song = menu.addAction(QQ_RANDOM_LABEL)
+        random_song.triggered.connect(lambda _checked=False: self._choose(self.music_requested))
+        artist = menu.addAction(NETEASE_WEB_LABEL)
+        artist.triggered.connect(lambda _checked=False: self._choose(self.chen_artist_requested))
+        platform_menu = menu.addMenu(OTHER_WEB_LABEL)
+        for key, label in OTHER_WEB_CHANNELS:
+            action = platform_menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, value=key: self._choose(
+                    self.artist_music_service_requested, value))
+        menu.addSeparator()
         playlist = menu.addAction("查看陈楚生歌单…")
         playlist.triggered.connect(lambda _checked=False: self._choose(self.music_playlist_requested))
-        random_song = menu.addAction("随机听陈楚生（QQ 在线）")
-        random_song.triggered.connect(lambda _checked=False: self._choose(self.music_requested))
-        menu.addSeparator()
         for label, command in (
             ("播放 / 暂停", "toggle"),
             ("上一首", "previous"),
@@ -1193,29 +1203,6 @@ class QuickControlPanel(QWidget):
             action.triggered.connect(
                 lambda _checked=False, value=command: self._choose(
                     self.music_control_requested, value
-                )
-            )
-        menu.addSeparator()
-        artist = menu.addAction("听陈楚生…")
-        artist.triggered.connect(lambda _checked=False: self._choose(self.chen_artist_requested))
-        platform_menu = menu.addMenu("音乐平台")
-        platform_group = QActionGroup(platform_menu)
-        platform_group.setExclusive(True)
-        for key, label in (
-            ("auto", "跟随系统默认"),
-            ("netease", "网易云音乐"),
-            ("qq", "QQ 音乐"),
-            ("apple", "Apple Music"),
-            ("kugou", "酷狗音乐"),
-            ("qishui", "汽水音乐"),
-        ):
-            action = platform_menu.addAction(label)
-            action.setCheckable(True)
-            action.setChecked(self._artist_music_service == key)
-            platform_group.addAction(action)
-            action.triggered.connect(
-                lambda _checked=False, value=key: self._choose(
-                    self.artist_music_service_requested, value
                 )
             )
         menu.exec(self.music_button.mapToGlobal(self.music_button.rect().bottomLeft()))

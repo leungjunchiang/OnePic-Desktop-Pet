@@ -1,4 +1,4 @@
-"""验证共享菜单优先显示本机歌单，并保留在线点歌、状态查询与今日累计入口。"""
+"""验证共享菜单统一渠道名称和顺序，固定网易云网页并收纳其他网页渠道。"""
 from __future__ import annotations
 
 from onepic_desktop_pet.menu_model import UnifiedMenuModel
@@ -117,27 +117,25 @@ def test_unified_menu_model_is_shared_by_all_lili_entry_points() -> None:
 
     music = next(item for item in model.items() if item.title == "音乐")
     assert [item.title for item in music.children] == [
-        "查看陈楚生歌单…",
-        "随机听陈楚生（QQ 在线）",
+        "随机听陈楚生（QQ音乐渠道）",
+        "听陈楚生（网易云网页渠道）",
+        "其他网页渠道",
         "",
+        "查看陈楚生歌单…",
         "播放 / 暂停",
         "上一首",
         "下一首",
         "查看音乐状态",
-        "",
-        "听陈楚生…",
-        "音乐平台",
     ]
-    platform = next(item for item in music.children if item.title == "音乐平台")
+    platform = next(item for item in music.children if item.title == "其他网页渠道")
     assert [item.title for item in platform.children] == [
-        "跟随系统默认",
-        "网易云音乐",
-        "QQ 音乐",
-        "Apple Music",
-        "酷狗音乐",
-        "汽水音乐",
+        "QQ音乐网页渠道",
+        "Apple Music网页渠道",
+        "酷狗网页渠道",
+        "汽水网页渠道",
+        "系统默认网页渠道",
     ]
-    assert platform.children[2].checked is True
+    assert not any(item.checkable for item in platform.children)
 
     assert model.items("pet") == model.items("tray") == model.items("status") == model.items("dock")
 

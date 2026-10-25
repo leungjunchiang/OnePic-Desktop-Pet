@@ -1,4 +1,4 @@
-"""验证随机与歌单双入口共用工作报告的悬停/移出规则，查看歌单不触发播放。"""
+"""验证统一渠道顺序、随机与歌单共用的悬停/移出规则，查看歌单不触发播放。"""
 
 import pytest
 import time
@@ -109,14 +109,14 @@ def test_playlist_is_discoverable_beside_random_and_stays_until_leaving_both(pan
     assert viewed.count()==1 and played.count()==0 and not value.isVisible()
 
 
-def test_music_menu_puts_saved_playlist_first_and_does_not_play_on_view(panel, monkeypatch):
+def test_music_menu_groups_named_channels_first_and_does_not_play_on_view(panel, monkeypatch):
     from PySide6.QtWidgets import QMenu
     value, _, app = panel
     viewed, played = QSignalSpy(value.music_playlist_requested), QSignalSpy(value.music_requested)
     titles=[]
     def execute(menu,*_):
         titles.extend(action.text() for action in menu.actions())
-        menu.actions()[0].trigger()
+        next(action for action in menu.actions() if action.text()=='查看陈楚生歌单…').trigger()
     def menu_factory(parent):
         menu=QMenu(parent)
         # The application decorates each QMenu instance for native safety;
@@ -125,5 +125,5 @@ def test_music_menu_puts_saved_playlist_first_and_does_not_play_on_view(panel, m
         return menu
     monkeypatch.setattr('onepic_desktop_pet.controls.QMenu',menu_factory)
     value._show_music_menu()
-    assert titles[:2]==['查看陈楚生歌单…','随机听陈楚生（QQ 在线）']
+    assert titles[:3]==['随机听陈楚生（QQ音乐渠道）','听陈楚生（网易云网页渠道）','其他网页渠道']
     assert viewed.count()==1 and played.count()==0

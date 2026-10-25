@@ -9,13 +9,16 @@ command list. The macOS Dock menu is another projection of this same model.
 氛围特效入口也只作为本地菜单命令投影，不在菜单模型中执行网络或计时逻辑。
 在线随机点歌与查看状态是独立命令，歌手网页入口继续保留。
 
-音乐菜单优先提供本机歌单与随机点歌入口，便于新设备直接找到。
+音乐菜单将 QQ音乐渠道与固定网易云网页渠道放在一起，其他网页渠道收进子菜单。
+音乐入口使用统一渠道名称，桌宠、托盘与 Mac 菜单不再各自命名。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Mapping
+
+from .music_labels import NETEASE_WEB_LABEL, OTHER_WEB_CHANNELS, OTHER_WEB_LABEL, QQ_RANDOM_LABEL
 
 
 MenuCallback = Callable[[bool], object]
@@ -77,56 +80,17 @@ class UnifiedMenuModel:
         state = dict(self._state_provider())
         work_status = str(state.get("work_status") or "idle")
         visible = bool(state.get("visible", True))
-        artist_service = str(state.get("artist_music_service") or "auto").casefold()
-        music_platform_children = [
-            MenuItemSpec(
-                "跟随系统默认",
-                "artist_music_auto",
-                checkable=True,
-                checked=artist_service == "auto",
-            ),
-            MenuItemSpec(
-                "网易云音乐",
-                "artist_music_netease",
-                checkable=True,
-                checked=artist_service == "netease",
-            ),
-            MenuItemSpec(
-                "QQ 音乐",
-                "artist_music_qq",
-                checkable=True,
-                checked=artist_service == "qq",
-            ),
-            MenuItemSpec(
-                "Apple Music",
-                "artist_music_apple",
-                checkable=True,
-                checked=artist_service == "apple",
-            ),
-            MenuItemSpec(
-                "酷狗音乐",
-                "artist_music_kugou",
-                checkable=True,
-                checked=artist_service == "kugou",
-            ),
-            MenuItemSpec(
-                "汽水音乐",
-                "artist_music_qishui",
-                checkable=True,
-                checked=artist_service == "qishui",
-            ),
-        ]
         music_children = [
-            MenuItemSpec("查看陈楚生歌单…", "music_playlist"),
-            MenuItemSpec("随机听陈楚生（QQ 在线）", "music_random_qq"),
+            MenuItemSpec(QQ_RANDOM_LABEL, "music_random_qq"),
+            MenuItemSpec(NETEASE_WEB_LABEL, "chen_artist"),
+            MenuItemSpec(OTHER_WEB_LABEL, children=tuple(
+                MenuItemSpec(label, "artist_music_" + key) for key, label in OTHER_WEB_CHANNELS)),
             MenuItemSpec.divider(),
+            MenuItemSpec("查看陈楚生歌单…", "music_playlist"),
             MenuItemSpec("播放 / 暂停", "music_toggle"),
             MenuItemSpec("上一首", "music_previous"),
             MenuItemSpec("下一首", "music_next"),
             MenuItemSpec("查看音乐状态", "music_status"),
-            MenuItemSpec.divider(),
-            MenuItemSpec("听陈楚生…", "chen_artist"),
-            MenuItemSpec("音乐平台", children=tuple(music_platform_children)),
         ]
 
         todo_children = [

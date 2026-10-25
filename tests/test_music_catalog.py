@@ -1,4 +1,4 @@
-"""验证六毛曲库、洗牌袋和跨平台音乐唤起降级。"""
+"""验证曲库、洗牌袋、跨平台降级与固定网页渠道不改变历史偏好。"""
 
 import random
 
@@ -161,6 +161,14 @@ def test_artist_shortcut_detects_handler_and_allows_manual_override(monkeypatch)
     assert resolve_artist_music_service(settings) == ("qq", True)
     settings.artist_music_service = "apple"
     assert resolve_artist_music_service(settings) == ("apple", False)
+    opened = []
+    fixed = open_chen_artist_page(settings, service="netease", browser_opener=lambda url: opened.append(url) or True)
+    other = open_chen_artist_page(settings, service="qq", browser_opener=lambda url: opened.append(url) or True)
+    system = open_chen_artist_page(settings, service="auto", browser_opener=lambda url: opened.append(url) or True)
+    assert fixed.service == "netease" and not fixed.used_auto_detection
+    assert other.service == "qq" and system.service == "qq" and system.used_auto_detection
+    assert opened == [chen_artist_url("netease"), chen_artist_url("qq"), chen_artist_url("qq")]
+    assert settings.artist_music_service == "apple"
 
 
 def test_artist_shortcut_falls_back_to_netease_for_unknown_player() -> None:

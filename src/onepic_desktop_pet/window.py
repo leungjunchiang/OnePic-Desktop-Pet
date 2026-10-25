@@ -79,6 +79,7 @@ API 令牌由系统凭据库管理，聊天文本不落盘；位置持久化由 
 右键菜单和附属窗口使用宠物所在显示器的 Qt 全局逻辑坐标，不混用物理像素。
 
 陈楚生在线歌单显示三十首固定顺序，并把切歌交给共享音乐线程。
+音乐入口与反馈采用统一渠道名称；网易云网页入口固定，其他网页渠道单独选择。
 """
 
 from __future__ import annotations
@@ -296,6 +297,7 @@ from .login_rewards import (
 )
 from .liumao_worldview import family_music_mode
 from .music import ARTIST_MUSIC_SERVICE_LABELS, open_chen_artist_page as launch_chen_artist_page
+from .music_labels import QQ_RANDOM_LABEL, WEB_CHANNEL_NAMES
 from .resources import resource_path
 from .quiet_mode import detect_quiet_mode
 from .buddy_reminders import BuddyReminderStore, NOTIFICATION_LIFETIME_SECONDS, _parse_time
@@ -1172,7 +1174,7 @@ class PetWindow(QWidget):
         self.quick_panel.chen_artist_requested.connect(self.open_chen_artist_page)
         self.quick_panel.music_requested.connect(self.play_random_song)
         self.quick_panel.music_playlist_requested.connect(self.show_music_playlist)
-        self.quick_panel.artist_music_service_requested.connect(self.set_artist_music_service)
+        self.quick_panel.artist_music_service_requested.connect(self.open_chen_artist_page)
         self.quick_panel.todo_requested.connect(self.show_todo_center)
         self.quick_panel.social_requested.connect(self.open_social_hub)
         self.quick_panel.music_control_requested.connect(self.control_music)
@@ -11593,10 +11595,10 @@ class PetWindow(QWidget):
                 return '请先填写 QQ 音乐程序地址'
 
         if self.music_controller.play_qq_song():
-            self.show_speech('正在后台准备陈楚生歌单…', 2600)
+            self.show_speech('正在通过QQ音乐渠道后台准备陈楚生歌单…', 2600)
         else:
             self.show_speech('上一项音乐操作还在处理中，请稍等一下。', 3200)
-        return '陈楚生随机歌曲'
+        return QQ_RANDOM_LABEL
 
     def show_music_playlist(self):
         """打开保存的三十首歌单，所有按钮使用同一个异步音乐控制器。"""
@@ -11640,20 +11642,20 @@ class PetWindow(QWidget):
 
         return self.open_chen_artist_page()
 
-    def open_chen_artist_page(self) -> str:
-        """按手动选择或 MP3 默认关联，用系统浏览器打开陈楚生主页。"""
+    def open_chen_artist_page(self, service: str = "netease") -> str:
+        """固定入口打开网易云网页，其他渠道显式选择，不改变历史平台偏好。"""
 
-        launch = launch_chen_artist_page(self.settings)
-        label = ARTIST_MUSIC_SERVICE_LABELS.get(launch.service, launch.service)
+        launch = launch_chen_artist_page(self.settings, service=service)
+        label = WEB_CHANNEL_NAMES.get(launch.service, '网页渠道')
         if launch.success:
             suffix = "（自动识别）" if launch.used_auto_detection else ""
-            self.show_speech(f"已打开{label} · 陈楚生{suffix}", 3200)
+            self.show_speech(f"已通过{label}打开陈楚生主页{suffix}", 3200)
         else:
-            self.show_speech("暂时没能打开音乐网页，请确认系统浏览器可用。", 3600)
-        return "听陈楚生"
+            self.show_speech(f"暂时没能打开{label}，请确认系统浏览器可用。", 3600)
+        return f"听陈楚生（{label}）"
 
     def set_artist_music_service(self, service: str) -> None:
-        """Persist the platform used by the browser-based artist shortcut."""
+        """兼容旧调用保存历史网页偏好，不影响固定的网易云网页入口。"""
 
         value = str(service or "auto").strip().casefold()
         if value not in {"auto", "netease", "qq", "apple", "kugou", "qishui"}:
@@ -11662,7 +11664,7 @@ class PetWindow(QWidget):
         save_settings(self.settings)
         self.quick_panel.set_artist_music_service(value)
         self.show_speech(
-            f"听陈楚生已设为{ARTIST_MUSIC_SERVICE_LABELS.get(value, '跟随系统默认')}。",
+            f"已保存网页渠道偏好：{ARTIST_MUSIC_SERVICE_LABELS.get(value, '跟随系统默认')}。网易云入口保持固定。",
             2600,
         )
 
@@ -12294,12 +12296,12 @@ class PetWindow(QWidget):
             "music_status": lambda _checked=False: self.control_music("status"),
             "music_playlist": lambda _checked=False: self.show_music_playlist(),
             "chen_artist": lambda _checked=False: self.open_chen_artist_page(),
-            "artist_music_auto": lambda _checked=False: self.set_artist_music_service("auto"),
-            "artist_music_netease": lambda _checked=False: self.set_artist_music_service("netease"),
-            "artist_music_qq": lambda _checked=False: self.set_artist_music_service("qq"),
-            "artist_music_apple": lambda _checked=False: self.set_artist_music_service("apple"),
-            "artist_music_kugou": lambda _checked=False: self.set_artist_music_service("kugou"),
-            "artist_music_qishui": lambda _checked=False: self.set_artist_music_service("qishui"),
+            "artist_music_auto": lambda _checked=False: self.open_chen_artist_page("auto"),
+            "artist_music_netease": lambda _checked=False: self.open_chen_artist_page("netease"),
+            "artist_music_qq": lambda _checked=False: self.open_chen_artist_page("qq"),
+            "artist_music_apple": lambda _checked=False: self.open_chen_artist_page("apple"),
+            "artist_music_kugou": lambda _checked=False: self.open_chen_artist_page("kugou"),
+            "artist_music_qishui": lambda _checked=False: self.open_chen_artist_page("qishui"),
             "outfit": lambda _checked=False: self.show_outfit_menu(),
             "rename": lambda _checked=False: self.rename_pet(),
             "settings": lambda _checked=False: self.open_settings(SETTINGS_SOURCE_USER_ACTION),

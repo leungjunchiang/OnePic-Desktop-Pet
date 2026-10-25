@@ -14,9 +14,12 @@ Windows 歌曲 ID 临时队列由 QQ 解析当前账号权益并顺序衔接，�
 未确认实际歌曲的结果保留原始原因，不能误报成播放模式失败。
 登录未就绪的请求尚未投递，仅禁用本机续播，不触发失败暂停或恢复 QQ 模式。
 生成完毕先保存三十首，再尝试播放；首次接管或点歌失败不会丢失本机已生成歌单。
+重新随机的引导明确引用 QQ音乐渠道入口，与所有菜单和快捷按钮保持一致。
 """
 
 from __future__ import annotations
+
+from .music_labels import QQ_RANDOM_LABEL
 
 from dataclasses import replace
 import json
@@ -233,7 +236,7 @@ class QQPlaylist:
         if self.player.cancelled():
             return self.failure('音乐操作已取消。')
         if not self.entries:
-            return self.failure('还没有陈楚生歌单，请先点击“随机听陈楚生”。')
+            return self.failure(f'还没有陈楚生歌单，请先点击“{QQ_RANDOM_LABEL}”。')
         if type(target) is not int or not 0 <= target < len(self.entries):
             return self.failure('已经到歌单边界，请重新随机或选择列表中的歌曲。')
         result = self._play_candidate(self.entries[target])
@@ -310,7 +313,7 @@ class QQPlaylist:
         self._start_stopped = False
         if any(not random_song_eligible(song) for song in self.entries):
             self.block_unready_client()
-            return self.failure('旧歌单包含现场版、无版权或尚未确认授权的歌曲；请重新点击“随机听陈楚生”生成新歌单。')
+            return self.failure(f'旧歌单包含现场版、无版权或尚未确认授权的歌曲；请重新点击“{QQ_RANDOM_LABEL}”生成新歌单。')
         if self.queue_mode is not None:
             kwargs['prepare_queue'] = self._prepare_queue_mode
             kwargs['queue_failure_message'] = lambda: self._mode_failure().message

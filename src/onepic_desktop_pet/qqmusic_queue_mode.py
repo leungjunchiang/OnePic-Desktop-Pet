@@ -1,5 +1,7 @@
-"""核对 QQ 模式并保留窗口；启动检查兼容无搜索框播放栏，排除展开窗口内已隐藏的登录节点。"""
+"""核对 QQ 模式并保留窗口；入口提示统一为QQ音乐渠道，兼容无搜索框与隐藏登录节点。"""
 from __future__ import annotations
+
+from .music_labels import QQ_RANDOM_LABEL
 
 from pathlib import Path
 from collections import deque
@@ -13,7 +15,7 @@ MODES = frozenset(('随机播放', '列表循环', '单曲循环', '顺序播放
 SINGLE = '单曲循环'
 NATIVE_MODES = {SINGLE: 1, '顺序播放': 2, '列表循环': 3, '随机播放': 4}
 MODE_SETUP_MESSAGE = ('已找到 QQ 音乐，但没能确认“单曲循环”模式。'
-    '请展开 QQ 音乐，在底部播放栏选择“单曲循环”，再点一次随机听陈楚生。'
+    f'请展开 QQ 音乐，在底部播放栏选择“单曲循环”，再点一次“{QQ_RANDOM_LABEL}”。'
     '已请求暂停，避免原队列插入其他歌曲。')
 
 
@@ -21,7 +23,7 @@ def mode_setup_message(target=SINGLE):
     if target == SINGLE:
         return MODE_SETUP_MESSAGE
     return ('已找到 QQ 音乐，但没能确认临时歌单的“顺序播放”模式。'
-            '请展开 QQ 音乐，在底部播放栏选择“顺序播放”，再点一次随机听陈楚生。'
+            f'请展开 QQ 音乐，在底部播放栏选择“顺序播放”，再点一次“{QQ_RANDOM_LABEL}”。'
             '已请求暂停，六毛歌单已保留。')
 
 

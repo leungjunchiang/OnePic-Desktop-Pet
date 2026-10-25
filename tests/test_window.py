@@ -1,5 +1,5 @@
 """
-验证 QQ 在线音乐与置顶歌单入口；透明窗禁用阴影，累计投影省略报告细节；今日累计框结束本轮不消失。
+验证音乐渠道顺序与置顶歌单入口；透明窗禁用阴影，累计投影省略报告细节；今日累计框结束本轮不消失。
 本模块还验证免打扰首次处理不被在途旧反应覆盖；有效离开截止时间可校准显示，不被普通暂停防回退掩盖。
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
 喂食、离线对话、陪伴动作、工作计时、专注导航、备注提醒和自拍成片；手动监视器用例隔离周期轮询。
@@ -3337,15 +3337,14 @@ def test_context_menu_uses_direct_high_frequency_entries() -> None:
     assert not any("›" in label for label in labels)
     music = next(action for action in menu.actions() if action.text() == "音乐")
     music_labels = [action.text() for action in music.menu().actions() if not action.isSeparator()]
-    assert music_labels == ["查看陈楚生歌单…", "随机听陈楚生（QQ 在线）", "播放 / 暂停", "上一首", "下一首", "查看音乐状态", "听陈楚生…", "音乐平台"]
-    platform_menu = next(action for action in music.menu().actions() if action.text() == "音乐平台")
+    assert music_labels == ["随机听陈楚生（QQ音乐渠道）", "听陈楚生（网易云网页渠道）", "其他网页渠道", "查看陈楚生歌单…", "播放 / 暂停", "上一首", "下一首", "查看音乐状态"]
+    platform_menu = next(action for action in music.menu().actions() if action.text() == "其他网页渠道")
     assert [action.text() for action in platform_menu.menu().actions()] == [
-        "跟随系统默认",
-        "网易云音乐",
-        "QQ 音乐",
-        "Apple Music",
-        "酷狗音乐",
-        "汽水音乐",
+        "QQ音乐网页渠道",
+        "Apple Music网页渠道",
+        "酷狗网页渠道",
+        "汽水网页渠道",
+        "系统默认网页渠道",
     ]
     assert "工作报告…" in labels
     assert "工作记录" not in labels
