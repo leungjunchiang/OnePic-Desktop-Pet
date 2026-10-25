@@ -1,5 +1,6 @@
 """验证模式进程冷启动预算、操作超时、优先取消、阶段诊断及真实 COM 隔离启动。"""
 import json
+from contextlib import nullcontext
 from pathlib import Path
 import subprocess
 import sys
@@ -102,3 +103,19 @@ def test_pre_cancelled_request_never_starts_helper(monkeypatch):
     with pytest.raises(OSError, match='已取消'):
         backend._request('set', '顺序播放')
     assert not processes
+
+
+def test_progress_sharing_violation_never_becomes_a_failed_qq_operation(monkeypatch):
+    import tempfile
+    monkeypatch.setitem(sys.modules, 'uiautomation', SimpleNamespace(
+        UIAutomationInitializerInThread=nullcontext, GetRootControl=lambda: object()))
+    def locked(*_):
+        raise PermissionError('Progress file currently open by the parent')
+    monkeypatch.setattr(Path, 'replace', locked)
+    with tempfile.TemporaryDirectory(prefix='lili-qq-mode-') as directory:
+        result = Path(directory)/'reply.json'
+        assert run_mode_worker(['probe', '', '', str(result)]) == 0
+        reply = json.loads(result.read_text(encoding='utf-8'))
+        assert reply['ok'] and reply['value'] == 'ready'
+        assert reply['progress_write_failures'] >= 4
+        assert reply['stages'][-1]['stage'] == 'complete'

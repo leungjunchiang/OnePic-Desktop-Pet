@@ -154,7 +154,8 @@ class WindowsQQModeBackend:
                     raise OSError('QQ 模式辅助未返回结果。')
                 reply = json.loads(result.read_text(encoding='utf-8'))
                 diagnostics.update(stage=reply.get('failed_stage', 'complete'),
-                                   stages=reply.get('stages', diagnostics['stages']))
+                                   stages=reply.get('stages', diagnostics['stages']),
+                                   progress_write_failures=reply.get('progress_write_failures', 0))
                 if not reply.get('ok'):
                     raise OSError(reply.get('error') or 'QQ 播放模式暂不可用。')
                 diagnostics['status'] = 'ok'

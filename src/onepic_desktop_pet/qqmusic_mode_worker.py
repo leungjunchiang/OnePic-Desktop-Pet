@@ -1,4 +1,4 @@
-"""QQ 隔离工作入口：不加载 Qt/账号，在自有临时目录回传阶段耗时及结果。"""
+"""QQ 隔离工作入口：回传不含账号的耗时；诊断文件读写冲突不能中断播放控制。"""
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -18,15 +18,23 @@ def run_mode_worker(args):
         return 2
     reply = {'ok': False, 'error': 'QQ 模式请求无效。'}
     started, stages, operating = time.monotonic(), [], False
+    progress_write_failures = 0
     def progress(stage):
+        nonlocal progress_write_failures
         stamp = {'stage': stage, 'elapsed_ms': round((time.monotonic() - started) * 1000)}
         if not stages or stages[-1]['stage'] != stage:
             stages.append(stamp)
         # Only fixed phase names and times: no paths, UI labels or account data.
         pending = output.with_name('progress.tmp')
-        pending.write_text(json.dumps({'stage': stage, 'stages': stages[-80:],
-                                      'operating': operating}), encoding='utf-8')
-        pending.replace(output.with_name('progress.json'))
+        try:
+            pending.write_text(json.dumps({'stage': stage, 'stages': stages[-80:],
+                                          'operating': operating}), encoding='utf-8')
+            pending.replace(output.with_name('progress.json'))
+        except OSError:
+            # Windows readers/antivirus can briefly deny replacement. This is
+            # optional telemetry, not a failed QQ command. Final reply retains
+            # all stages after the parent has stopped reading the progress file.
+            progress_write_failures += 1
     try:
         progress('import-uia')
         import uiautomation as auto
@@ -53,6 +61,7 @@ def run_mode_worker(args):
     try:
         progress('complete')
         reply['stages'] = stages[-80:]
+        reply['progress_write_failures'] = progress_write_failures
         with output.open('x', encoding='utf-8') as stream:
             json.dump(reply, stream, ensure_ascii=False)
     except OSError:
