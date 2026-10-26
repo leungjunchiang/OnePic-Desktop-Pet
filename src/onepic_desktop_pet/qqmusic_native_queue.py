@@ -7,6 +7,7 @@
 未运行的 QQ 仅在进程启动时请求后台显示；已有窗口、后续换曲和用户打开窗口均不处理。
 队列命令仅投递已运行客户端；不以带后台或队列参数的进程恢复账号登录。
 资料校验同时要求明确播放或付费授权；会员曲保留，无版权或授权未知不发送。
+补发前独立核对唯一 QQ 主窗口标题仍是旧暂停曲；媒体状态陈旧时不能重启已开始的目标歌。
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ import subprocess
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
-from .qqmusic_online import QQCatalogError, _request_json, candidate_matches
+from .qqmusic_online import QQCatalogError, _request_json, candidate_matches, canonical
 from .qqmusic_startup import require_running_qq
 from .qqmusic_eligibility import playback_rights
 
@@ -29,6 +30,41 @@ class QQNativeQueue:
         self.popen = popen or subprocess.Popen
         self.running_check = running_check or require_running_qq
         self._rows = {}
+
+    def retry_is_safe(self, executable, previous):
+        """只读 QQ 自身标题作独立否决证据；缺失、默认标题、弹窗或多主窗均不重发。"""
+        import ctypes
+        from ctypes import wintypes
+        from .music_background import music_client_mode_windows
+        try:
+            user = ctypes.WinDLL('user32', use_last_error=True)
+            user.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+            user.GetWindow.restype = wintypes.HWND
+            user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+            user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+            user.IsWindowVisible.argtypes = [wintypes.HWND]
+            captions, visible_captions = [], []
+            self.retry_diagnostics = {'windows': [], 'exact_caption_count': 0}
+            for hwnd in music_client_mode_windows(Path(executable)):
+                name = ctypes.create_unicode_buffer(256)
+                if not user.GetClassNameW(hwnd, name, len(name)):
+                    continue
+                title = ctypes.create_unicode_buffer(512)
+                has_caption = bool(user.GetWindowTextW(hwnd, title, len(title)))
+                visible = bool(user.IsWindowVisible(hwnd))
+                exact = has_caption and unchanged_song_caption([title.value.strip()], previous)
+                self.retry_diagnostics['windows'].append({'class': name.value, 'owned': bool(user.GetWindow(hwnd, 4)), 'visible': visible,
+                                                          'has_caption': has_caption, 'exact_caption': exact})
+                self.retry_diagnostics['exact_caption_count'] += bool(exact)
+                if has_caption:
+                    captions.append(title.value.strip())
+                    if visible:
+                        visible_captions.append(title.value.strip())
+            # Mode discovery also includes a hidden main GUI as a tray fallback.
+            # Its generic caption is not a second visible playback window.
+            return unchanged_song_caption(visible_captions or captions, previous)
+        except (OSError, AttributeError, TypeError, ValueError):
+            return False
 
     @staticmethod
     def _validated(song, row):
@@ -100,3 +136,9 @@ class QQNativeQueue:
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
             cwd=str(executable.parent))
+
+
+def unchanged_song_caption(captions, previous):
+    """只有唯一明确的同歌同歌手标题支持补发，不用通用“QQ音乐”标题证明未起播。"""
+    return (len(captions) == 1 and bool(previous.title) and bool(previous.artist)
+            and canonical(captions[0]) == canonical(previous.title + ' - ' + previous.artist))

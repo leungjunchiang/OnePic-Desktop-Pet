@@ -17,6 +17,7 @@ Windows 歌曲 ID 临时队列由 QQ 解析当前账号权益并顺序衔接，�
 重新随机的引导明确引用 QQ音乐渠道入口，与所有菜单和快捷按钮保持一致。
 原生队列任何暂停立即撤销续播；只有真实曲末停止才能换轮，卡住时限时提示而不擅自重播。
 原生投递前已确认顺序模式，歌曲匹配后复用本次准备结果，不重复启动模式检测进程。
+原生队列若旧暂停曲两秒内完全未变化，且 QQ 自身标题相符，允许重发一次；目标出现或用户改变即禁止。
 """
 
 from __future__ import annotations
@@ -330,6 +331,8 @@ class QQPlaylist:
                     raise OSError(self._mode_failure().message)
                 self.native_queue.dispatch(client, self.entries, self.entries.index(candidate))
             kwargs['dispatch_candidate'] = dispatch
+            kwargs['retry_unacknowledged'] = True
+            kwargs['retry_guard'] = getattr(self.native_queue, 'retry_is_safe', None)
             if self.queue_mode is not None:
                 kwargs['prepare_queue'] = lambda: (self.queue_mode.isolated and not self.player.cancelled())
         result = self.player.play_candidate(selected, **kwargs)

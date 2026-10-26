@@ -1,7 +1,8 @@
 """后台投递 QQ 在线歌曲并核对平台公开的真实元数据；暂停取消优先于后续确认。
 
 仅传递歌曲元数据与客户端命令，不下载音频。目录属于可变化的客户端接口；错误、
-登录和会员限制交给客户端处理。命令只投递一次；元数据匹配不等于精确 ID 或完整
+登录和会员限制交给客户端处理。默认只投递一次；Windows 队列仅在旧暂停曲完全未变化时允许一次重试。
+目标已出现、媒体缺失、用户改变状态、独立客户端证据不符或取消均禁止重试；元数据匹配不等于精确 ID 或完整
 播放权限已获确认。所有阻塞操作由既有 MusicCommandThread 调用；分页收集歌单，切歌复用候选元数据。
 已有 QQ 窗口不处理；仅本次成功冷启动且无用户新输入时收起一次，不在轮询或曲终反复隐藏。
 陈楚生随机歌单优先分页读取公开歌手目录，缓存完整版本元数据，不依赖本机诊断脚本。
@@ -377,7 +378,7 @@ class QQMusicOnlinePlayer:
 
     def play_candidate(self, selected: SongCandidate, *, title: str = '',
                        artist: str = '陈楚生', prepare_queue=None, dispatch_candidate=None,
-                       queue_failure_message=None) -> SongPlaybackResult:
+                       queue_failure_message=None, retry_unacknowledged=False, retry_guard=None) -> SongPlaybackResult:
         """投递、核对确定歌曲及播放模式，保持用户现有窗口状态。"""
 
         def failed(message, code):
@@ -390,6 +391,13 @@ class QQMusicOnlinePlayer:
             return failed('未找到 QQ 音乐，请在设置中选择 QQ 音乐客户端。',
                           MusicPlaybackError.PLAY_ACTION_FAILED)
         window_ticket = self.window_policy.begin(client)
+        baseline, baseline_track, attempts = None, None, 0
+        def fingerprint(track):
+            if track is None:
+                return None
+            raw = getattr(track, 'raw_position_ms', None)
+            return (track.title, track.artist, track.album, str(track.playback_status).casefold(),
+                    raw if raw is not None else track.position_ms, track.duration_ms)
         try:
             if self.client_preparer is not None:
                 client = self.client_preparer(client)
@@ -397,17 +405,29 @@ class QQMusicOnlinePlayer:
             if self.cancelled():
                 raise QQClientNotReady('音乐操作已取消，未请求播放。')
             candidate_dispatcher = dispatch_candidate or self.candidate_dispatcher
+            if retry_unacknowledged and candidate_dispatcher is not None:
+                try:
+                    before = self.track_reader()
+                    if (before and before.title and str(before.playback_status).casefold() in {'paused', 'stopped'}
+                            and not candidate_matches(selected, before)):
+                        baseline = fingerprint(before)
+                        baseline_track = before
+                except Exception:
+                    pass
             if candidate_dispatcher is not None:
                 candidate_dispatcher(client, selected)
             else:
                 self.dispatcher(client, selected.identifier)
+            attempts = 1
         except QQClientNotReady as exc:
             return failed(str(exc), MusicPlaybackError.CLIENT_NOT_READY)
         except (OSError, ValueError, ImportError, AttributeError) as exc:
             return failed(f'QQ 音乐歌曲投递失败：{exc}', MusicPlaybackError.PLAY_ACTION_FAILED)
-        deadline = self.clock() + self.verify_timeout
+        dispatched_at = self.clock()
+        deadline = dispatched_at + self.verify_timeout
         latest = None
         last_observed = None
+        unchanged_samples = 0
         while True:
             if self.cancelled():
                 break
@@ -433,10 +453,38 @@ class QQMusicOnlinePlayer:
                     True, 'qq', title, artist,
                     f'QQ 音乐正在播放：{latest.artist}《{latest.title}》，六毛陪你一起听♪',
                     selected=selected, current_title=latest.title, current_artist=latest.artist,
-                    play_attempts=1, outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
+                    play_attempts=attempts, outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
             remaining = deadline - self.clock()
             if remaining <= 0:
                 break
+            if baseline is not None:
+                if fingerprint(latest) != baseline:
+                    baseline = None
+                else:
+                    unchanged_samples += 1
+                    if unchanged_samples >= 2 and self.clock() - dispatched_at >= 2:
+                        # A frozen paused session alone can be stale. Require
+                        # independent client evidence that the old song remains.
+                        # Never resend after a target/Changing state or a new
+                        # pause, seek, song, missing session or cancellation.
+                        baseline = None
+                        if self.cancelled():
+                            break
+                        try:
+                            safe = callable(retry_guard) and retry_guard(client, baseline_track)
+                        except Exception:
+                            safe = False
+                        if not safe or self.cancelled():
+                            continue
+                        try:
+                            candidate_dispatcher(client, selected)
+                            attempts += 1
+                        except QQClientNotReady as exc:
+                            return failed(str(exc), MusicPlaybackError.CLIENT_NOT_READY)
+                        except (OSError, ValueError, ImportError, AttributeError) as exc:
+                            return failed(f'QQ 未接收首次歌单，单次重试失败：{exc}', MusicPlaybackError.PLAY_ACTION_FAILED)
+                        LOGGER.info('QQ unacknowledged queue retried once: song_id=%s', selected.identifier)
+                        continue
             self.sleep(min(self.poll_interval, remaining))
         if self.cancelled():
             return failed('音乐操作已取消，正在执行暂停。', MusicPlaybackError.PLAY_ACTION_FAILED)
@@ -446,18 +494,22 @@ class QQMusicOnlinePlayer:
             detail = ''
         observed = ({key: getattr(last_observed, key, '') for key in
                      ('title', 'artist', 'album', 'playback_status')} if last_observed is not None else None)
-        LOGGER.warning('QQ playback unverified: selected=%s observed=%s',
+        LOGGER.warning('QQ playback unverified: selected=%s observed=%s attempts=%s',
             {'id': selected.identifier, 'title': selected.title, 'artist': selected.artist,
-             'album': (selected.native or {}).get('album', '')}, observed)
+             'album': (selected.native or {}).get('album', '')}, observed, attempts)
         if last_observed is None:
             status_detail = '未读取到 QQ 媒体信息；这不表示账号未登录。'
         elif str(last_observed.playback_status).casefold() == 'playing':
             status_detail = f'QQ 媒体显示正在播放《{last_observed.title}》，但与所选版本信息不一致。'
+        elif last_observed.title and not candidate_matches(selected, last_observed):
+            state = {'paused': '已暂停', 'stopped': '已停止', 'changing': '正在切换'}.get(
+                str(last_observed.playback_status).casefold(), '状态未就绪')
+            status_detail = f'QQ 仍停在《{last_observed.title}》（{state}），本次歌曲未开始播放。'
         else:
             status_detail = 'QQ 媒体尚未处于可确认的播放状态，请查看客户端当前歌曲。'
         return SongPlaybackResult(
             True, 'qq', title, artist,
             f'已向 QQ 音乐请求《{selected.title}》，尚未读到匹配的播放状态。'
             + status_detail + '可说“查看音乐状态”。' + (f' 原因：{detail}' if detail else ''),
-            selected=selected, play_attempts=1,
+            selected=selected, play_attempts=attempts,
             outcome=MusicPlaybackOutcome.PLAYBACK_STARTED_UNVERIFIED)

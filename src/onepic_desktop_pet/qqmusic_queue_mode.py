@@ -1,4 +1,4 @@
-"""核对 QQ 模式并保留窗口；记录阶段耗时及匿名控件计数，排查不必要的就绪等待。"""
+"""以真实读回适配 QQ 各种原模式；动作旧节点报错不覆盖已生效状态，尊重用户新选择。"""
 from __future__ import annotations
 
 from .music_labels import QQ_RANDOM_LABEL
@@ -25,8 +25,8 @@ MODE_SETUP_MESSAGE = ('已找到 QQ 音乐，但没能确认“单曲循环”�
 def mode_setup_message(target=SINGLE):
     if target == SINGLE:
         return MODE_SETUP_MESSAGE
-    return ('已找到 QQ 音乐，但没能确认临时歌单的“顺序播放”模式。'
-            f'请展开 QQ 音乐，在底部播放栏选择“顺序播放”，再点一次“{QQ_RANDOM_LABEL}”。'
+    return ('已找到 QQ 音乐，但自动适配临时歌单的“顺序播放”模式未获确认。'
+            f'可直接重试“{QQ_RANDOM_LABEL}”；若仍失败，请在 QQ 底部播放栏检查当前模式。'
             '已请求暂停，六毛歌单已保留。')
 
 
@@ -76,10 +76,16 @@ class QQQueueMode:
             current = self.backend.read()
             if current not in MODES:
                 raise OSError('QQ 未公开明确的播放模式。')
-            if self.original is None:
+            if self.original is None or current != self.target:
                 self.original = current
-            if current != self.target and not self.backend.set(self.target):
-                raise OSError('QQ 未接受' + self.target + '模式。')
+            if current != self.target:
+                try:
+                    self.backend.set(self.target)
+                except Exception:
+                    # QQ may rebuild the old UIA node after applying the mode.
+                    # A fresh read, rather than an action's boolean/exception,
+                    # is the authority for both success and refusal.
+                    pass
             self.isolated = not self.cancelled() and (current == self.target or self.backend.read() == self.target)
             if not self.isolated:
                 raise OSError('未确认 QQ ' + self.target + '模式。')
@@ -87,7 +93,8 @@ class QQQueueMode:
             return True
         except Exception as exc:
             self.last_error = str(exc)
-            self.release(force=True)
+            if not self.cancelled():
+                self.release()
             return False
 
     def release(self, *, force=False):
@@ -100,7 +107,11 @@ class QQQueueMode:
             # they selected after we acquired the client.
             current = self.backend.read()
             if (current == self.target or force) and original != current:
-                if not self.backend.set(original) or self.backend.read() != original:
+                try:
+                    self.backend.set(original)
+                except Exception:
+                    pass
+                if self.backend.read() != original:
                     return False
             self.original = None
             return True
