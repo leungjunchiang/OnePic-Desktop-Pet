@@ -1,4 +1,4 @@
-"""回归学习与在线分层、心跳证明过期、在途退出下线、北京日期和搭子交互。
+"""回归密码重置限流、学习在线分层、心跳证明过期、在途退出和搭子交互。
 
 验证自习室导航、备注身份、搭子卡与榜单统计一致、直接互动及 Presence 安全退出。"""
 
@@ -1494,6 +1494,76 @@ def test_signup_thread_forwards_social_error() -> None:
     assert thread._password == ""
     thread.deleteLater()
     app.processEvents()
+
+
+def test_password_recovery_rate_limit_preserves_existing_code_and_cooldown(monkeypatch) -> None:
+    """限流不应禁用已经收到的有效验证码，也不应允许连续刷发送。"""
+    import onepic_desktop_pet.social_ui as module
+    app = QApplication.instance() or QApplication([])
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, 'monotonic', lambda: clock[0])
+    dialog = module.PasswordResetDialog(object(), email='person@example.com')
+    try:
+        dialog._code_sent()
+        assert dialog.verify_button.isEnabled()
+        assert not dialog.send_button.isEnabled()
+        clock[0] += 61
+        dialog._tick()
+        assert dialog.send_button.isEnabled()
+        dialog.verify_button.setEnabled(False)
+        dialog._code_failed(SocialError('rate limit exceeded', status=429,
+                                        error_code='over_request_rate_limit'))
+        assert dialog.verify_button.isEnabled()
+        assert not dialog.send_button.isEnabled()
+        assert '请求' in dialog.status_label.text()
+        clock[0] += 61
+        dialog._tick()
+        assert dialog.send_button.isEnabled()
+    finally:
+        dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_password_recovery_first_rate_limit_avoids_duplicate_request(monkeypatch) -> None:
+    """首次发送被限制时等待重试，不伪称已有验证码或触发额外邮件。"""
+    import onepic_desktop_pet.social_ui as module
+    app = QApplication.instance() or QApplication([])
+    clock = [500.0]
+    monkeypatch.setattr(module.time, 'monotonic', lambda: clock[0])
+    class Client:
+        def request_password_reset(self, _email):
+            raise AssertionError('cooldown must not send a request')
+    dialog = module.PasswordResetDialog(Client(), email='person@example.com')
+    try:
+        dialog._code_failed(SocialError('email rate limit exceeded', status=429,
+                                        error_code='over_email_send_rate_limit'))
+        assert not dialog.verify_button.isEnabled()
+        assert not dialog.send_button.isEnabled()
+        dialog._send_code()
+        assert not dialog.send_button.isEnabled()
+        clock[0] += 61
+        dialog._tick()
+        assert dialog.send_button.isEnabled()
+        assert not dialog.verify_button.isEnabled()
+    finally:
+        dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_password_recovery_does_not_use_a_code_for_another_email() -> None:
+    """已收到验证码后更改邮箱，必须重新请求，不调用验证码接口。"""
+    import onepic_desktop_pet.social_ui as module
+    app = QApplication.instance() or QApplication([])
+    dialog = module.PasswordResetDialog(object(), email='person@example.com')
+    try:
+        dialog._code_sent()
+        dialog.email_edit.setText('other@example.com')
+        dialog.otp_edit.setText('123456')
+        dialog.new_password.setText('example-pass')
+        dialog.confirm_password.setText('example-pass')
+        dialog._verify_and_reset()
+        assert '接收验证码的邮箱' in dialog.status_label.text()
+        assert dialog._verify_thread is None
+    finally:
+        dialog.close(); dialog.deleteLater(); app.processEvents()
 
 
 def test_incoming_visit_response_thread_calls_visit_rpc() -> None:

@@ -1,4 +1,4 @@
-"""验证互动接收权限的增量保存、北京时间周缓存隔离，以及 Supabase 优先与代理路由。"""
+"""验证认证限流提示、互动权限增量保存及 Supabase 路由和周缓存隔离。"""
 
 import json
 import io
@@ -2917,3 +2917,15 @@ def test_signup_timeout_message_warns_against_duplicate_registration():
 
     assert "不要重复注册" in message
     assert "重新发送确认邮件" in message
+
+
+def test_auth_rate_limit_messages_distinguish_email_from_other_requests():
+    """不能把验证码验证或未知 429 一律说成确认邮件额度耗尽。"""
+    email = social_user_message(SocialError('email rate limit exceeded', status=429,
+                                           error_code='over_email_send_rate_limit'))
+    requests = social_user_message(SocialError('rate limit exceeded', status=429,
+                                              error_code='over_request_rate_limit'))
+    unknown = social_user_message(SocialError('too many requests', status=429))
+    assert '邮件' in email and '发送' in email
+    assert '请求' in requests and '邮件发送次数' not in requests
+    assert '请求' in unknown and '邮件发送次数' not in unknown

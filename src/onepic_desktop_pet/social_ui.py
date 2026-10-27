@@ -1,4 +1,4 @@
-"""重发心跳时按真实经过时间更新输入证明；搭子卡片后台刷新不创建临时独立窗口。
+"""密码恢复限流后保护有效验证码；重发心跳时按实际经过时间更新输入证明。
 
 进程在线独立于学习状态；非学习显示休息，退出按顺序发送最终离线状态。
 
@@ -2203,6 +2203,8 @@ class PasswordResetDialog(QDialog):
         self._request_thread: SocialPasswordResetThread | None = None
         self._verify_thread: SocialPasswordOtpResetThread | None = None
         self._remaining_seconds = 0
+        self._sent_email = ""
+        self._resend_after = 0.0
         self.setWindowTitle("邮箱验证码重置密码 - Lili")
         self.setModal(True)
         self.resize(470, 430)
@@ -2249,6 +2251,8 @@ class PasswordResetDialog(QDialog):
         email = self.email_edit.text().strip()
         if not email or "@" not in email:
             self._show_status("请输入有效的注册邮箱。", error=True); return
+        if time.monotonic() < self._resend_after:
+            self._show_status("发送请求间隔过短，请等待倒计时结束；如果已收到验证码，可以直接填写。", error=True); return
         if self._request_thread is not None and self._request_thread.isRunning():
             return
         self.email = email
@@ -2262,33 +2266,53 @@ class PasswordResetDialog(QDialog):
         thread.start()
 
     def _code_sent(self) -> None:
+        self._sent_email = normalize_email(self.email)
         self._remaining_seconds = 600
+        self._resend_after = time.monotonic() + 60
         self._countdown_timer.start()
+        self._sync_send_button()
         self.verify_button.setEnabled(True)
         self._show_status("如果该邮箱已注册，验证码已发送；请检查收件箱和垃圾邮件。")
 
     def _code_failed(self, error: object) -> None:
         exc = error if isinstance(error, Exception) else SocialError(str(error), kind="network")
+        if getattr(exc, "status", None) == 429 or str(getattr(exc, "error_code", "")).casefold() in {"over_request_rate_limit", "over_email_send_rate_limit"}:
+            self._resend_after = time.monotonic() + 60
+            self._countdown_timer.start()
+        if self._remaining_seconds > 0 and self._sent_email == normalize_email(self.email):
+            self.verify_button.setEnabled(True)
+        self._sync_send_button()
         self._show_status(social_user_message(exc), error=True)
+
+    def _sync_send_button(self) -> None:
+        remaining = max(0, int(self._resend_after - time.monotonic() + 0.999))
+        busy = any(thread is not None and thread.isRunning() for thread in (self._request_thread, self._verify_thread))
+        self.send_button.setEnabled(not busy and remaining == 0)
+        self.send_button.setText(f"重新发送（{remaining}秒）" if remaining else "发送验证码")
 
     def _request_finished(self, thread: SocialPasswordResetThread) -> None:
         if self._request_thread is thread:
             self._request_thread = None
-        self.send_button.setEnabled(True); thread.deleteLater()
+        self._sync_send_button(); thread.deleteLater()
 
     def _tick(self) -> None:
         self._remaining_seconds = max(0, self._remaining_seconds - 1)
         minutes, seconds = divmod(self._remaining_seconds, 60)
         if self._remaining_seconds:
             self.countdown.setText(f"验证码剩余有效时间：{minutes:02d}:{seconds:02d}")
-        else:
-            self._countdown_timer.stop(); self.verify_button.setEnabled(False); self.countdown.setText("验证码已过期，请重新发送。")
+        elif self._sent_email:
+            self.verify_button.setEnabled(False); self.countdown.setText("验证码已过期，请重新发送。")
+        self._sync_send_button()
+        if not self._remaining_seconds and time.monotonic() >= self._resend_after:
+            self._countdown_timer.stop()
 
     def _verify_and_reset(self) -> None:
         email = self.email_edit.text().strip(); otp = self.otp_edit.text().strip()
         new = self.new_password.text(); confirm = self.confirm_password.text()
         if self._remaining_seconds <= 0:
             self._show_status("验证码已过期，请重新发送。", error=True); return
+        if normalize_email(email) != self._sent_email:
+            self._show_status("请使用接收验证码的邮箱；更换邮箱后请重新发送验证码。", error=True); return
         if not otp.isdigit() or len(otp) != 6:
             self._show_status("请输入邮件中的 6 位数字验证码。", error=True); return
         if len(new) < 8:
@@ -2319,7 +2343,7 @@ class PasswordResetDialog(QDialog):
     def _verify_finished(self, thread: SocialPasswordOtpResetThread) -> None:
         if self._verify_thread is thread:
             self._verify_thread = None
-        self.send_button.setEnabled(True); thread.deleteLater()
+        self._sync_send_button(); thread.deleteLater()
 
 
 class SocialDeleteAccountThread(QThread):

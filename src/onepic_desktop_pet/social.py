@@ -1,4 +1,4 @@
-"""互动接收字段支持省略；未主动修改时不覆盖服务端或其他设备的选择。
+"""认证限流提示区分邮件发送与一般请求；互动字段省略时不覆盖服务端选择。
 
 排行榜缓存按账号及北京时间周起点隔离，周一不沿用上一周数据。
 
@@ -784,8 +784,10 @@ def social_user_message(error: BaseException) -> str:
         return "新密码不能和当前密码相同，请换一个密码。"
     if code == "email_not_confirmed" or "email not confirmed" in lowered:
         return "这个邮箱还没有完成确认，请先打开确认邮件中的链接，再回到六毛登录。"
-    if "rate limit" in lowered or "too many requests" in lowered or getattr(error, "status", None) == 429:
-        return "确认邮件发送次数已达到服务限额，请稍后再试；生产环境建议为 Supabase Auth 配置自定义 SMTP。"
+    if code == "over_email_send_rate_limit" or "email rate limit" in lowered:
+        return "邮件发送触发了服务频率限制，请稍后再试；如果已经收到验证码，无需重复发送。"
+    if code == "over_request_rate_limit" or "rate limit" in lowered or "too many requests" in lowered or getattr(error, "status", None) == 429:
+        return "账号服务请求过于频繁，请稍等几分钟后重试；如果已经收到验证码，无需重复发送。"
     if "lili_buddy_pair_unique" in lowered or "duplicate key" in lowered:
         return "这位搭子已经存在或申请已处理，无需重复添加；请刷新互动页查看当前状态。"
     if "已经是你的搭子" in raw or "already buddies" in lowered:
