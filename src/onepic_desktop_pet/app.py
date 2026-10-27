@@ -1,5 +1,5 @@
 """
-系统更新重启走独立的本地落盘、限时退出路径；普通退出等待音频与 TLS 完整清理。
+程序更新说明第三方备用线路及校验；系统更新重启走独立本地落盘与限时退出路径。
 源码启动器可标注 QQ 在线开发版的窗口和托盘，帮助区分仍在运行的已安装版本。
 
 本模块（区分关闭窗口与真正退出应用）管理 Lili 应用生命周期、精简系统托盘菜单和退出时的位置保存。
@@ -882,7 +882,8 @@ class DesktopPetApplication(QObject):
             f"发现新版本 Lili {release.version}\n"
             f"当前版本：{result.current_version}\n"
             f"更新大小：约 {size_mb} MB{notes_text}\n\n"
-            "下载后会校验安装包，再启动更新。是否现在更新？",
+            "官方下载缓慢或中断时，会尝试第三方加速服务；该服务可看到下载请求和 IP。\n"
+            "下载后会按 GitHub 官方 SHA-256 校验安装包，再启动更新。是否现在更新？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
