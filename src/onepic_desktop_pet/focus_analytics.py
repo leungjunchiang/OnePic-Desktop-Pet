@@ -1,4 +1,4 @@
-"""计时只投影日历累计；迟到的停止桥接只读校准，不改写任何已封存区间。
+"""计时只投影日历累计；隔离冲突聚合与迟到桥接，不改写已封存区间。
 
 Local focus continuity, quality and lightweight review data.
 
@@ -559,6 +559,8 @@ class FocusAnalyticsStore:
         if not isinstance(projection, dict):
             return None
         moment = _as_beijing(at or self._now())
+        if self._quarantined_effective_date() == moment.date().isoformat():
+            return None
         current_week = (
             moment.date() - timedelta(days=moment.date().weekday())
         ).isoformat()
@@ -571,6 +573,36 @@ class FocusAnalyticsStore:
             "today_seconds": max(0, int(projection.get("today_seconds") or 0)),
             "week_seconds": max(0, int(projection.get("week_seconds") or 0)),
         }
+
+    def _quarantined_effective_date(self) -> str:
+        state = self._state.get("account_state")
+        return str(state.get("focus_display_quarantined_date") or "") if isinstance(state, dict) else ""
+
+    def _set_quarantined_effective_date(self, day: str) -> None:
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            self._state["account_state"] = state
+        if self._quarantined_effective_date() == day:
+            return
+        if day:
+            state["focus_display_quarantined_date"] = day
+        else:
+            state.pop("focus_display_quarantined_date", None)
+        self._save()
+
+    def reconcile_remote_effective_projection(self, trusted_today_seconds: int, at: datetime) -> bool:
+        """已隔离的服务器聚合与可信区间重新一致时恢复使用。"""
+        moment = _as_beijing(at)
+        projection = self._remote_effective_projection
+        if (self._quarantined_effective_date() != moment.date().isoformat()
+                or not isinstance(projection, dict)
+                or projection.get("focus_date") != moment.date().isoformat()):
+            return False
+        if int(projection.get("today_seconds") or 0) > max(0, int(trusted_today_seconds)) + 120:
+            return False
+        self._set_quarantined_effective_date("")
+        return True
 
     def merge_remote_history(self, payload: Any) -> bool:
         """Merge explicit server legacy evidence without creating intervals.
@@ -1967,8 +1999,14 @@ class FocusAnalyticsStore:
                 if not normalized.segment_id or not normalized.session_id:
                     continue
                 candidate.append(normalized)
-        candidate = _bound_delayed_stopped_live_rows(
+        bounded = _bound_delayed_stopped_live_rows(
             candidate, self._state.get('records', []), _as_beijing(self._now()))
+        if bounded != candidate:
+            # The server effective totals may include the very same delayed
+            # bridge. Keep those scalars out of all display surfaces until a
+            # later independently computed interval union agrees with them.
+            self._set_quarantined_effective_date(_as_beijing(self._now()).date().isoformat())
+        candidate = bounded
         changed = candidate != previous_live
         if changed:
             self._live_projection_segments = candidate

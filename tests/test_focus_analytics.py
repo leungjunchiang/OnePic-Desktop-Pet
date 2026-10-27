@@ -1,4 +1,4 @@
-"""验证专注区间的账号合并、可信显示及异常跨夜临时状态处理。"""
+"""验证专注区间的账号合并、异常汇总隔离、跨夜处理和重启恢复。"""
 from __future__ import annotations
 
 import json
@@ -326,6 +326,57 @@ def test_stopped_bridge_without_matching_fact_and_short_upload_gap_remain_visibl
     active = FocusSegment('active', 's', start, None, 'a')
     store.set_live_projection_segments([recent, other, active])
     assert store.live_projection_segments() == [recent, other, active]
+
+
+def test_bad_bridge_quarantines_server_floor_until_account_data_agrees(tmp_path) -> None:
+    """隔离持续到独立区间与服务器汇总一致，期间不改历史和其他账号。"""
+    from onepic_desktop_pet.focus_segments import FocusSegment
+    now = datetime(2026, 10, 27, 9, 9, tzinfo=timezone(timedelta(hours=8)))
+    start = datetime(2026, 10, 27, 0, 14, 59, tzinfo=now.tzinfo)
+    store = AccountFocusStore(path=tmp_path/'focus.json', now_provider=lambda: now, persist=False)
+    store.record_session(343, started_at=start, session_id='s', device_id='other', record_id='sealed')
+    week = (now.date() - timedelta(days=now.weekday())).isoformat()
+    store.set_remote_effective_projection(focus_date=now.date().isoformat(), today_seconds=30000,
+        week_start=week, week_seconds=40000)
+    store.set_live_projection_segments([FocusSegment('live', 's', start, now, 'other')])
+    assert store.remote_effective_projection(now) is None
+    assert not store.reconcile_remote_effective_projection(343, now)
+    # An offline fact can legitimately bring the interval union back up.
+    assert store.reconcile_remote_effective_projection(30000, now)
+    assert store.remote_effective_projection(now)['today_seconds'] == 30000
+    store.set_live_projection_segments([FocusSegment('live', 's', start, now, 'other')])
+    assert store.remote_effective_projection(now) is None
+    store.set_remote_effective_projection(focus_date=now.date().isoformat(), today_seconds=343,
+        week_start=week, week_seconds=10343)
+    assert store.reconcile_remote_effective_projection(343, now)
+    assert store.remote_effective_projection(now)['week_seconds'] == 10343
+    assert store._state['records'][0]['seconds'] == 343
+
+
+def test_quarantine_survives_restart_but_is_account_and_day_scoped(tmp_path) -> None:
+    """重启不恢复异常汇总；另一账号及次日不沿用隔离状态。"""
+    from onepic_desktop_pet.focus_segments import FocusSegment
+    now = datetime(2026, 10, 27, 9, tzinfo=timezone(timedelta(hours=8)))
+    start = now - timedelta(hours=8)
+    path = tmp_path/'account-a'/'focus.json'
+    store = AccountFocusStore(path=path, now_provider=lambda: now, persist=True)
+    store.record_session(300, started_at=start, session_id='s', device_id='d', record_id='sealed')
+    store.set_live_projection_segments([FocusSegment('live', 's', start, now, 'd')])
+    restarted = AccountFocusStore(path=path, now_provider=lambda: now, persist=True)
+    week = (now.date() - timedelta(days=now.weekday())).isoformat()
+    restarted.set_remote_effective_projection(focus_date=now.date().isoformat(), today_seconds=28000,
+        week_start=week, week_seconds=28000)
+    assert restarted.remote_effective_projection(now) is None
+    other = AccountFocusStore(path=tmp_path/'account-b'/'focus.json', now_provider=lambda: now, persist=True)
+    other.set_remote_effective_projection(focus_date=now.date().isoformat(), today_seconds=28000,
+        week_start=week, week_seconds=28000)
+    assert other.remote_effective_projection(now)['today_seconds'] == 28000
+    tomorrow = now + timedelta(days=1)
+    assert restarted._quarantined_effective_date() != tomorrow.date().isoformat()
+    restarted.set_remote_effective_projection(focus_date=now.date().isoformat(), today_seconds=300,
+        week_start=week, week_seconds=300)
+    assert restarted.reconcile_remote_effective_projection(300, now)
+    assert AccountFocusStore(path=path, now_provider=lambda: now, persist=True)._quarantined_effective_date() == ''
 
 
 def test_period_summary_exposes_hourly_distribution_and_trust_state(tmp_path) -> None:

@@ -4,7 +4,7 @@
 
 闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
 
-今日累计胶囊只跟随设置和六毛可见状态，不受消息免打扰拦截；可信跨设备修正可撤销错误高值。
+今日累计胶囊只跟随设置和六毛可见状态；隔离冲突汇总，可信跨设备修正可撤销错误高值。
 训导牌在累计框关闭时重新锚定六毛下方。
 
 系统重启仅本地封口专注，不等待网络、不触发托盘隐藏；纪律小牌与计时胶囊对齐。
@@ -6741,6 +6741,8 @@ class PetWindow(QWidget):
             return False
 
         candidate_seconds = max(0, min(24 * 60 * 60, int(union_seconds)))
+        if has_remote_payload and live_payload_valid:
+            self.focus_analytics.reconcile_remote_effective_projection(candidate_seconds, moment)
         # The dashboard may already have a validated account-wide effective
         # floor even when this refresh carries no segment rows. Keep the
         # display projection monotonic with that read-only value; it is not

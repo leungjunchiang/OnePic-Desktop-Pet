@@ -1,6 +1,6 @@
 """
 验证音乐渠道顺序与置顶歌单入口；透明窗禁用阴影，累计投影省略报告细节；今日累计框结束本轮不消失。
-本模块还验证免打扰首次处理不被在途旧反应覆盖；有效离开截止时间可校准显示，不被普通暂停防回退掩盖。
+本模块还验证异常服务器汇总隔离、免打扰首次处理不被在途旧反应覆盖；有效离开截止时间可校准显示。
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
 喂食、离线对话、陪伴动作、工作计时、专注导航、备注提醒和自拍成片；手动监视器用例隔离周期轮询。
 
@@ -438,6 +438,44 @@ def test_delayed_stopped_bridge_never_inflates_desktop_or_account_projection(mon
         window._update_work_duration_bubble(snapshot, display_seconds=1242)
         assert '20:42' in window.work_duration_bubble.text()
         assert window.focus_analytics._state['records'] == records
+    finally:
+        window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_stale_server_floor_cannot_undo_confirmed_stopped_bridge_correction(monkeypatch):
+    """服务器聚合包含同一条异常桥接时，不能覆盖已核实的区间纠正。"""
+    app, window = _create_window()
+    moment = datetime(2026, 10, 27, 9, 8, tzinfo=timezone(timedelta(hours=8)))
+    account = 'account-1'
+    snapshot = SimpleNamespace(status='rest', today_seconds=1242, session_started_at=None,
+                               current_continuous_seconds=0)
+    monkeypatch.setattr(window, '_current_social_user_id', lambda: account)
+    monkeypatch.setattr(window.focus_analytics, 'current_time', lambda: moment)
+    monkeypatch.setattr(window.focus_analytics, '_now', lambda: moment)
+    window._active_focus_account_id = account
+    window.focus_analytics._device_id = 'local'
+    window.focus_analytics._state['records'] = [{
+        'date': '2026-10-27', 'started_at': '2026-10-27T00:00:00+08:00',
+        'seconds': 1242, 'record_id': 'sealed', 'session_id': 'old-session', 'device_id': 'other',
+    }]
+    week = (moment.date() - timedelta(days=moment.weekday())).isoformat()
+    window.focus_analytics.set_remote_effective_projection(focus_date=moment.date().isoformat(),
+        today_seconds=32814, week_start=week, week_seconds=32814)
+    window._cross_device_today_display_account_id = account
+    window._cross_device_today_display_date = moment.date().isoformat()
+    window._cross_device_today_display_seconds = 32814
+    window._smooth_work_duration_display.project(32814, active=False, identity=f'{account}:2026-10-27')
+    try:
+        payload = {'_focus_segments': {'segments': [], 'full_sync': False},
+            '_focus_live_projection': {'devices': [{'device_id':'other', 'session_id':'old-session',
+                'working':False, 'start_at':'2026-10-27T00:00:00+08:00', 'end_at':moment.isoformat()}]}}
+        assert window._refresh_cross_device_today_display(payload, snapshot=snapshot, source='remote_focus_segments')
+        assert window._account_today_display_seconds(snapshot) == 1242
+        assert window._shared_today_focus_seconds() == 1242
+        # Repeated cached projection and a later clean snapshot must not revive the same bad scalar.
+        assert window._refresh_cross_device_today_display({'_focus_live_projection': {'devices': []}},
+            snapshot=snapshot, source='corrected')
+        assert window._account_today_display_seconds(snapshot) == 1242
     finally:
         window.close(); window.deleteLater(); app.processEvents()
 
