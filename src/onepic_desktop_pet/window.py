@@ -4,7 +4,8 @@
 
 闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
 
-今日累计胶囊只跟随设置和六毛可见状态，不受消息免打扰拦截；训导牌在累计框关闭时重新锚定六毛下方。
+今日累计胶囊只跟随设置和六毛可见状态，不受消息免打扰拦截；可信跨设备修正可撤销错误高值。
+训导牌在累计框关闭时重新锚定六毛下方。
 
 系统重启仅本地封口专注，不等待网络、不触发托盘隐藏；纪律小牌与计时胶囊对齐。
 
@@ -6466,6 +6467,10 @@ class PetWindow(QWidget):
         presence = data.get("me_presence")
         if not isinstance(presence, dict):
             return []
+        if presence.get("last_seen_at") is not None:
+            last_seen = parse_server_datetime(presence.get("last_seen_at"))
+            if last_seen is None or (as_beijing(now) - last_seen).total_seconds() > 120:
+                return []
         if not bool(presence.get("working")) or not bool(
             presence.get("session_active", presence.get("working"))
         ):
@@ -6598,6 +6603,7 @@ class PetWindow(QWidget):
         )
         live_rows: list[object] | None = None
         live_projection_confirmed = False
+        live_payload_valid = False
         if has_live_payload:
             try:
                 live_rows = live_projection_rows(
@@ -6605,6 +6611,7 @@ class PetWindow(QWidget):
                     data.get("_focus_live_projection"),
                     now=moment,
                 )
+                live_payload_valid = True
             except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError) as exc:
                 live_rows = list(presence_fallback_rows)
                 if not live_rows:
@@ -6669,6 +6676,10 @@ class PetWindow(QWidget):
         if live_rows is not None:
             self.focus_analytics.set_live_projection_segments(live_rows or [])
             self._set_local_live_focus_projection(current)
+            # The account store may safely bound a delayed stopped bridge by
+            # a matching sealed fact. Keep the same sanitized projection in
+            # the one-second display cache as in reports and shared totals.
+            live_rows = self.focus_analytics.live_projection_segments()
         if live_rows is not None:
             # The local WorkTimer is authoritative for this device. A server
             # live row can remain cached for a few seconds after Pause while
@@ -6773,6 +6784,17 @@ class PetWindow(QWidget):
                 reason="local_transition_before_segment_commit",
             )
             candidate_seconds = previous_seconds
+
+        # A fresh, structurally valid account live snapshot can retire a bad
+        # old presence interval even when the durable segment delta is empty.
+        # Let the shared display clock accept that substantial correction;
+        # local-only refreshes and malformed/fallback live payloads must still
+        # preserve the prior value during ordinary pause/commit races.
+        if (live_payload_valid and previous_seconds is not None
+                and account_id == self._cross_device_today_display_account_id
+                and display_date == self._cross_device_today_display_date
+                and int(previous_seconds) - candidate_seconds >= 60):
+            self._duration_display_correction_pending = True
 
         if has_remote_payload:
             # Commit only after the pure projection validated successfully;

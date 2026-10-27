@@ -1,3 +1,4 @@
+"""验证专注区间的账号合并、可信显示及异常跨夜临时状态处理。"""
 from __future__ import annotations
 
 import json
@@ -287,6 +288,44 @@ def test_server_effective_projection_aligns_display_without_becoming_raw_evidenc
     assert store.summary(now).today_seconds == 2 * 3600 + 30 * 60
     assert store.account_today_seconds(now) == 2 * 3600 + 30 * 60
     assert store.account_week_seconds(now) == 2 * 3600 + 30 * 60
+
+
+def test_stopped_bridge_delayed_overnight_is_bounded_by_same_session_sealed_fact(tmp_path) -> None:
+    """迟到的停止状态不能把 00:20 至 09:08 的睡眠当成工作事实。"""
+    from copy import deepcopy
+    from onepic_desktop_pet.focus_segments import FocusSegment
+    zone = timezone(timedelta(hours=8))
+    now = datetime(2026, 10, 27, 9, 9, tzinfo=zone)
+    started = datetime(2026, 10, 27, 0, 14, 59, tzinfo=zone)
+    store = AccountFocusStore(path=tmp_path/'focus.json', now_provider=lambda:now, persist=False)
+    store.record_session(343, started_at=started, session_id='overnight', device_id='other', record_id='sealed')
+    original_records = deepcopy(store._state['records'])
+    bridge = FocusSegment('display-live-device:other', 'overnight', started, now, 'other')
+    assert store.set_live_projection_segments([bridge])
+    assert store.live_projection_segments()[0].end_at == started + timedelta(seconds=343)
+    assert store.period_summary('day', now)['total_seconds'] == 343
+    assert store._state['records'] == original_records  # Display-only, no altered history.
+
+    # A later confirmed offline chunk recovers the full legitimate duration.
+    store.record_session(8 * 3600, started_at=started+timedelta(seconds=343),
+                         session_id='overnight', device_id='other', record_id='later-fact')
+    store.set_live_projection_segments([bridge])
+    assert store.period_summary('day', now)['total_seconds'] >= 8 * 3600 + 343
+
+
+def test_stopped_bridge_without_matching_fact_and_short_upload_gap_remain_visible(tmp_path) -> None:
+    """正常等待上传、另一设备或仍在工作的长专注不能被截断。"""
+    from onepic_desktop_pet.focus_segments import FocusSegment
+    zone = timezone(timedelta(hours=8))
+    now = datetime(2026, 10, 27, 9, 9, tzinfo=zone)
+    start = datetime(2026, 10, 27, 0, 14, 59, tzinfo=zone)
+    store = AccountFocusStore(path=tmp_path/'focus.json', now_provider=lambda:now, persist=False)
+    store.record_session(343, started_at=start, session_id='s', device_id='a', record_id='sealed')
+    recent = FocusSegment('short', 's', start, start+timedelta(seconds=600), 'a')
+    other = FocusSegment('other', 's', start, now, 'b')
+    active = FocusSegment('active', 's', start, None, 'a')
+    store.set_live_projection_segments([recent, other, active])
+    assert store.live_projection_segments() == [recent, other, active]
 
 
 def test_period_summary_exposes_hourly_distribution_and_trust_state(tmp_path) -> None:

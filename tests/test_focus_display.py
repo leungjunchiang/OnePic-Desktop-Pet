@@ -1,3 +1,4 @@
+"""验证跨设备日区间、状态保鲜和停止桥接不会把旧时间算入今日。"""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -217,6 +218,34 @@ def test_stopped_live_projection_does_not_advance_after_both_devices_pause() -> 
     )
     assert before == 3 * 60 * 60
     assert after == before
+
+
+def test_cached_server_live_projection_drops_expired_activity_and_stop_bridges() -> None:
+    """RPC 缓存不能让超过两分钟的远端状态重新变成新鲜状态。"""
+    payload = {'server_timestamp':'2026-08-31T14:59:50+08:00', 'fresh_for_seconds':120,
+               'devices': [
+                   {'device_id':'old-live', 'session_id':'one', 'live':True,
+                    'start_at':'2026-08-31T09:00:00+08:00', 'last_seen_at':'2026-08-31T14:57:00+08:00'},
+                   {'device_id':'fresh-live', 'session_id':'two', 'live':True,
+                    'start_at':'2026-08-31T14:00:00+08:00', 'last_seen_at':'2026-08-31T14:59:30+08:00'},
+                   {'device_id':'old-stop', 'session_id':'three', 'working':False,
+                    'start_at':'2026-08-31T12:00:00+08:00', 'end_at':'2026-08-31T14:57:00+08:00'},
+                   {'device_id':'fresh-stop', 'session_id':'four', 'working':False,
+                    'start_at':'2026-08-31T13:00:00+08:00', 'end_at':'2026-08-31T14:59:30+08:00'},
+               ]}
+    before = deepcopy(payload)
+    rows = live_projection_rows('account-1', payload, now=NOW)
+    assert {row.device_id for row in rows} == {'fresh-live', 'fresh-stop'}
+    assert payload == before
+
+
+def test_modern_live_projection_rejects_missing_or_invalid_freshness_evidence() -> None:
+    """有新协议标记时，错误的保鲜时间不能把未知状态当作有效工作。"""
+    payload = {'server_timestamp':'2026-08-31T14:59:50+08:00', 'fresh_for_seconds':120,
+               'devices':[{'device_id':'mac','session_id':'s','live':True,
+                           'start_at':'2026-08-31T09:00:00+08:00', 'last_seen_at':'not-a-time'}]}
+    with pytest.raises(CrossDeviceDisplayDataError):
+        live_projection_rows('account-1', payload, now=NOW)
 
 
 def test_live_projection_rejects_foreign_or_duplicate_devices() -> None:

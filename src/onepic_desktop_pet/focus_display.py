@@ -1,4 +1,4 @@
-"""完整历史先验证再准备当天只读区间；实时计时不重复扫描历史，不修改原始事实。
+"""完整历史先验证再准备当天只读区间，过滤过期实时状态，不修改原始事实。
 
 Read-only cross-device focus display projection.
 
@@ -28,6 +28,7 @@ from .focus_segments import (
     as_beijing,
     segment_from_record,
 )
+from .time_service import parse_server_datetime
 
 
 class CrossDeviceDisplayDataError(ValueError):
@@ -155,6 +156,17 @@ def live_projection_rows(
     if not account_id:
         raise CrossDeviceDisplayDataError("focus live projection requires an account id")
     moment = as_beijing(now)
+    freshness: int | None = None
+    if "server_timestamp" in projection and "fresh_for_seconds" in projection:
+        try:
+            raw_freshness = projection["fresh_for_seconds"]
+            if isinstance(raw_freshness, bool):
+                raise ValueError("boolean freshness")
+            freshness = min(120, int(raw_freshness))
+            if freshness <= 0 or parse_server_datetime(projection["server_timestamp"]) is None:
+                raise ValueError("invalid freshness metadata")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CrossDeviceDisplayDataError("invalid focus live freshness metadata") from exc
     rows: list[FocusSegment] = []
     seen_devices: set[str] = set()
     for index, raw in enumerate(devices):
@@ -174,6 +186,12 @@ def live_projection_rows(
         end_at = None if is_live else raw.get("end_at")
         if not is_live and not end_at:
             raise CrossDeviceDisplayDataError(f"stopped focus live projection missing end:{index}")
+        if freshness is not None:
+            evidence = parse_server_datetime(raw.get("last_seen_at") if is_live else end_at)
+            if evidence is None:
+                raise CrossDeviceDisplayDataError(f"invalid focus live freshness evidence:{index}")
+            if (moment - evidence).total_seconds() > freshness:
+                continue
         candidate = {
             "user_id": account_id,
             "segment_id": f"display-live-device:{device_id}",

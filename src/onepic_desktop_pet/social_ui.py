@@ -1,4 +1,4 @@
-"""搭子卡片先建立父级再切换可见性，后台刷新不创建临时独立标签窗口。
+"""重发心跳时按真实经过时间更新输入证明；搭子卡片后台刷新不创建临时独立窗口。
 
 进程在线独立于学习状态；非学习显示休息，退出按顺序发送最终离线状态。
 
@@ -1002,6 +1002,8 @@ class SocialHeartbeatWorker:
         self._condition = threading.Condition()
         self._stopped = False
         self._pending: dict[str, Any] | None = None
+        self._pending_observed_monotonic = 0.0
+        self._pending_observed_wall = 0.0
         self._shutdown_payload: dict[str, Any] | None = None
         self._send_now = False
         self._thread: threading.Thread | None = None
@@ -1068,6 +1070,8 @@ class SocialHeartbeatWorker:
         payload = _heartbeat_payload(raw)
         with self._condition:
             self._pending = dict(payload)
+            self._pending_observed_monotonic = time.monotonic()
+            self._pending_observed_wall = time.time()
             self._send_now = self._send_now or bool(immediate)
             self._condition.notify()
 
@@ -1115,6 +1119,8 @@ class SocialHeartbeatWorker:
                 raw.update(presence_state="online", activity_state="rest")
             payload = _heartbeat_payload(raw)
             self._pending = dict(payload)
+            self._pending_observed_monotonic = time.monotonic()
+            self._pending_observed_wall = time.time()
             self._send_now = self._send_now or bool(immediate)
             self._condition.notify()
             return dict(payload)
@@ -1171,6 +1177,19 @@ class SocialHeartbeatWorker:
                         # overwritten by this worker clearing the flag after
                         # it has been set.
                         payload = dict(self._pending or {})
+                        # The independent thread may wake after sleep before
+                        # the GUI has processed lock/idle events. Never resend
+                        # an hours-old input observation as if it just occurred.
+                        # Wall time covers platforms whose monotonic clock stops
+                        # during suspend; the maximum also handles wall-clock
+                        # adjustments without manufacturing a fresher proof.
+                        elapsed = max(0.0,
+                            time.monotonic() - self._pending_observed_monotonic,
+                            time.time() - self._pending_observed_wall)
+                        if payload.get('working') and payload.get('session_active'):
+                            idle = payload.get('input_idle_seconds')
+                            if idle is not None:
+                                payload['input_idle_seconds'] = min(86_400, max(0, int(idle) + int(elapsed)))
                         self._send_now = False
             user_id = str(payload.get("user_id") or "").strip()
             if not user_id:

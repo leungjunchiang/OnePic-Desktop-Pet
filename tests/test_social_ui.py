@@ -1,4 +1,4 @@
-"""回归学习与在线分层、在途心跳后退出下线、北京日期和搭子交互。
+"""回归学习与在线分层、心跳证明过期、在途退出下线、北京日期和搭子交互。
 
 验证自习室导航、备注身份、搭子卡与榜单统计一致、直接互动及 Presence 安全退出。"""
 
@@ -179,6 +179,42 @@ def test_heartbeat_worker_force_inactive_replaces_retained_active_payload() -> N
     assert payload["input_idle_seconds"] is None
     assert worker.pending_presence() == payload
     assert worker._send_now is True
+
+
+def test_heartbeat_ages_retained_input_proof_across_sleep_and_accepts_fresh_proof(monkeypatch) -> None:
+    """后台线程重发旧心跳时不能把睡眠前的键鼠证明当成刚刚发生。"""
+    class Client:
+        def __init__(self):
+            self.payloads = []
+            self.sent = threading.Event()
+        def heartbeat(self, **payload):
+            self.payloads.append(dict(payload))
+            self.sent.set()
+    monkeypatch.setattr('onepic_desktop_pet.social_ui._next_presence_sequence', lambda _: 51)
+    client = Client()
+    worker = SocialHeartbeatWorker(client)
+    active = {'user_id':'account-a', 'working':True, 'session_active':True,
+              'session_id':'a', 'session_started_at':'2026-10-26T23:59:00+08:00',
+              'presence_state':'online', 'activity_state':'focus', 'input_idle_seconds':4}
+    worker.update_presence(active, immediate=True)
+    # System wall time passes during sleep even on platforms where monotonic
+    # time does not. Do not pretend this was a fresh input event.
+    worker._pending_observed_wall -= 9 * 3600
+    worker.start()
+    try:
+        assert client.sent.wait(2)
+        stale = client.payloads[-1]
+        assert stale['input_idle_seconds'] >= 9 * 3600 + 4
+        assert stale['presence_state'] == 'online' and stale['activity_state'] == 'focus'
+        assert stale['working'] and stale['session_active']
+        assert worker.pending_presence()['input_idle_seconds'] == 4
+        client.sent.clear()
+        worker.update_presence({**active, 'input_idle_seconds': 3}, immediate=True)
+        assert client.sent.wait(2)
+        assert 3 <= client.payloads[-1]['input_idle_seconds'] <= 5
+    finally:
+        worker.stop()
+        assert worker.wait(2000)
 
 
 def test_heartbeat_worker_sends_forced_inactive_after_an_active_heartbeat(monkeypatch) -> None:

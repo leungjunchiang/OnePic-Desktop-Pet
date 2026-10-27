@@ -1,4 +1,4 @@
-"""计时只投影日历累计，完整报告按需生成；同一次统计复用已解析的专注区间。
+"""计时只投影日历累计；迟到的停止桥接只读校准，不改写任何已封存区间。
 
 Local focus continuity, quality and lightweight review data.
 
@@ -20,7 +20,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from time import monotonic
@@ -28,6 +28,7 @@ from typing import Any, Callable
 
 from .focus_segments import (
     BEIJING_TIMEZONE as FOCUS_BEIJING_TIMEZONE,
+    FOCUS_SEGMENT_CHECKPOINT_SECONDS,
     FocusAggregate,
     FocusSegment,
     aggregate_focus_time,
@@ -87,6 +88,40 @@ FOCUS_SEGMENT_UPLOAD_RETRY_SECONDS = 60
 # transaction small; acknowledged rows stay quiet and remaining rows continue
 # on later coalesced sync ticks.
 FOCUS_SEGMENT_UPLOAD_BATCH_SIZE = 100
+
+
+def _bound_delayed_stopped_live_rows(rows: list[FocusSegment], records: Any, now: datetime) -> list[FocusSegment]:
+    """仅在同设备同场次有已封存证据时，限制严重迟到的停止桥接。"""
+    targets = {(row.device_id, row.session_id) for row in rows
+               if row.end_at is not None and row.device_id and row.session_id}
+    if not targets or not isinstance(records, list):
+        return rows
+    latest: dict[tuple[str, str], datetime] = {}
+    for index, raw in enumerate(records):
+        if not isinstance(raw, dict):
+            continue
+        key = (str(raw.get('device_id') or ''), str(raw.get('session_id') or ''))
+        if key not in targets:
+            continue
+        segment = segment_from_record(raw, index)
+        if (segment is None or segment.end_at is None or segment.end_at > now
+                or segment.validation_error(now) is not None):
+            continue
+        if key not in latest or segment.end_at > latest[key]:
+            latest[key] = segment.end_at
+    # A normal 15-minute checkpoint plus two-minute server TTL may still be
+    # awaiting upload. Only an additional, much older gap is suspect. This
+    # changes a transient display row, never a durable fact or upload.
+    max_gap = FOCUS_SEGMENT_CHECKPOINT_SECONDS + 120
+    result = []
+    for row in rows:
+        confirmed_end = latest.get((row.device_id, row.session_id))
+        if (row.end_at is not None and confirmed_end is not None
+                and row.start_at < confirmed_end < row.end_at
+                and (row.end_at - confirmed_end).total_seconds() > max_gap):
+            row = replace(row, end_at=confirmed_end)
+        result.append(row)
+    return result
 
 
 def _as_beijing(value: datetime) -> datetime:
@@ -1932,6 +1967,8 @@ class FocusAnalyticsStore:
                 if not normalized.segment_id or not normalized.session_id:
                     continue
                 candidate.append(normalized)
+        candidate = _bound_delayed_stopped_live_rows(
+            candidate, self._state.get('records', []), _as_beijing(self._now()))
         changed = candidate != previous_live
         if changed:
             self._live_projection_segments = candidate

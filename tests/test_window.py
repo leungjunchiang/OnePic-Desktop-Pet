@@ -363,6 +363,85 @@ def test_failed_midnight_reprojection_cannot_show_yesterday_total(monkeypatch) -
     window.close(); window.deleteLater(); app.processEvents()
 
 
+def test_confirmed_remote_live_correction_replaces_nine_hour_desktop_bubble(monkeypatch) -> None:
+    """重放 9:07 突然到 9 小时、9:09 数据恢复 20 分钟的真实时序。"""
+    app, window = _create_window()
+    account = 'account-1'
+    moment = datetime(2026, 10, 27, 9, 9, 6, tzinfo=timezone(timedelta(hours=8)))
+    snapshot = SimpleNamespace(status='rest', today_seconds=1242, session_started_at=None,
+                               current_continuous_seconds=0)
+    monkeypatch.setattr(window, '_current_social_user_id', lambda: account)
+    monkeypatch.setattr(window.focus_analytics, 'current_time', lambda: moment)
+    monkeypatch.setattr(window.focus_analytics, 'focus_segments', lambda: [])
+    monkeypatch.setattr(window, '_shared_today_focus_seconds', lambda: 1242)
+    window._active_focus_account_id = account
+    window._cross_device_today_display_account_id = account
+    window._cross_device_today_display_date = moment.date().isoformat()
+    window._cross_device_today_display_seconds = 32814
+    window._cross_device_today_display_remote_rows = [{
+        'user_id': account, 'segment_id': 'closed', 'session_id': 'session', 'device_id': 'other',
+        'start_at': '2026-10-27T00:00:00+08:00', 'end_at': '2026-10-27T00:20:42+08:00',
+    }]
+    window._smooth_work_duration_display.project(32814, active=False, identity=f'{account}:2026-10-27')
+    try:
+        # A local transition or malformed server payload is not evidence of a
+        # real correction and must keep the existing stable display.
+        assert window._refresh_cross_device_today_display({}, snapshot=snapshot, source='local')
+        assert window._cross_device_today_display_seconds == 32814
+        assert not window._refresh_cross_device_today_display(
+            {'_focus_segments': {'unexpected': []}}, snapshot=snapshot, source='malformed')
+        assert window._account_today_display_seconds(snapshot) == 32814
+        # A validated fresh empty live projection has retired the old bad row.
+        assert window._refresh_cross_device_today_display({
+            '_focus_segments': {'segments': [], 'full_sync': False},
+            '_focus_live_projection': {'devices': []},
+        }, snapshot=snapshot, source='remote_focus_segments')
+        assert window._cross_device_today_display_seconds == 1242
+        corrected = window._account_today_display_seconds(snapshot)
+        assert corrected == 1242
+        window._update_work_duration_bubble(snapshot, display_seconds=corrected)
+        assert '20:42' in window.work_duration_bubble.text()
+    finally:
+        window.close(); window.deleteLater(); app.processEvents()
+
+
+def test_delayed_stopped_bridge_never_inflates_desktop_or_account_projection(monkeypatch) -> None:
+    """重放凌晨已封存 20 分钟、早晨才收到停止桥接的跨设备场景。"""
+    from copy import deepcopy
+    app, window = _create_window()
+    account = 'account-1'
+    moment = datetime(2026, 10, 27, 9, 8, tzinfo=timezone(timedelta(hours=8)))
+    snapshot = SimpleNamespace(status='rest', today_seconds=1242, session_started_at=None,
+                               current_continuous_seconds=0)
+    monkeypatch.setattr(window, '_current_social_user_id', lambda: account)
+    monkeypatch.setattr(window.focus_analytics, 'current_time', lambda: moment)
+    monkeypatch.setattr(window.focus_analytics, '_now', lambda: moment)
+    monkeypatch.setattr(window, '_shared_today_focus_seconds', lambda: 1242)
+    window._active_focus_account_id = account
+    window.focus_analytics._device_id = 'local'
+    window.focus_analytics._state['records'] = [{
+        'date':'2026-10-27', 'started_at':'2026-10-27T00:00:00+08:00', 'seconds':1242,
+        'record_id':'sealed', 'session_id':'old-session', 'device_id':'other',
+    }]
+    records = deepcopy(window.focus_analytics._state['records'])
+    try:
+        payload = {'_focus_segments': {'segments':[], 'full_sync':False},
+            '_focus_live_projection': {'devices': [{
+                'device_id':'other', 'session_id':'old-session', 'working':False,
+                'start_at':'2026-10-27T00:00:00+08:00', 'end_at':moment.isoformat(),
+            }]}}
+        assert window._refresh_cross_device_today_display(payload, snapshot=snapshot, source='remote_focus_segments')
+        assert window.focus_analytics.period_summary('day', moment)['total_seconds'] == 1242
+        assert window._cross_device_today_display_seconds == 1242
+        assert window._account_today_display_seconds(snapshot) == 1242
+        assert window._cross_device_today_display_live_rows[0].end_at == moment.replace(hour=0, minute=20, second=42)
+        window._update_work_duration_bubble(snapshot, display_seconds=1242)
+        assert '20:42' in window.work_duration_bubble.text()
+        assert window.focus_analytics._state['records'] == records
+    finally:
+        window.close(); window.deleteLater(); app.processEvents()
+
+
 def test_unsealed_overnight_session_uses_only_today_in_day_projection(monkeypatch) -> None:
     """A continuous session's previous evening must not become today's total."""
 
@@ -4789,3 +4868,16 @@ def test_silent_handling_reaction_survives_late_prehandling_sync(monkeypatch):
     window._social_dashboard_received({'_request_generation':8,'_taunt_state':{'active':False}})
     assert not window._taunt_active
     window.close();window.deleteLater();app.processEvents()
+
+
+def test_account_presence_fallback_excludes_known_stale_state():
+    """过期的账号在线缓存不能把长时间停用计算成今天的工作。"""
+    from onepic_desktop_pet.time_service import BEIJING_TIMEZONE
+    now = datetime(2026, 8, 31, 15, tzinfo=BEIJING_TIMEZONE)
+    presence = {"working": True, "session_active": True, "session_id": "s",
+                "device_id": "d", "session_started_at": "2026-08-31T14:00:00+08:00"}
+    fallback = PetWindow._account_presence_live_fallback
+    assert len(fallback("user", {"me_presence": {**presence, "last_seen_at": "2026-08-31T14:59:30+08:00"}}, now=now)) == 1
+    assert fallback("user", {"me_presence": {**presence, "last_seen_at": "2026-08-31T14:57:00+08:00"}}, now=now) == []
+    assert fallback("user", {"me_presence": {**presence, "last_seen_at": "invalid"}}, now=now) == []
+    assert len(fallback("user", {"me_presence": presence}, now=now)) == 1
