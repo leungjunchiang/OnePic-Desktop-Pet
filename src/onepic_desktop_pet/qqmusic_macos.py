@@ -1,4 +1,4 @@
-"""实验性 Mac QQ 适配：保留已有窗口，只为未运行客户端请求隐藏启动，不发送全局按键。
+"""实验性 Mac QQ 适配：保留已有窗口；用户主动点歌时可见地冷启动 QQ，不发送全局按键。
 
 官方 Mac 客户端没有播放脚本字典。只在唯一 QQ 进程、明确播放栏和真实时间轴均可
 读取时确认播放；缺少权限或控件不匹配时明确失败，不猜测播放状态或改控其他应用。
@@ -235,7 +235,7 @@ class NativeAX:
         return result
 
     def ensure_running(self, executable):
-        """用户已有 QQ 一律不动；冷启动使用 Cocoa 配置，不在稍后再次 hide。"""
+        """用户已有 QQ 一律不动；主动点歌的冷启动要显示 QQ 并让用户看见。"""
         if not self.ax.AXIsProcessTrusted():
             self.application()  # Preserve the actionable permission error; do not request/grant access.
         apps = list(self.apps.runningApplicationsWithBundleIdentifier_(BUNDLE_ID))
@@ -246,8 +246,10 @@ class NativeAX:
         from AppKit import NSWorkspace, NSWorkspaceOpenConfiguration
         from Foundation import NSURL
         config = NSWorkspaceOpenConfiguration.configuration()
-        config.setActivates_(False)
-        config.setHides_(True)
+        # This is a direct user action. A hidden, non-activating launch leaves QQ
+        # invisible and prevents the user from completing login or seeing its UI.
+        config.setActivates_(True)
+        config.setHides_(False)
         NSWorkspace.sharedWorkspace().openApplicationAtURL_configuration_completionHandler_(
             NSURL.fileURLWithPath_(str(executable)), config, None)
         return True

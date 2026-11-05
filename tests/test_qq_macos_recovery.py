@@ -122,7 +122,7 @@ def test_existing_mac_application_is_never_hidden_or_relaunched():
     assert backend.ensure_running(Path('/Applications/QQMusic.app')) is False
 
 
-def test_cold_mac_launch_only_sets_hidden_nonactivating_configuration(monkeypatch):
+def test_cold_mac_launch_shows_qq_for_user_requested_playback(monkeypatch):
     events = []
     config = SimpleNamespace(setActivates_=lambda value: events.append(('activates', value)),
                              setHides_=lambda value: events.append(('hides', value)))
@@ -135,7 +135,7 @@ def test_cold_mac_launch_only_sets_hidden_nonactivating_configuration(monkeypatc
     backend.ax = SimpleNamespace(AXIsProcessTrusted=lambda: True)
     backend.apps = SimpleNamespace(runningApplicationsWithBundleIdentifier_=lambda _: [])
     assert backend.ensure_running(Path('/Applications/QQMusic.app'))
-    assert events[:2] == [('activates', False), ('hides', True)] and events[2][0] == 'launch'
+    assert events[:2] == [('activates', True), ('hides', False)] and events[2][0] == 'launch'
 
 
 def test_settings_check_uses_unsaved_app_path_and_defers_close_until_native_thread_ends(tmp_path, monkeypatch):

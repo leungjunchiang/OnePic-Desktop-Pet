@@ -99,6 +99,7 @@ class _FakeStdin:
 
     def close(self) -> None:
         self.owner.stdout.close()
+        self.owner.stderr.close()
 
 
 class _FakeProcess:

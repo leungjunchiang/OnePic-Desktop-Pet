@@ -4,11 +4,13 @@ import sys
 import time
 import wave
 from pathlib import Path
+from uuid import uuid4
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import pytest
 from PySide6.QtCore import QUrl, QTimer
 from PySide6.QtWidgets import QApplication
+from PySide6.QtNetwork import QLocalServer
 from PySide6.QtMultimedia import QMediaPlayer, QMediaDevices
 from onepic_desktop_pet import alarm_audio_process as process_audio
 from onepic_desktop_pet import alarm_audio_service as audio
@@ -87,6 +89,11 @@ def test_stop_before_connection_is_silent_idempotent_and_drains():
 
 def _fake_worker(tmp_path, monkeypatch, action):
     # Isolated fault injection: only the disposable audio child crashes/hangs.
+    probe = QLocalServer()
+    probe.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
+    if not probe.listen('lili-audio-test-' + uuid4().hex):
+        pytest.skip(f'runner does not allow local sockets: {probe.errorString()}')
+    probe.close()
     path = tmp_path / 'worker.py'
     path.write_text('''import os, sys
 from PySide6.QtCore import QCoreApplication
