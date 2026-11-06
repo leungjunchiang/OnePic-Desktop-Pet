@@ -172,21 +172,38 @@ jobs:
             echo "=== Running $file ==="
             python -m pytest --basetemp "$RUNNER_TEMP/pytest-$name" "$file"
           done
-      - name: Build unsigned macOS DMG
+      - name: Configure free macOS signing identity
+        env:
+          LILI_MAC_SELF_SIGN_BUNDLE: ${{ secrets.LILI_MAC_SELF_SIGN_BUNDLE }}
+        run: |
+          export LILI_MAC_SELF_SIGN_CERT_SHA256="$(tr -d '\r\n' < packaging/macos/selfsign-certificate.sha256)"
+          bash scripts/setup_macos_selfsign_ci.sh
+      - name: Build macOS DMG
         env:
           ONEPIC_MAC_ARCH: ${{ matrix.arch }}
         run: bash scripts/build_macos.sh
       - name: Create macOS checksum
+        id: macos_asset
         run: |
+          filename="Lili-macOS-${{ matrix.arch }}-selfsigned.dmg"
+          codesign --display -r - dist/Lili.app 2>&1 | sed -n 's/^designated => //p' > "dist/Lili-macOS-${{ matrix.arch }}-identity.txt"
+          test -s "dist/Lili-macOS-${{ matrix.arch }}-identity.txt"
+          echo "filename=$filename" >> "$GITHUB_OUTPUT"
           cd dist
-          shasum -a 256 "Lili-macOS-${{ matrix.arch }}-unsigned.dmg" > "Lili-macOS-${{ matrix.arch }}-unsigned.dmg.sha256"
+          shasum -a 256 "$filename" > "$filename.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}-release
           path: |
-            dist/Lili-macOS-${{ matrix.arch }}-unsigned.dmg
-            dist/Lili-macOS-${{ matrix.arch }}-unsigned.dmg.sha256
+            dist/${{ steps.macos_asset.outputs.filename }}
+            dist/${{ steps.macos_asset.outputs.filename }}.sha256
+            dist/Lili-macOS-${{ matrix.arch }}-identity.txt
           if-no-files-found: error
+      - name: Remove temporary signing keychain
+        if: ${{ always() }}
+        run: |
+          security delete-keychain "$RUNNER_TEMP/lili-selfsign/signing.keychain-db" >/dev/null 2>&1 || true
+          rm -rf "$RUNNER_TEMP/lili-selfsign"
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')
@@ -253,12 +270,14 @@ jobs:
             echo "无法从 ref 推导合法版本：$GITHUB_REF_NAME" >&2
             exit 1
           fi
+          mac_kind="selfsigned"
+          cmp release-assets/Lili-macOS-arm64-identity.txt release-assets/Lili-macOS-x64-identity.txt
           assets=(
             release-assets/content-manifest.json
-            release-assets/Lili-macOS-arm64-unsigned.dmg
-            release-assets/Lili-macOS-arm64-unsigned.dmg.sha256
-            release-assets/Lili-macOS-x64-unsigned.dmg
-            release-assets/Lili-macOS-x64-unsigned.dmg.sha256
+            "release-assets/Lili-macOS-arm64-$mac_kind.dmg"
+            "release-assets/Lili-macOS-arm64-$mac_kind.dmg.sha256"
+            "release-assets/Lili-macOS-x64-$mac_kind.dmg"
+            "release-assets/Lili-macOS-x64-$mac_kind.dmg.sha256"
             release-assets/Lili-Windows-x64-Setup.exe
             release-assets/Lili-Windows-x64-Setup.exe.sha256
             release-assets/Lili-Windows-x64.zip

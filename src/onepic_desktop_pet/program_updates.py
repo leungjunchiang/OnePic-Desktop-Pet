@@ -1,4 +1,4 @@
-"""安全下载程序更新，支持续传、第三方备用线路及官方 SHA-256 校验。
+"""安全下载程序更新，优先识别 Mac 免费签名包并校验官方 SHA-256。
 
 Content patches can be applied while Lili is running.  A program update is
 different: the running executable must be closed before the installer can
@@ -20,7 +20,7 @@ from time import monotonic, sleep
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Callable
@@ -99,6 +99,12 @@ def _asset_name() -> str | None:
         machine = platform.machine().casefold()
         return "Lili-macOS-arm64-unsigned.dmg" if machine in {"arm64", "aarch64"} else "Lili-macOS-x64-unsigned.dmg"
     return None
+
+
+def _asset_candidates(asset_name: str) -> tuple[str, ...]:
+    if re.fullmatch(r"Lili-macOS-(?:arm64|x64)-unsigned\.dmg", asset_name):
+        return (asset_name.replace("-unsigned.dmg", "-selfsigned.dmg"), asset_name)
+    return (asset_name,)
 
 
 @dataclass(frozen=True)
@@ -338,6 +344,19 @@ class ProgramUpdateManager:
         asset_name: str,
     ) -> ProgramUpdateCheckResult:
         redirect_url = self._read_release_page_redirect()
+        candidates = _asset_candidates(asset_name)
+        if len(candidates) > 1:
+            preferred = self._release_from_redirect(
+                redirect_url, current_version=current_version, asset_name=candidates[0])
+            if preferred.release is None:
+                return preferred
+            try:
+                raw = self._read_url(preferred.release.checksum_url, max_bytes=4096)
+            except NoProgramRelease:
+                pass  # Older releases may contain only the unsigned package.
+            else:
+                checksum = self._parse_checksum(raw, candidates[0])
+                return replace(preferred, release=replace(preferred.release, checksum_value=checksum))
         return self._release_from_redirect(
             redirect_url,
             current_version=current_version,
@@ -432,7 +451,12 @@ class ProgramUpdateManager:
         assets = payload.get("assets")
         if not isinstance(assets, list):
             raise ProgramUpdateError("程序更新缺少安装包列表")
-        asset = next((item for item in assets if isinstance(item, dict) and item.get("name") == asset_name), None)
+        asset = None
+        for candidate in _asset_candidates(asset_name):
+            asset = next((item for item in assets if isinstance(item, dict) and item.get("name") == candidate), None)
+            if asset is not None:
+                asset_name = candidate
+                break
         if not isinstance(asset, dict):
             raise ProgramUpdateError(f"当前平台没有可用安装包：{asset_name}")
         asset_url = str(asset.get("browser_download_url") or "").strip()

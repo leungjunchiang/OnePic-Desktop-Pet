@@ -16,6 +16,8 @@ dist-state-effects/
 build-state-effects/
 *.egg-info/
 work/
+*.p12
+*.pfx
 
 # 编辑器和系统文件
 .vscode/

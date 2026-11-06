@@ -79,6 +79,9 @@ a.binaries = [
 ]
 pyz = PYZ(a.pure)
 
+mac_signing_identity = os.environ.get("LILI_MAC_SIGNING_IDENTITY", "").strip() if sys.platform == "darwin" else ""
+mac_entitlements = "packaging/macos/Lili.entitlements" if mac_signing_identity else None
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -93,8 +96,8 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    codesign_identity=mac_signing_identity or None,
+    entitlements_file=mac_entitlements,
     icon=["assets\\icons\\pet.png"] if sys.platform == "win32" else None,
 )
 coll = COLLECT(
