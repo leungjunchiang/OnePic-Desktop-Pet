@@ -1,0 +1,71 @@
+name: Disposable macOS self-signing identity probe
+
+on:
+  push:
+    branches: ["codex/lili-selfsign-probe-20261106"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    steps:
+      - name: Test whether two versions retain a certificate-anchored identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir="$RUNNER_TEMP/lili-identity-probe"
+          mkdir -p "$probe_dir"
+          probe_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$probe_password"
+          probe_keychain="$probe_dir/probe.keychain-db"
+          probe_cert="$probe_dir/probe.pem"
+          cleanup() {
+            sudo security remove-trusted-cert -d "$probe_cert" >/dev/null 2>&1 || true
+            security delete-keychain "$probe_keychain" >/dev/null 2>&1 || true
+            rm -rf "$probe_dir"
+          }
+          trap cleanup EXIT
+          cat > "$probe_dir/openssl.cnf" <<'CONFIG'
+          [req]
+          prompt=no
+          distinguished_name=dn
+          x509_extensions=ext
+          [dn]
+          CN=Lili Ephemeral Code Signing Probe
+          [ext]
+          basicConstraints=critical,CA:TRUE
+          keyUsage=critical,digitalSignature,keyCertSign
+          extendedKeyUsage=codeSigning
+          subjectKeyIdentifier=hash
+          authorityKeyIdentifier=keyid:always
+          CONFIG
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$probe_dir/key.pem" -out "$probe_cert" -days 2 -config "$probe_dir/openssl.cnf" -extensions ext >/dev/null 2>&1
+          openssl pkcs12 -export -inkey "$probe_dir/key.pem" -in "$probe_cert" -out "$probe_dir/probe.p12" -name "Lili Ephemeral Code Signing Probe" -passout "pass:$probe_password"
+          security create-keychain -p "$probe_password" "$probe_keychain"
+          security unlock-keychain -p "$probe_password" "$probe_keychain"
+          security import "$probe_dir/probe.p12" -k "$probe_keychain" -P "$probe_password" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$probe_password" "$probe_keychain" >/dev/null
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$probe_cert"
+          security find-identity -v -p codesigning "$probe_keychain" | grep -F "Lili Ephemeral Code Signing Probe" >/dev/null
+          for version in one two; do
+            app="$probe_dir/$version.app"
+            mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+            cp /usr/bin/true "$app/Contents/MacOS/LiliProbe"
+            cat > "$app/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>test.lili.stable.probe</string><key>CFBundleExecutable</key><string>LiliProbe</string></dict></plist>
+          PLIST
+            printf '%s\n' "$version" > "$app/Contents/Resources/version.txt"
+            codesign --force --timestamp=none --keychain "$probe_keychain" --sign "Lili Ephemeral Code Signing Probe" "$app"
+            codesign --verify --strict "$app"
+          done
+          requirement="$(codesign --display -r - "$probe_dir/one.app" 2>&1 | sed -n 's/^designated => //p')"
+          test -n "$requirement"
+          case "$requirement" in *cdhash*) echo "Identity unexpectedly depends on file hash" >&2; exit 1;; esac
+          codesign --verify --strict -R "=$requirement" "$probe_dir/two.app"
+          reverse="$(codesign --display -r - "$probe_dir/two.app" 2>&1 | sed -n 's/^designated => //p')"
+          codesign --verify --strict -R "=$reverse" "$probe_dir/one.app"
+          echo "Two different app versions satisfy each other's designated requirements."
