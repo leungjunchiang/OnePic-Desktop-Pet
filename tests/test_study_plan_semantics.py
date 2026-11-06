@@ -126,8 +126,12 @@ def test_study_deployment_preserves_latest_projection_without_replaying_backfill
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/deploy-supabase-focus-history.yml").read_text(encoding="utf-8")
+    release_workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
     script = (root / "scripts/apply_supabase_discipline.ps1").read_text(encoding="utf-8")
-    assert '"supabase/migrations/**"' not in workflow
-    assert '"supabase/migrations/*focus*.sql"' in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "  push:" not in workflow
+    assert "apply_supabase_focus_sync_migrations.ps1" not in release_workflow
+    assert "-MigrationPath supabase/migrations/20261106152431_lili_focus_legacy_history_pages.sql" in release_workflow
+    assert "-MigrationPath scripts/verify_focus_legacy_history.sql" in release_workflow
     assert "projectionSource.Substring($projectionStart)" in script
     assert 'begin;`n$projectionSql' in script
