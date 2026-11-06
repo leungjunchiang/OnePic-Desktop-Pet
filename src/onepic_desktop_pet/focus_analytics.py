@@ -940,7 +940,7 @@ class FocusAnalyticsStore:
         """Return valid sealed facts across all dates; live time stays local."""
         now = self.current_time()
         return [
-            segment for segment in self.focus_segments(exclude_legacy_checkpoints=True)
+            segment for segment in self._trusted_sealed_focus_segments()
             if segment.end_at is not None
             and segment.start_at < segment.end_at
             and segment.start_at.date() <= now.date()
@@ -1678,7 +1678,7 @@ class FocusAnalyticsStore:
         a source of focus time.
         """
 
-        segments = self.focus_segments(exclude_legacy_checkpoints=True)
+        segments = self._trusted_sealed_focus_segments()
         if not segments:
             state = self._state.setdefault("account_state", {})
             if not isinstance(state, dict):
@@ -2175,7 +2175,7 @@ class FocusAnalyticsStore:
             })
         return result
 
-    def focus_segments(self, *, exclude_legacy_checkpoints: bool = False) -> list[FocusSegment]:
+    def focus_segments(self) -> list[FocusSegment]:
         """Return the durable interval facts represented by local records.
 
         ``days`` and the scalar account snapshot are deliberately excluded:
@@ -2183,18 +2183,32 @@ class FocusAnalyticsStore:
         """
 
         result: list[FocusSegment] = []
-        days = self._state.get("days", {})
-        days = days if isinstance(days, dict) else {}
         for index, raw in enumerate(self._state.get("records", [])):
             segment = segment_from_record(raw, index)
-            if segment is None:
+            if segment is not None:
+                result.append(segment)
+        return result
+
+    def _trusted_sealed_focus_segments(self) -> list[FocusSegment]:
+        """Filter identified legacy checkpoints from projections and uploads."""
+
+        segments = self.focus_segments()
+        days = self._state.get("days", {})
+        if not isinstance(days, dict) or not any(
+            isinstance(day, dict) and day.get("seconds_untrusted")
+            for day in days.values()
+        ):
+            return segments
+        quarantined: set[FocusSegment] = set()
+        for index, raw in enumerate(self._state.get("records", [])):
+            if not self._is_legacy_checkpoint_record(raw):
                 continue
-            if exclude_legacy_checkpoints and self._is_quarantined_focus_record(
+            segment = segment_from_record(raw, index)
+            if segment is not None and self._is_quarantined_focus_record(
                 raw, days.get(segment.start_at.date().isoformat()),
             ):
-                continue
-            result.append(segment)
-        return result
+                quarantined.add(segment)
+        return [segment for segment in segments if segment not in quarantined]
 
     def set_live_projection_segments(self, segments: Any, *, renew_ttl: bool = True) -> bool:
         """Replace the transient per-device live projection.
@@ -2252,7 +2266,7 @@ class FocusAnalyticsStore:
     ) -> list[FocusSegment]:
         """Return sealed account facts plus transient live intervals."""
 
-        segments = self.focus_segments(exclude_legacy_checkpoints=True)
+        segments = self._trusted_sealed_focus_segments()
         segments.extend(self.live_projection_segments())
         if extra_segments:
             segments.extend(extra_segments)
@@ -2658,7 +2672,7 @@ class FocusAnalyticsStore:
         moment = _as_beijing(at or self._now())
         validation_moment = _as_beijing(self._now())
         range_start, range_end, _ = calendar_window(period, moment)
-        segments = self.focus_segments(exclude_legacy_checkpoints=True)
+        segments = self._trusted_sealed_focus_segments()
         grouped: dict[str, list[FocusSegment]] = {}
         for segment in segments:
             key = str(segment.device_id or "").strip() or "unattributed"
@@ -2724,7 +2738,7 @@ class FocusAnalyticsStore:
         if not isinstance(projection, dict):
             projection = {}
             state["daily_focus_projection"] = projection
-        sealed = self.focus_segments(exclude_legacy_checkpoints=True)
+        sealed = self._trusted_sealed_focus_segments()
         now = _as_beijing(self._now())
         changed = False
         days = self._state.setdefault("days", {})

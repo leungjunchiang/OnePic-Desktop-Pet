@@ -592,6 +592,24 @@ def test_period_summary_excludes_legacy_cumulative_records_from_charts(tmp_path)
     assert "2026-08-20" in month["data_quality"]["untrusted_days"]
 
 
+def test_legacy_checkpoint_quarantine_keeps_other_intervals_from_that_day(tmp_path) -> None:
+    path = tmp_path / "focus.json"
+    day = datetime(2024, 8, 20)
+    records = [
+        {"started_at": "2024-08-20T10:00:00", "seconds": 3600},
+        {"started_at": "2024-08-20T10:30:00", "seconds": 7200},
+        {"started_at": "2024-08-20T11:00:00", "seconds": 10800},
+        {"record_id": "sealed", "device_id": "local", "started_at": "2024-08-20T15:00:00", "seconds": 1800},
+    ]
+    path.write_text(json.dumps({"records": records}), encoding="utf-8")
+    now = datetime(2026, 11, 7, 12)
+    store = FocusAnalyticsStore(path=path, now_provider=lambda: now, device_id="local")
+
+    assert len(store.focus_segments()) == 4
+    assert store.range_summary(day, day + timedelta(days=1))["total_seconds"] == 1800
+    assert [item["segment_id"] for item in store.focus_segments_payload()] == ["sealed"]
+
+
 def test_period_summary_caps_overlapping_quality_time_to_effective_total(tmp_path) -> None:
     now = datetime(2026, 8, 21, 12, 0)
     store = FocusAnalyticsStore(path=tmp_path / "focus.json", now_provider=lambda: now, persist=False)
