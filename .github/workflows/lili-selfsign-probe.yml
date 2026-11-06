@@ -174,9 +174,10 @@ jobs:
           probe_password="$(openssl rand -hex 24)"
           echo "::add-mask::$probe_password"
           openssl pkcs12 -export -legacy -inkey "$probe_dir/key.pem" -in "$probe_dir/cert.pem" -out "$probe_dir/identity.p12" -name "Lili Disposable Packaging Probe" -passout "pass:$probe_password"
-          export LILI_MAC_SELF_SIGN_P12_PASSWORD="$probe_password"
-          export LILI_MAC_SELF_SIGN_P12_BASE64="$(base64 < "$probe_dir/identity.p12" | tr -d '\n')"
-          echo "::add-mask::$LILI_MAC_SELF_SIGN_P12_BASE64"
+          export LILI_PROBE_PASSWORD="$probe_password"
+          export LILI_PROBE_P12="$probe_dir/identity.p12"
+          export LILI_MAC_SELF_SIGN_BUNDLE="$(python -c 'import base64,json,os,pathlib; print(json.dumps({"p12":base64.b64encode(pathlib.Path(os.environ["LILI_PROBE_P12"]).read_bytes()).decode(),"password":os.environ["LILI_PROBE_PASSWORD"]},separators=(",",":")))')"
+          echo "::add-mask::$LILI_MAC_SELF_SIGN_BUNDLE"
           export LILI_MAC_SELF_SIGN_CERT_SHA256="$(openssl x509 -in "$probe_dir/cert.pem" -noout -fingerprint -sha256 | sed 's/^[^=]*=//' | tr -d ':' | tr '[:lower:]' '[:upper:]')"
           bash scripts/setup_macos_selfsign_ci.sh
           source "$GITHUB_ENV"
@@ -192,3 +193,23 @@ jobs:
           codesign --verify --strict -R "=$requirement" "$probe_dir/Lili-v2.app"
           QT_QPA_PLATFORM=cocoa ONEPIC_USE_DEMO_ASSETS=1 LOCALAPPDATA="$probe_dir/lili-data" LILI_DISABLE_CONTENT_UPDATES=1 LILI_DISABLE_PROGRAM_UPDATES=1 python -c 'import subprocess; subprocess.run(["dist/Lili.app/Contents/MacOS/Lili", "--smoke-test-ms", "2000"], timeout=60, check=True)'
           echo "CI setup, real self-signed DMG, cross-version identity and startup passed."
+
+  check_configured_identity:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check whether the repository signing identity is configured
+        env:
+          LILI_MAC_SELF_SIGN_BUNDLE: ${{ secrets.LILI_MAC_SELF_SIGN_BUNDLE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$LILI_MAC_SELF_SIGN_BUNDLE" ]]; then
+            echo "LILI_SIGNING_SECRET=missing"
+            exit 0
+          fi
+          export LILI_MAC_SELF_SIGN_CERT_SHA256="$(tr -d '\r\n' < packaging/macos/selfsign-certificate.sha256)"
+          bash scripts/setup_macos_selfsign_ci.sh
+          echo "LILI_SIGNING_SECRET=valid"
+          security delete-keychain "$RUNNER_TEMP/lili-selfsign/signing.keychain-db" >/dev/null 2>&1 || true

@@ -92,6 +92,21 @@ def test_mac_page_fallback_chooses_available_selfsigned_checksum(monkeypatch, se
         assert release.checksum_value == "b" * 64
 
 
+def test_mac_page_fallback_does_not_downgrade_when_signed_checksum_is_temporarily_unavailable(monkeypatch):
+    import onepic_desktop_pet.program_updates as module
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-macOS-arm64-unsigned.dmg")
+    tag_url = "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.23.999"
+    def opener(request, timeout=0):
+        url = request.full_url
+        if url.startswith("https://api.github.com/"):
+            raise urllib.error.HTTPError(url, 429, "limited", {}, None)
+        if url.endswith("/releases/latest"):
+            return RedirectResponse(b"", tag_url)
+        raise urllib.error.HTTPError(url, 503, "unavailable", {}, None)
+    with pytest.raises(ProgramUpdateError, match="网页线路也不可用"):
+        ProgramUpdateManager(app_version="0.23.355", opener=opener).check_latest()
+
+
 class RangeResponse(Response):
     def __init__(self, payload, status=200, headers=None, interrupt=False):
         super().__init__(payload)

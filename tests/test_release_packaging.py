@@ -45,7 +45,9 @@ def test_release_builds_installable_windows_app_and_macos_dmg() -> None:
     assert "GITHUB_REF_NAME" in workflow
     assert "-Version $version" in workflow
     assert "-Version 0.19.1" not in workflow
-    assert "Lili-macOS-${{ matrix.arch }}-unsigned.dmg" in workflow
+    assert "Lili-macOS-${{ matrix.arch }}-selfsigned.dmg" in workflow
+    assert "LILI_MAC_SELF_SIGN_BUNDLE" in workflow
+    assert "cmp release-assets/Lili-macOS-arm64-identity.txt release-assets/Lili-macOS-x64-identity.txt" in workflow
     assert 'dmg_file="dist/Lili-macOS-${release_arch}-unsigned.dmg"' in macos_build
     assert 'arm64) release_arch="arm64"' in macos_build
     assert 'x64|x86_64) release_arch="x64"' in macos_build

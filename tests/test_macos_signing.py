@@ -1,6 +1,7 @@
 """验证 Mac 正式签名缺少凭据时在构建前失败，防止误产未公证安装包。"""
 
 import base64
+import json
 import os
 import plistlib
 import subprocess
@@ -77,29 +78,41 @@ def test_free_identity_is_reused_and_bad_fingerprint_stops_ci_before_keychain(tm
     fake_gh.write_text('#!/bin/bash\nprintf "%s %s\\n" "$1" "$2" >> "$LILI_FAKE_GH_LOG"\nif [[ "$1" == secret ]]; then cat >/dev/null; fi\n')
     fake_gh.chmod(0o700)
     identity_dir = tmp_path / "identity"
+    pin = tmp_path / "public-pin.sha256"
     env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
-               LILI_SELF_SIGN_DIR=str(identity_dir), LILI_FAKE_GH_LOG=str(tmp_path / "gh.log"))
+               LILI_SELF_SIGN_DIR=str(identity_dir), LILI_SELF_SIGN_PIN_PATH=str(pin),
+               LILI_FAKE_GH_LOG=str(tmp_path / "gh.log"))
     args = ["bash", "scripts/configure_macos_selfsign_secrets.sh"]
     first = subprocess.run(args, cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
     assert first.returncode == 0, first.stderr
     p12 = identity_dir / "lili-selfsign.p12"
     password = identity_dir / "lili-selfsign-password"
+    bundle = identity_dir / "lili-selfsign-github-secret.json"
     original = p12.read_bytes()
     assert identity_dir.stat().st_mode & 0o777 == 0o700
     assert p12.stat().st_mode & 0o777 == 0o600
     assert password.stat().st_mode & 0o777 == 0o600
+    assert bundle.stat().st_mode & 0o777 == 0o600
+    assert base64.b64decode(json.loads(bundle.read_text())["p12"]) == original
     assert password.read_text() not in first.stdout
 
     second = subprocess.run(args, cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
     assert second.returncode == 0, second.stderr
     assert p12.read_bytes() == original
+    previous_calls = (tmp_path / "gh.log").read_text()
+    prepared = subprocess.run(args + ["--prepare-only"], cwd=ROOT, env=env,
+                              capture_output=True, text=True, timeout=30)
+    assert prepared.returncode == 0, prepared.stderr
+    assert p12.read_bytes() == original
+    assert (tmp_path / "gh.log").read_text() == previous_calls
+    assert (identity_dir / "lili-selfsign-fingerprint").read_text().isalnum()
+    assert pin.read_text().strip() == (identity_dir / "lili-selfsign-fingerprint").read_text()
 
     ci_dir = tmp_path / "runner"
     ci_dir.mkdir()
     ci_env = dict(os.environ, GITHUB_ACTIONS="true", RUNNER_OS="macOS",
                   RUNNER_TEMP=str(ci_dir), GITHUB_ENV=str(tmp_path / "github-env"),
-                  LILI_MAC_SELF_SIGN_P12_BASE64=base64.b64encode(original).decode(),
-                  LILI_MAC_SELF_SIGN_P12_PASSWORD=password.read_text(),
+                  LILI_MAC_SELF_SIGN_BUNDLE=bundle.read_text(),
                   LILI_MAC_SELF_SIGN_CERT_SHA256="0" * 64)
     ci = subprocess.run(["bash", "scripts/setup_macos_selfsign_ci.sh"], cwd=ROOT,
                         env=ci_env, capture_output=True, text=True, timeout=20)
@@ -107,3 +120,11 @@ def test_free_identity_is_reused_and_bad_fingerprint_stops_ci_before_keychain(tm
     assert "证书指纹与固定值不一致" in ci.stderr
     assert not (tmp_path / "github-env").exists()
     assert not (ci_dir / "lili-selfsign" / "identity.p12").exists()
+    assert not (ci_dir / "lili-selfsign" / "password").exists()
+
+    pin.write_text("0" * 64)
+    mismatch = subprocess.run(args + ["--prepare-only"], cwd=ROOT, env=env,
+                              capture_output=True, text=True, timeout=30)
+    assert mismatch.returncode != 0
+    assert "项目固定指纹不同" in mismatch.stderr
+    assert p12.read_bytes() == original

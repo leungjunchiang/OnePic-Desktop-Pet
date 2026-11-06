@@ -29,6 +29,6 @@ bash scripts/build_macos_signed.sh
 
 首次从旧临时签名版本升级到 Developer ID 版本，macOS 可能要求重新为当前应用授权辅助功能。以后维持同一个 Apple 团队、应用 Bundle ID 和安装位置，有助于系统把更新识别为同一应用；系统权限仍由用户控制，不能保证永不再次询问。
 
-目前 GitHub 自动发布工作流已预留另一条不公证的免费自签名路径，详见 `docs/macos-free-signing.md`；尚未接入本页的 Developer ID 公证路径。取得 Developer ID 证书后，仍需配置受保护的 CI 凭据、更新发行资产和更新器匹配规则，并在真实 Mac 上验证签名、公证、安装和升级授权后再发布。不要把签名 DMG 改名为 `unsigned` 直接覆盖旧资产。
+目前本地代码的 GitHub 发布工作流已准备不公证的免费自签名路径，详见 `docs/macos-free-signing.md`；尚未接入本页的 Developer ID 公证路径。取得 Developer ID 证书后，仍需配置受保护的 CI 凭据、更新发行资产和更新器匹配规则，并在真实 Mac 上验证签名、公证、安装和升级授权后再发布。不要把签名 DMG 改名为 `unsigned` 直接覆盖旧资产。
 
 参考：[Developer ID 证书](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/)、[Apple 公证流程](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)、[PyInstaller macOS 签名](https://pyinstaller.org/en/stable/feature-notes.html#macos-binary-code-signing)。
