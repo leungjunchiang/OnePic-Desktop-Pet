@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   probe:
+    timeout-minutes: 3
     runs-on: macos-latest
     steps:
       - name: Test whether two versions retain a certificate-anchored identity
@@ -22,8 +23,8 @@ jobs:
           probe_keychain="$probe_dir/probe.keychain-db"
           probe_cert="$probe_dir/probe.pem"
           cleanup() {
-            sudo security remove-trusted-cert -d "$probe_cert" >/dev/null 2>&1 || true
-            security delete-keychain "$probe_keychain" >/dev/null 2>&1 || true
+            perl -e 'alarm 15; exec @ARGV' sudo -n security remove-trusted-cert -d "$probe_cert" >/dev/null 2>&1 || true
+            perl -e 'alarm 15; exec @ARGV' security delete-keychain "$probe_keychain" >/dev/null 2>&1 || true
             rm -rf "$probe_dir"
           }
           trap cleanup EXIT
@@ -45,10 +46,14 @@ jobs:
           openssl pkcs12 -export -legacy -inkey "$probe_dir/key.pem" -in "$probe_cert" -out "$probe_dir/probe.p12" -name "Lili Ephemeral Code Signing Probe" -passout "pass:$probe_password"
           security create-keychain -p "$probe_password" "$probe_keychain"
           security unlock-keychain -p "$probe_password" "$probe_keychain"
-          security import "$probe_dir/probe.p12" -k "$probe_keychain" -P "$probe_password" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$probe_password" "$probe_keychain" >/dev/null
-          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$probe_cert"
-          security find-identity -v -p codesigning "$probe_keychain" | grep -F "Lili Ephemeral Code Signing Probe" >/dev/null
+          echo "Importing test identity"
+          perl -e 'alarm 40; exec @ARGV' security import "$probe_dir/probe.p12" -k "$probe_keychain" -P "$probe_password" -T /usr/bin/codesign
+          echo "Configuring test key access"
+          perl -e 'alarm 40; exec @ARGV' security set-key-partition-list -S apple-tool:,apple: -s -k "$probe_password" "$probe_keychain" >/dev/null
+          echo "Adding temporary code-signing trust"
+          perl -e 'alarm 40; exec @ARGV' sudo -n security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$probe_cert"
+          echo "Checking test identity"
+          perl -e 'alarm 40; exec @ARGV' security find-identity -v -p codesigning "$probe_keychain" | grep -F "Lili Ephemeral Code Signing Probe" >/dev/null
           for version in one two; do
             app="$probe_dir/$version.app"
             mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -59,7 +64,8 @@ jobs:
           <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>test.lili.stable.probe</string><key>CFBundleExecutable</key><string>LiliProbe</string></dict></plist>
           PLIST
             printf '%s\n' "$version" > "$app/Contents/Resources/version.txt"
-            codesign --force --timestamp=none --keychain "$probe_keychain" --sign "Lili Ephemeral Code Signing Probe" "$app"
+            echo "Signing test app $version"
+            perl -e 'alarm 40; exec @ARGV' codesign --force --timestamp=none --keychain "$probe_keychain" --sign "Lili Ephemeral Code Signing Probe" "$app"
             codesign --verify --strict "$app"
           done
           requirement="$(codesign --display -r - "$probe_dir/one.app" 2>&1 | sed -n 's/^designated => //p')"
