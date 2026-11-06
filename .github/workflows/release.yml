@@ -286,8 +286,13 @@ jobs:
           for asset in "${assets[@]}"; do
             test -f "$asset"
           done
-          release_notes="release-notes.md"
-          test -f "$release_notes"
+          release_notes="$(mktemp)"
+          trap 'rm -f "$release_notes"' EXIT
+          awk -v tag="$release_tag" '
+            /^# / { if (found) exit; found = ($2 == tag) }
+            found { print }
+            END { if (!found) exit 1 }
+          ' release-notes.md > "$release_notes"
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Uploading verified artifacts to existing release $release_tag."
             gh release upload "$release_tag" "${assets[@]}" \

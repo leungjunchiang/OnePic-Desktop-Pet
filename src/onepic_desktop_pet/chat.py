@@ -1,4 +1,4 @@
-"""设置支持 Mac QQ 应用包选择和异步只读适配检查；等待检查线程清理后才关闭设置。
+"""设置支持 Mac QQ 应用包选择、无障碍设置快捷入口和异步只读适配检查。
 
 本模块实现六毛的半透明聊天面板、AI 设置与生活提醒面板。
 
@@ -1126,8 +1126,13 @@ class AISettingsDialog(QDialog):
             self.qq_check_button.setObjectName('softButton')
             self.qq_check_button.clicked.connect(self._check_qq_music)
             qq_layout.addWidget(self.qq_check_button)
-            qq_note = QLabel('选择“应用程序”里的 QQMusic.app，无需进入包内。首次使用请打开并登录 QQ 音乐，'
-                             '再在系统设置的“隐私与安全性 → 辅助功能”允许 Lili。完成设置后，六毛自行点歌和续播。')
+            qq_permission_button = QPushButton('打开无障碍权限设置')
+            qq_permission_button.setObjectName('softButton')
+            qq_permission_button.clicked.connect(self._open_qq_accessibility_settings)
+            form.addRow('', qq_permission_button)
+            qq_note = QLabel('请先打开并登录 QQ 音乐。点击上方按钮，在系统设置的应用列表里打开 Lili 的开关。'
+                             '页面可能叫“设备控制和数据访问”“无障碍”或“辅助功能”。'
+                             '列表里没有 Lili 时，点“＋”添加“应用程序”里的 Lili.app。')
             qq_note.setWordWrap(True)
             qq_note.setObjectName('status')
             form.addRow('', qq_note)
@@ -1224,6 +1229,19 @@ class AISettingsDialog(QDialog):
             self._qq_check_thread.requestInterruption()
             return
         super().done(result)
+
+    def _open_qq_accessibility_settings(self) -> None:
+        from AppKit import NSWorkspace
+        from Foundation import NSURL
+
+        url = NSURL.URLWithString_('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility')
+        if NSWorkspace.sharedWorkspace().openURL_(url):
+            return
+        QMessageBox.information(
+            self, '打开无障碍权限设置',
+            '无法直接打开。请在系统设置里搜索“设备控制和数据访问”“无障碍”或“辅助功能”，'
+            '打开应用权限列表后允许 Lili。',
+        )
 
     def _check_qq_music(self):
         if self._qq_check_thread is not None or self._connection_thread is not None:

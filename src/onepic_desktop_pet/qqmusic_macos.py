@@ -3,6 +3,7 @@
 官方 Mac 客户端没有播放脚本字典。只在唯一 QQ 进程、明确播放栏和真实时间轴均可
 读取时确认播放；缺少权限或控件不匹配时明确失败，不猜测播放状态或改控其他应用。
 广度优先读取公开 AX 属性，兼容搜索子角色、占位文字与明确搜索按钮；只读自检不操作播放器。
+缺少无障碍权限时，引导用户使用六毛设置中的系统授权快捷入口。
 搜索前等待明确登录标记消失和搜索框就绪，不在登录恢复或验证界面输入歌曲。
 普通静态登录文字不覆盖完整播放栏证据；若客户端公开 AXHidden 则过滤隐藏子控件。
 登录、登录中与窗口未就绪分别说明，只读诊断输出阶段，不推测账户是否退出。
@@ -218,7 +219,10 @@ class NativeAX:
 
     def application(self):
         if not self.ax.AXIsProcessTrusted():
-            raise PermissionError('[Mac QQ / 权限] 请在 macOS“系统设置 → 隐私与安全性 → 辅助功能”允许当前 Lili；升级后旧授权可能需要为当前版本重新选择，然后完全退出并重新打开六毛。')
+            raise PermissionError(
+                '[Mac QQ / 权限] 请在六毛设置的 QQ 音乐区域点击“打开无障碍权限设置”，'
+                '在系统应用权限列表中允许 Lili，再退出并重新打开六毛。'
+            )
         apps = list(self.apps.runningApplicationsWithBundleIdentifier_(BUNDLE_ID))
         if len(apps) != 1:
             raise OSError('[Mac QQ / 进程] 请打开并登录 QQ 音乐；需要唯一的 QQ 音乐进程。')
