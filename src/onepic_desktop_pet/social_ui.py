@@ -20,6 +20,7 @@
 首页搭子卡片通往只展示 TA 与双方关系的搭子详情，专注按今日、工作计划、训导主任与记录分层；网络诊断归入我的，等宽专注导航与独立免战日保持账号边界。
 本人一次开放训导范围，搭子直接监督；今日页静默展示恢复的训导事项，备注优先识别身份。
 搭子卡片直接展示串门、加油、嘲讽；投喂按配置聚合，持久提醒状态在身份区显示标签。
+首页搭子列表用浅青底和细边框标记选中卡片，保留文字与按钮的对比度。
 卡片按实际视口宽度计算内容高度，在线 TTL 到期统一显示离线；
 按钮统一提供 hover、按下与忙碌反馈；互动 HTTP 请求使用既有 worker，配置读取不随统计刷新。
 账号注册会明确显示“等待邮箱确认”状态，并允许用户重新发送确认邮件；
@@ -3568,6 +3569,10 @@ class SocialHubDialog(QDialog):
             QLabel#status { background:#e1efec; color:#087f74; border-radius:9px; padding:7px 10px; }
             QFrame#card, QWidget#buddyCard { background:#ffffff; border:1px solid #d6e1e6; border-radius:14px; }
             QLineEdit, QListWidget { background:#ffffff; border:1px solid #b9c8d0; border-radius:10px; padding:7px; }
+            QListWidget#homeBuddyList { selection-background-color:#e5f3ee; selection-color:#203847; }
+            QListWidget#homeBuddyList::item:selected {
+                background:#e5f3ee; color:#203847; border:1px solid #84b9ad; border-radius:10px;
+            }
             QScrollArea#pageScroll { background:transparent; border:0; }
             QTabWidget::pane { border:0; }
             QTabBar::tab { min-width:0px; padding:10px 12px; color:#526872; }
@@ -4345,7 +4350,9 @@ class SocialHubDialog(QDialog):
         buddy_tools.addWidget(add_buddy)
         buddy_tools.addStretch()
         buddies_layout.addLayout(buddy_tools)
-        self.buddies = QListWidget(); self.buddies.setSpacing(5)
+        self.buddies = QListWidget()
+        self.buddies.setObjectName("homeBuddyList")
+        self.buddies.setSpacing(5)
         self.buddies.viewport().installEventFilter(self)
         self.buddies.setMinimumHeight(46); self.buddies.setMaximumHeight(360)
         self.buddies.itemDoubleClicked.connect(lambda item: self.open_buddy_study(item.data(Qt.ItemDataRole.UserRole)))
