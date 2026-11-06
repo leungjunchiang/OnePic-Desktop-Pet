@@ -6,17 +6,12 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
   probe:
     timeout-minutes: 15
     runs-on: macos-latest
     steps:
-      - name: Cancel the earlier stalled disposable probe
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/42153123884/cancel" || true
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -87,6 +82,8 @@ jobs:
           codesign --verify --strict -R "=$requirement" "$probe_dir/two.app"
           reverse="$(codesign --display -r - "$probe_dir/two.app" 2>&1 | sed -n 's/^designated => //p')"
           codesign --verify --strict -R "=$reverse" "$probe_dir/one.app"
+          mkdir -p "$GITHUB_WORKSPACE/probe-artifacts"
+          tar -C "$probe_dir" -czf "$GITHUB_WORKSPACE/probe-artifacts/identities.tgz" one.app two.app
           echo "Two different app versions satisfy each other's designated requirements."
           echo "Building the actual Lili application"
           mkdir -p build/macos
@@ -108,3 +105,90 @@ jobs:
           echo "Running the signed Lili app in an isolated data directory"
           QT_QPA_PLATFORM=cocoa ONEPIC_USE_DEMO_ASSETS=1 LOCALAPPDATA="$probe_dir/lili-data" LILI_DISABLE_CONTENT_UPDATES=1 LILI_DISABLE_PROGRAM_UPDATES=1 python -c 'import subprocess; subprocess.run(["dist/Lili.app/Contents/MacOS/Lili", "--smoke-test-ms", "2000"], timeout=60, check=True)'
           echo "Signed Lili bundle, cross-version identity and startup passed."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: disposable-selfsign-identities
+          path: probe-artifacts/identities.tgz
+          if-no-files-found: error
+
+  untrusted_identity_check:
+    needs: probe
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: disposable-selfsign-identities
+      - name: Verify cross-version identity without installing the certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf identities.tgz
+          codesign --verify --strict one.app
+          codesign --verify --strict two.app
+          requirement="$(codesign --display -r - one.app 2>&1 | sed -n 's/^designated => //p')"
+          test -n "$requirement"
+          codesign --verify --strict -R "=$requirement" two.app
+          reverse="$(codesign --display -r - two.app 2>&1 | sed -n 's/^designated => //p')"
+          codesign --verify --strict -R "=$reverse" one.app
+          echo "Self-signed app identities match without trusting the certificate on this runner."
+
+  real_packaging:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Exercise isolated CI credentials and self-signed DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          probe_dir="$RUNNER_TEMP/lili-real-probe"
+          mkdir -p "$probe_dir"
+          cleanup() {
+            perl -e 'alarm 15; exec @ARGV' security delete-keychain "$RUNNER_TEMP/lili-selfsign/signing.keychain-db" >/dev/null 2>&1 || true
+            rm -rf "$probe_dir" "$RUNNER_TEMP/lili-selfsign"
+          }
+          trap cleanup EXIT
+          cat > "$probe_dir/openssl.cnf" <<'CONFIG'
+          [req]
+          prompt=no
+          distinguished_name=dn
+          x509_extensions=ext
+          [dn]
+          CN=Lili Disposable Packaging Probe
+          [ext]
+          basicConstraints=critical,CA:TRUE
+          keyUsage=critical,digitalSignature,keyCertSign
+          extendedKeyUsage=codeSigning
+          subjectKeyIdentifier=hash
+          authorityKeyIdentifier=keyid:always
+          CONFIG
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$probe_dir/key.pem" -out "$probe_dir/cert.pem" -days 2 -config "$probe_dir/openssl.cnf" -extensions ext >/dev/null 2>&1
+          probe_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$probe_password"
+          openssl pkcs12 -export -legacy -inkey "$probe_dir/key.pem" -in "$probe_dir/cert.pem" -out "$probe_dir/identity.p12" -name "Lili Disposable Packaging Probe" -passout "pass:$probe_password"
+          export LILI_MAC_SELF_SIGN_P12_PASSWORD="$probe_password"
+          export LILI_MAC_SELF_SIGN_P12_BASE64="$(base64 < "$probe_dir/identity.p12" | tr -d '\n')"
+          echo "::add-mask::$LILI_MAC_SELF_SIGN_P12_BASE64"
+          export LILI_MAC_SELF_SIGN_CERT_SHA256="$(openssl x509 -in "$probe_dir/cert.pem" -noout -fingerprint -sha256 | sed 's/^[^=]*=//' | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          bash scripts/setup_macos_selfsign_ci.sh
+          source "$GITHUB_ENV"
+          export LILI_MAC_SELF_SIGN_IDENTITY LILI_MAC_SELF_SIGN_KEYCHAIN
+          ONEPIC_MAC_ARCH=arm64 bash scripts/build_macos.sh
+          test -s dist/Lili-macOS-arm64-selfsigned.dmg
+          (cd dist && shasum -a 256 -c Lili-macOS-arm64-selfsigned.dmg.sha256)
+          ditto dist/Lili.app "$probe_dir/Lili-v2.app"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 0.23.999' "$probe_dir/Lili-v2.app/Contents/Info.plist"
+          codesign --force --deep --timestamp=none --keychain "$LILI_MAC_SELF_SIGN_KEYCHAIN" --sign "$LILI_MAC_SELF_SIGN_IDENTITY" "$probe_dir/Lili-v2.app"
+          codesign --verify --deep --strict "$probe_dir/Lili-v2.app"
+          requirement="$(codesign --display -r - dist/Lili.app 2>&1 | sed -n 's/^designated => //p')"
+          codesign --verify --strict -R "=$requirement" "$probe_dir/Lili-v2.app"
+          QT_QPA_PLATFORM=cocoa ONEPIC_USE_DEMO_ASSETS=1 LOCALAPPDATA="$probe_dir/lili-data" LILI_DISABLE_CONTENT_UPDATES=1 LILI_DISABLE_PROGRAM_UPDATES=1 python -c 'import subprocess; subprocess.run(["dist/Lili.app/Contents/MacOS/Lili", "--smoke-test-ms", "2000"], timeout=60, check=True)'
+          echo "CI setup, real self-signed DMG, cross-version identity and startup passed."

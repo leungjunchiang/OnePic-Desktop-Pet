@@ -51,6 +51,47 @@ def test_program_version_comparison_is_numeric() -> None:
     assert version_key("0.22.45") == (0, 22, 45)
 
 
+@pytest.mark.parametrize("arch", ["arm64", "x64"])
+@pytest.mark.parametrize("include_selfsigned", [True, False])
+def test_mac_release_prefers_selfsigned_but_supports_older_unsigned(monkeypatch, arch, include_selfsigned):
+    import onepic_desktop_pet.program_updates as module
+    unsigned = f"Lili-macOS-{arch}-unsigned.dmg"
+    selfsigned = f"Lili-macOS-{arch}-selfsigned.dmg"
+    monkeypatch.setattr(module, "_asset_name", lambda: unsigned)
+    names = [unsigned] + ([selfsigned] if include_selfsigned else [])
+    base = "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/download/v0.23.999/"
+    payload = {"tag_name": "v0.23.999", "html_url": base, "assets": [
+        {"name": name, "browser_download_url": base + name, "digest": "sha256:" + "a" * 64}
+        for name in names]}
+    manager = ProgramUpdateManager(app_version="0.23.355", opener=lambda *_a, **_k: Response(json.dumps(payload).encode()))
+    release = manager.check_latest().release
+    assert release is not None
+    assert release.asset_name == (selfsigned if include_selfsigned else unsigned)
+    assert release.checksum_value == "a" * 64
+
+
+@pytest.mark.parametrize("selfsigned_exists", [True, False])
+def test_mac_page_fallback_chooses_available_selfsigned_checksum(monkeypatch, selfsigned_exists):
+    import onepic_desktop_pet.program_updates as module
+    monkeypatch.setattr(module, "_asset_name", lambda: "Lili-macOS-arm64-unsigned.dmg")
+    tag_url = "https://github.com/leungjunchiang/OnePic-Desktop-Pet/releases/tag/v0.23.999"
+    def opener(request, timeout=0):
+        url = request.full_url
+        if url.startswith("https://api.github.com/"):
+            raise urllib.error.HTTPError(url, 429, "limited", {}, None)
+        if url.endswith("/releases/latest"):
+            return RedirectResponse(b"", tag_url)
+        assert url.endswith("-selfsigned.dmg.sha256")
+        if not selfsigned_exists:
+            raise urllib.error.HTTPError(url, 404, "missing", {}, None)
+        return Response(("b" * 64).encode())
+    release = ProgramUpdateManager(app_version="0.23.355", opener=opener).check_latest().release
+    assert release is not None
+    assert release.asset_name.endswith("-selfsigned.dmg" if selfsigned_exists else "-unsigned.dmg")
+    if selfsigned_exists:
+        assert release.checksum_value == "b" * 64
+
+
 class RangeResponse(Response):
     def __init__(self, payload, status=200, headers=None, interrupt=False):
         super().__init__(payload)
