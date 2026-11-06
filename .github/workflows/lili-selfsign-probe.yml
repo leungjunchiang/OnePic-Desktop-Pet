@@ -42,7 +42,7 @@ jobs:
           authorityKeyIdentifier=keyid:always
           CONFIG
           openssl req -x509 -newkey rsa:2048 -nodes -keyout "$probe_dir/key.pem" -out "$probe_cert" -days 2 -config "$probe_dir/openssl.cnf" -extensions ext >/dev/null 2>&1
-          openssl pkcs12 -export -inkey "$probe_dir/key.pem" -in "$probe_cert" -out "$probe_dir/probe.p12" -name "Lili Ephemeral Code Signing Probe" -passout "pass:$probe_password"
+          openssl pkcs12 -export -legacy -inkey "$probe_dir/key.pem" -in "$probe_cert" -out "$probe_dir/probe.p12" -name "Lili Ephemeral Code Signing Probe" -passout "pass:$probe_password"
           security create-keychain -p "$probe_password" "$probe_keychain"
           security unlock-keychain -p "$probe_password" "$probe_keychain"
           security import "$probe_dir/probe.p12" -k "$probe_keychain" -P "$probe_password" -T /usr/bin/codesign
