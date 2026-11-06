@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""按北京时间合并专注区间，异常明细仅影响与它相交的统计范围。
 
 Interval facts and the single focus-time aggregation primitive.
 
@@ -325,12 +325,16 @@ def aggregate_focus_time(
             errors.append(f"invalid_segment:{index}")
             continue
         raw_count += 1
+        effective_end = segment.effective_end(moment)
+        clipped = _clip_interval(segment.start_at, effective_end, window_start, window_end)
+        # Invalid rows outside the selected dates belong to other reports.
+        # Still diagnose reversed intervals if their recorded start is in this range.
+        if clipped is None and not window_start <= segment.start_at < window_end:
+            continue
         validation_error = segment.validation_error(moment)
         if validation_error:
             errors.append(f"{validation_error}:{segment.segment_id or index}")
             continue
-        effective_end = segment.effective_end(moment)
-        clipped = _clip_interval(segment.start_at, effective_end, window_start, window_end)
         if clipped:
             valid.append((segment, clipped[0], clipped[1]))
 

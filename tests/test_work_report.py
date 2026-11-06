@@ -1,3 +1,4 @@
+"""验证工作报告的日期范围、异常隔离和跨设备专注统计。"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -444,3 +445,48 @@ def test_report_bar_chart_scales_tallest_bar_below_axis_ceiling() -> None:
     assert min(rect.top() for rect in visible_bars) > chart._plot_rect.top()
 
     chart.close(); chart.deleteLater(); app.processEvents()
+
+
+def test_month_navigation_lands_on_complete_september() -> None:
+    today = datetime(2026, 11, 6).date()
+    november = standard_report_range("month", today)
+    october = move_report_range("month", *november, -1)
+    september = move_report_range("month", *october, -1)
+    assert tuple(day.isoformat() for day in october) == ("2026-10-01", "2026-11-01")
+    assert tuple(day.isoformat() for day in september) == ("2026-09-01", "2026-10-01")
+    assert report_range_title("month", *september, today)[0] == "2026年9月"
+    assert move_report_range("month", *september, 1) == october
+
+
+def test_bad_local_rows_do_not_hide_a_synced_month_and_sources_explain_its_total(tmp_path) -> None:
+    now = datetime(2026, 11, 6, 12)
+    timer = WorkTimerModel(path=tmp_path / "timer.json", now_provider=lambda: now, persist=False)
+    daily = DailyCompanionStats(path=tmp_path / "daily.json", now_provider=lambda: now, persist=False)
+    start = datetime(2026, 9, 1).date()
+    end = datetime(2026, 10, 1).date()
+    canonical = [
+        {"record_id": "one", "started_at": "2026-09-09T09:00:00+08:00", "seconds": 3600, "device_id": "pc"},
+        {"record_id": "two", "started_at": "2026-09-09T09:30:00+08:00", "seconds": 3600, "device_id": "mac"},
+    ]
+    bad = [
+        {"record_id": "bad-in-range", "started_at": "2026-09-19T09:00:00+08:00", "seconds": 90000, "device_id": "pc"},
+        {"record_id": "bad-other-month", "started_at": "2026-10-19T09:00:00+08:00", "seconds": 90000, "device_id": "pc"},
+    ]
+    reports = []
+    for index, (device, records) in enumerate((("mac", canonical), ("pc", [*canonical, *bad]))):
+        analytics = FocusAnalyticsStore(path=tmp_path / f"device-{index}.json", now_provider=lambda: now, persist=False)
+        analytics._state["records"] = records
+        report = build_work_report(
+            analytics, timer, daily, selected_range=("month", start, end), now=now, current_device_id=device,
+        )
+        reports.append(report["month"])
+        assert not report["month"].get("consistency_error")
+        assert report["month"]["total_seconds"] == 5400
+        sources = report["month"]["device_focus_totals"]
+        assert len(sources) == 2 and all(row["seconds"] == 3600 for row in sources)
+        assert sum(row["is_local"] for row in sources) == 1
+    assert reports[0]["data_quality"]["consistency_errors"] == []
+    assert reports[1]["data_quality"]["consistency_errors"] == ["overlong_interval:bad-in-range"]
+    assert [row["label"] for row in reports[0]["device_focus_totals"]] == [
+        row["label"] for row in reports[1]["device_focus_totals"]
+    ]

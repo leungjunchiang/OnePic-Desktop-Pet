@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""按自然月和自定义日期展示专注区间，独立显示设备来源与异常明细。
 
 实际开工复用时间轴背后的原始 FocusSession 和北京时间 06:00 口径，专注分析仍从自然日区间派生。
 按需计算并展示六毛工作报告，不生成或保存报告图片。
@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, datetime, timedelta
+from hashlib import sha256
 from time import monotonic
 from typing import Any, Callable
 
@@ -37,7 +39,7 @@ from PySide6.QtWidgets import (
 
 from .diary import DailyCompanionStats
 from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore
-from .focus_segments import FocusSegment, parse_focus_timestamp
+from .focus_segments import FocusSegment, aggregate_focus_time, parse_focus_timestamp
 from .work_timer import WorkTimerModel, format_work_duration
 from .lifecycle_log import lifecycle_log
 from .time_service import now_beijing, to_beijing
@@ -314,24 +316,18 @@ def move_report_range(period: str, start: date, end: date, direction: int, *, fi
     if key == "week":
         delta = timedelta(days=step if fine else 7 * step)
         return start + delta, end + delta
-    if key == "month":
-        if not fine:
-            if (end - start).days == 30:
-                delta = timedelta(days=30 * step)
-                return start + delta, end + delta
-            candidate = _next_month(start) if step > 0 else (start.replace(day=1) - timedelta(days=1)).replace(day=1)
-            return candidate, _next_month(candidate)
-        delta = timedelta(days=step)
+    if key == "month" and not fine and (start, end) == standard_report_range(key, start):
+        candidate = _next_month(start) if step > 0 else start - timedelta(days=1)
+        return standard_report_range(key, candidate)
+    if key == "month" and not fine:
+        delta = (end - start) * step
         return start + delta, end + delta
-    if key == "year":
-        if not fine:
-            if (end - start).days == 365:
-                delta = timedelta(days=365 * step)
-                return start + delta, end + delta
-            candidate = _shift_year(start, step).replace(month=1, day=1)
-            return candidate, candidate.replace(year=candidate.year + 1)
-        delta = timedelta(days=step)
-        return start + delta, end + delta
+    if key == "year" and not fine:
+        if (end - start).days == 365:
+            delta = timedelta(days=365 * step)
+            return start + delta, end + delta
+        candidate = _shift_year(start, step).replace(month=1, day=1)
+        return candidate, candidate.replace(year=candidate.year + 1)
     delta = timedelta(days=step)
     return start + delta, end + delta
 
@@ -362,13 +358,12 @@ def report_range_title(period: str, start: date, end: date, today: date) -> tupl
         )
         return title, "7 天", "回到本周"
     if key == "month":
-        if standard:
-            title = f"{start.year}年{start.month}月"
-            width = f"{(end - start).days} 天"
-        else:
-            title = f"{start:%m/%d} – {(end - timedelta(days=1)):%m/%d}"
-            width = f"{(end - start).days} 天"
-        return title, width, "回到本月"
+        title = (
+            f"{start.year}年{start.month}月"
+            if (start, end) == standard_report_range(key, start)
+            else f"{start:%m/%d} – {(end - timedelta(days=1)):%m/%d}"
+        )
+        return title, f"{(end - start).days} 天", "回到本月"
     if standard:
         title = f"{start.year}年"
         width = f"{(end - start).days} 天"
@@ -450,6 +445,26 @@ def _populate_annual_overview(item: dict[str, Any]) -> None:
     item["busiest_day"] = dict(busiest_day) if busiest_day is not None else None
     item["busiest_month"] = dict(busiest_month) if busiest_month is not None else None
     item["hundred_hour_date"] = hundred_hour_date
+
+
+def _device_focus_totals(
+    segments: list[FocusSegment], start: datetime, end: datetime, now: datetime, current_device_id: str,
+) -> list[dict[str, Any]]:
+    """Explain the account union with the same date bounds for each source."""
+    groups: dict[str, list[FocusSegment]] = defaultdict(list)
+    for segment in segments:
+        groups[segment.device_id].append(segment)
+    rows = []
+    for device_id, facts in groups.items():
+        seconds = aggregate_focus_time(facts, start, end, now=now).total_seconds
+        if seconds:
+            label = f"设备 {sha256(device_id.encode()).hexdigest()[:6].upper()}" if device_id else "未标记设备"
+            rows.append({
+                "label": label,
+                "seconds": seconds,
+                "is_local": bool(device_id and device_id == current_device_id),
+            })
+    return sorted(rows, key=lambda row: (-row["seconds"], row["label"]))
 
 
 def build_work_report(
@@ -664,18 +679,25 @@ def build_work_report(
             period=selected_key,
             extra_segments=selected_extras or None,
         )
-        if selected_aggregate.errors:
-            selected_errors.extend(str(item) for item in selected_aggregate.errors)
+        # The interval union already excludes malformed records. Only
+        # inconsistent projections can suppress an otherwise usable report.
+        selected_errors.extend(
+            error for error in selected_aggregate.errors
+            if error.startswith(("hourly_mismatch:", "daily_mismatch:", "metric_invariant_violation"))
+        )
+        selected_segments = analytics.range_segments(
+            range_start_at, range_end_at, extra_segments=selected_extras or None,
+        )
+        if selected_key == "month":
+            report[selected_key]["device_focus_totals"] = _device_focus_totals(
+                selected_segments, range_start_at, range_end_at, moment, current_device_id,
+            )
         selected_provenance = {
             "account_id": str(account_id or ""),
             "current_device_id": str(current_device_id or ""),
             "selected_start": range_start_at.isoformat(),
             "selected_end": range_end_at.isoformat(),
-            "segment_count": len(analytics.range_segments(
-                range_start_at,
-                range_end_at,
-                extra_segments=selected_extras or None,
-            )),
+            "segment_count": len(selected_segments),
             "segments": [
                 {
                     "segment_id": str(segment.segment_id or ""),
@@ -683,16 +705,12 @@ def build_work_report(
                     "start_at": segment.start_at.isoformat(),
                     "end_at": segment.end_at.isoformat() if segment.end_at else None,
                 }
-                for segment in analytics.range_segments(
-                    range_start_at,
-                    range_end_at,
-                    extra_segments=selected_extras or None,
-                )[:500]
+                for segment in selected_segments[:500]
             ],
             "aggregate_total_seconds": int(selected_aggregate.total_seconds),
             "aggregate_daily_sum_seconds": sum(selected_aggregate.daily.values()),
             "range_summary_total_seconds": int(report[selected_key].get("total_seconds", 0) or 0),
-            "selected_errors": selected_errors,
+            "selected_errors": list(dict.fromkeys([*selected_errors, *selected_aggregate.errors])),
         }
         _mark_consistency_error(
             report[selected_key],
@@ -704,6 +722,14 @@ def build_work_report(
             "end": (selected_end - timedelta(days=1)).isoformat(),
         }
         report["selected_range_provenance"] = selected_provenance
+    if selected_key != "month":
+        month_start, month_end = standard_report_range("month", moment.date())
+        start_at = datetime.combine(month_start, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
+        end_at = datetime.combine(month_end, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
+        report["month"]["device_focus_totals"] = _device_focus_totals(
+            analytics.range_segments(start_at, end_at, extra_segments=display_live_segments),
+            start_at, end_at, moment, current_device_id,
+        )
     selected_day_page = custom_range_selected and selected_key == "day"
     # The live aggregate above is the same interval union used by the daily
     # rows.  Reuse its day projection instead of applying a second max/cache
@@ -2127,20 +2153,31 @@ class WorkReportDialog(QDialog):
         if not bool(quality.get("trusted", True)):
             days = len(quality.get("untrusted_days") or [])
             compatibility_days = len(quality.get("legacy_compatibility_days") or [])
+            excluded = len(quality.get("consistency_errors") or [])
+            warnings = []
+            if days:
+                warnings.append(f"{days} 天含旧版重复检查点")
             if compatibility_days:
-                warning_text = (
-                    f"ⓘ 已跳过 {days} 天旧版重复检查点；"
-                    f"其中 {compatibility_days} 天保留服务器日级兼容数据。"
-                )
-            else:
-                warning_text = (
-                    f"ⓘ 已跳过 {days} 天旧版重复检查点；"
-                    "原始记录仍保留，仅未作为可信区间统计。"
-                )
-            warning = QLabel(warning_text)
-            warning.setObjectName("reportWarning")
-            warning.setWordWrap(True)
-            layout.addWidget(warning)
+                warnings.append(f"{compatibility_days} 天使用服务器日级兼容数据")
+            if excluded:
+                warnings.append(f"已排除 {excluded} 条异常明细")
+            if warnings:
+                warning = QLabel("ⓘ " + "。".join(warnings) + "。")
+                warning.setObjectName("reportWarning")
+                warning.setWordWrap(True)
+                layout.addWidget(warning)
+
+        device_totals = data.get("device_focus_totals") or []
+        if key == "month" and device_totals:
+            device_note = QLabel("按设备查看 · 报表总时长合并同一账号的记录，重叠时段只计一次。")
+            device_note.setObjectName("reportHint")
+            device_note.setWordWrap(True)
+            hero_layout.addWidget(device_note)
+            for item in device_totals:
+                label = item["label"] + ("（本机）" if item["is_local"] else "")
+                row = QLabel(f"{label}  ·  {format_work_duration(item['seconds'])}")
+                row.setObjectName("reportHint")
+                hero_layout.addWidget(row)
 
         daily_rows = data.get("daily") or []
         try:
@@ -2148,15 +2185,10 @@ class WorkReportDialog(QDialog):
         except ValueError:
             period_start = None
         if key == "month":
-            if report_range_is_standard(
-                key,
-                range_start,
-                range_end,
-                datetime.now(BEIJING_TIMEZONE).date(),
-            ):
+            if (range_start, range_end) == standard_report_range(key, range_start):
                 layout.addWidget(
                     self._heatmap_card(
-                        "本月工作日历",
+                        "工作日历",
                         "颜色越深表示当天有效工作时间越长；悬停日期可查看具体数值。",
                         daily_rows,
                     )
