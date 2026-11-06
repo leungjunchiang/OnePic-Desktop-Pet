@@ -1,5 +1,6 @@
 """
 程序更新说明第三方备用线路及校验；系统更新重启走独立本地落盘与限时退出路径。
+macOS 直接接收系统发给六毛的退出请求，避免 Qt 窗口关闭检查取消关机。
 源码启动器可标注 QQ 在线开发版的窗口和托盘，帮助区分仍在运行的已安装版本。
 
 本模块（区分关闭窗口与真正退出应用）管理 Lili 应用生命周期、精简系统托盘菜单和退出时的位置保存。
@@ -81,7 +82,9 @@ from .program_updates import (
     UpdateState,
 )
 from .qt_lifecycle import wait_for_thread
-from .system_shutdown import ConfirmedShutdownDeadline, WindowsSessionShutdownBridge
+from .system_shutdown import (
+    ConfirmedShutdownDeadline, MacSessionShutdownBridge, WindowsSessionShutdownBridge,
+)
 from .lifecycle_log import configure_lifecycle_logging, lifecycle_log
 from .resources import resource_path
 from .update_worker import (
@@ -383,9 +386,8 @@ class DesktopPetApplication(QObject):
         # message boxes, or speech bubbles.
         super().__init__()
         if sys.platform == "darwin":
-            # macOS shutdown / Dock termination arrives as an application-level
-            # QEvent.Quit. Route it through the bounded local-save path before
-            # the normal window close-to-tray policy can reject termination.
+            # Fallback for Qt-originated quit events. Native AppleEvents are
+            # handled by the Cocoa bridge before Qt can veto the request.
             self.qt_app.installEventFilter(self)
         self.qt_app.aboutToQuit.connect(self._on_about_to_quit)
         lifecycle_log("application.controller.created", self.qt_app)
@@ -412,6 +414,7 @@ class DesktopPetApplication(QObject):
         self._quit_retry_scheduled = False
         self._system_shutdown_confirmed = False
         self._system_shutdown_bridge = None
+        self._mac_shutdown_bridge = None
         if sys.platform == "win32":
             self._system_shutdown_bridge = WindowsSessionShutdownBridge(
                 self._confirm_system_shutdown
@@ -436,6 +439,11 @@ class DesktopPetApplication(QObject):
             self.tray_menu = None
         self._dock_controller = install_dock_menu(self.window.unified_menu_model)
         self._status_item_controller = install_status_item(self.window.unified_menu_model)
+        if sys.platform == "darwin" and self.qt_app.platformName() == "cocoa":
+            try:
+                self._mac_shutdown_bridge = MacSessionShutdownBridge(self._confirm_system_shutdown)
+            except Exception:
+                LOGGER.exception("[SystemShutdown] Mac native quit handler unavailable; using Qt fallback")
         self.window.owner_nickname_changed.connect(self._owner_nickname_changed)
 
     def _on_about_to_quit(self) -> None:
@@ -775,6 +783,13 @@ class DesktopPetApplication(QObject):
         if bridge is not None:
             self.qt_app.removeNativeEventFilter(bridge)
             self._system_shutdown_bridge = None
+        mac_bridge = getattr(self, "_mac_shutdown_bridge", None)
+        if mac_bridge is not None:
+            try:
+                mac_bridge.close()
+            except Exception:
+                LOGGER.exception("[SystemShutdown] failed to remove Mac native quit handler")
+            self._mac_shutdown_bridge = None
         lifecycle_log("qapplication.quit.call", self.qt_app)
         self.qt_app.quit()
 

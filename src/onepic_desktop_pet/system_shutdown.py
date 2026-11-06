@@ -1,7 +1,7 @@
-"""系统会话结束支持：Windows 原生桥与跨平台限时退出。
+"""系统会话结束支持：Windows 会话消息、macOS 原生退出请求和跨平台限时退出。
 
 Windows 原生桥只处理 WM_QUERYENDSESSION / WM_ENDSESSION，不改变普通关窗、
-托盘或手动退出；macOS 应用级退出事件由 app.py 接入同一条本地保存路径。
+托盘或手动退出；macOS 原生 Quit AppleEvent 在 Qt 的关闭窗口检查前接入本地保存路径。
 系统确认退出后不等待网络或析构运行中的 Qt 线程，避免阻止系统关机或重启。
 """
 
@@ -19,6 +19,7 @@ from PySide6.QtCore import QAbstractNativeEventFilter
 LOGGER = logging.getLogger(__name__)
 WM_QUERYENDSESSION = 0x0011
 WM_ENDSESSION = 0x0016
+MAC_QUIT_EVENT = (int.from_bytes(b"aevt", "big"), int.from_bytes(b"quit", "big"))
 
 
 class ConfirmedShutdownDeadline:
@@ -46,6 +47,76 @@ class ConfirmedShutdownDeadline:
 
     def local_save_finished(self) -> None:
         self._saved.set()
+
+
+_mac_quit_target_class = None
+
+
+def _mac_quit_target_type():
+    global _mac_quit_target_class
+    if _mac_quit_target_class is None:
+        from Foundation import NSObject
+        from objc import selector
+
+        class LiliMacQuitEventTarget(NSObject):
+            def receiveQuitEvent_withReplyEvent_(self, _event, _reply):
+                # An empty reply acknowledges the request. In particular, do
+                # not call NSApp.terminate_() and report Qt's NSTerminateCancel
+                # back to loginwindow before the bounded exit has run.
+                try:
+                    self.confirmed()
+                except Exception:
+                    LOGGER.exception("[SystemShutdown] native Mac quit preparation failed")
+
+            receiveQuitEvent_withReplyEvent_ = selector(
+                receiveQuitEvent_withReplyEvent_, signature=b"v@:@@",
+            )
+
+        _mac_quit_target_class = LiliMacQuitEventTarget
+    return _mac_quit_target_class
+
+
+class MacSessionShutdownBridge:
+    """Handle only the process's Quit AppleEvent; keep Qt's AppKit delegate."""
+
+    def __init__(self, confirmed: Callable[[], None]):
+        from AppKit import NSApplication, NSApplicationDidFinishLaunchingNotification
+        from Foundation import NSAppleEventManager, NSNotificationCenter
+
+        self._manager = NSAppleEventManager.sharedAppleEventManager()
+        self._center = NSNotificationCenter.defaultCenter()
+        self._target = _mac_quit_target_type().alloc().init()
+        self._target.confirmed = confirmed
+        # AppKit installs its default event handlers during launch. Reassert
+        # our one handler afterwards when QApplication hasn't entered exec yet.
+        self._observer = self._center.addObserverForName_object_queue_usingBlock_(
+            NSApplicationDidFinishLaunchingNotification, NSApplication.sharedApplication(),
+            None, self._on_app_launched,
+        )
+        try:
+            self._register()
+        except Exception:
+            self._center.removeObserver_(self._observer)
+            raise
+
+    def _register(self):
+        self._manager.setEventHandler_andSelector_forEventClass_andEventID_(
+            self._target, b"receiveQuitEvent:withReplyEvent:", *MAC_QUIT_EVENT,
+        )
+
+    def _on_app_launched(self, _notification):
+        try:
+            self._register()
+        except Exception:
+            LOGGER.exception("[SystemShutdown] could not reassert Mac quit handler")
+
+    def close(self):
+        """Remove the process-owned handler during final ordinary teardown."""
+        if self._observer is None:
+            return
+        self._center.removeObserver_(self._observer)
+        self._observer = None
+        self._manager.removeEventHandlerForEventClass_andEventID_(*MAC_QUIT_EVENT)
 
 
 class WindowsSessionShutdownBridge(QAbstractNativeEventFilter):

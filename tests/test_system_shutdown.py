@@ -1,4 +1,4 @@
-"""系统重启查询、取消、本地专注落盘及限时退出回归；不执行真实关机。"""
+"""系统重启查询、macOS 原生退出回执、本地专注落盘及限时退出回归。"""
 
 import os
 import subprocess
@@ -192,6 +192,79 @@ def test_local_pause_still_persists_if_fact_seal_fails(tmp_path, monkeypatch):
         assert not WorkTimerModel(path=tmp_path / "timer.json").is_running
     finally:
         window.close(); window.deleteLater(); app.processEvents()
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" or os.environ.get("LILI_RUN_MAC_NATIVE_SHUTDOWN_TEST") != "1",
+    reason="requires a macOS graphical session",
+)
+@pytest.mark.parametrize("reason", ["shut", "rest", "rlgo", None])
+def test_macos_native_quit_acknowledges_and_exits_despite_rejecting_window(tmp_path, reason):
+    # Target only the subprocess itself with a real AppleEvent; neither the
+    # running pet nor loginwindow is involved.
+    script = r'''
+import os, sys, threading
+from pathlib import Path
+from AppKit import NSApplication
+from Foundation import NSAppleEventDescriptor as Descriptor
+from PySide6.QtCore import QObject, QTimer
+from PySide6.QtWidgets import QApplication, QWidget
+from onepic_desktop_pet import app as module
+from onepic_desktop_pet.system_shutdown import MAC_QUIT_EVENT, MacSessionShutdownBridge
+from onepic_desktop_pet.work_timer import WorkTimerModel
+data = Path(sys.argv[1])
+timer = WorkTimerModel(path=data / "timer.json")
+timer.start()
+class Window(QWidget):
+    def closeEvent(self, event):
+        (data / "unexpected-window-close").touch()
+        event.ignore()
+    def shutdown_work_timer(self, *, system_shutdown=False):
+        assert system_shutdown
+        timer.pause(reason="shutdown")
+qt = QApplication([])
+qt.setQuitOnLastWindowClosed(False)
+window = Window()
+window.setWindowTitle("Lili isolated shutdown test")
+window.show()
+controller = module.DesktopPetApplication.__new__(module.DesktopPetApplication)
+QObject.__init__(controller)
+controller.qt_app, controller.window = qt, window
+controller._system_shutdown_confirmed = controller._quit_started = False
+controller.settings = type("Settings", (), {})()
+module.save_settings = lambda _: (data / "settings-saved").touch()
+delegate = NSApplication.sharedApplication().delegate()
+bridge = MacSessionShutdownBridge(controller._confirm_system_shutdown)
+assert NSApplication.sharedApplication().delegate() == delegate
+def exercise():
+    target = Descriptor.descriptorWithProcessIdentifier_(os.getpid())
+    event = Descriptor.appleEventWithEventClass_eventID_targetDescriptor_returnID_transactionID_(
+        *MAC_QUIT_EVENT, target, -1, 0)
+    if sys.argv[2]:
+        enum = Descriptor.descriptorWithEnumCode_(int.from_bytes(sys.argv[2].encode(), "big"))
+        event.setParamDescriptor_forKeyword_(enum, int.from_bytes(b"why?", "big"))
+    reply, error = event.sendEventWithOptions_timeout_error_(3, 2, None)
+    assert error is None and reply is not None and controller._system_shutdown_confirmed
+    status = reply.paramDescriptorForKeyword_(int.from_bytes(b"errn", "big"))
+    assert status is None or status.int32Value() == 0
+    (data / "native-reply").touch()
+threading.Thread(target=lambda: threading.Event().wait(60), daemon=False).start()
+QTimer.singleShot(100, exercise)
+QTimer.singleShot(4500, lambda: os._exit(91))
+qt.exec()
+'''
+    child = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path), reason or ""],
+        env={**os.environ, "QT_QPA_PLATFORM": "cocoa",
+             "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+        capture_output=True, timeout=9,
+    )
+    assert child.returncode == 0, child.stderr.decode(errors="replace")
+    assert (tmp_path / "native-reply").exists()
+    assert (tmp_path / "settings-saved").exists()
+    assert not (tmp_path / "unexpected-window-close").exists()
+    from onepic_desktop_pet.work_timer import WorkTimerModel
+    assert not WorkTimerModel(path=tmp_path / "timer.json").is_running
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 native messages")
