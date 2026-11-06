@@ -10,13 +10,19 @@ permissions:
 
 jobs:
   probe:
-    timeout-minutes: 3
+    timeout-minutes: 15
     runs-on: macos-latest
     steps:
       - name: Cancel the earlier stalled disposable probe
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/42153123884/cancel" || true
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        run: python -m pip install -e ".[dev]"
       - name: Test whether two versions retain a certificate-anchored identity
         shell: bash
         run: |
@@ -82,3 +88,23 @@ jobs:
           reverse="$(codesign --display -r - "$probe_dir/two.app" 2>&1 | sed -n 's/^designated => //p')"
           codesign --verify --strict -R "=$reverse" "$probe_dir/one.app"
           echo "Two different app versions satisfy each other's designated requirements."
+          echo "Building the actual Lili application"
+          mkdir -p build/macos
+          sips -s format icns assets/icons/pet.png --out build/macos/pet.icns >/dev/null
+          ONEPIC_INCLUDE_USER_ASSETS=0 python -m PyInstaller --noconfirm --clean OnePicDesktopPet.spec
+          echo "Signing the actual Lili application"
+          codesign --force --deep --timestamp=none --keychain "$probe_keychain" --sign "$identity_hash" dist/Lili.app
+          codesign --verify --deep --strict dist/Lili.app
+          ditto dist/Lili.app "$probe_dir/Lili-v2.app"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 0.23.999' "$probe_dir/Lili-v2.app/Contents/Info.plist"
+          codesign --force --deep --timestamp=none --keychain "$probe_keychain" --sign "$identity_hash" "$probe_dir/Lili-v2.app"
+          codesign --verify --deep --strict "$probe_dir/Lili-v2.app"
+          requirement="$(codesign --display -r - dist/Lili.app 2>&1 | sed -n 's/^designated => //p')"
+          test -n "$requirement"
+          case "$requirement" in *cdhash*) echo "Lili identity unexpectedly depends on file hash" >&2; exit 1;; esac
+          codesign --verify --strict -R "=$requirement" "$probe_dir/Lili-v2.app"
+          reverse="$(codesign --display -r - "$probe_dir/Lili-v2.app" 2>&1 | sed -n 's/^designated => //p')"
+          codesign --verify --strict -R "=$reverse" dist/Lili.app
+          echo "Running the signed Lili app in an isolated data directory"
+          QT_QPA_PLATFORM=cocoa ONEPIC_USE_DEMO_ASSETS=1 LOCALAPPDATA="$probe_dir/lili-data" LILI_DISABLE_CONTENT_UPDATES=1 LILI_DISABLE_PROGRAM_UPDATES=1 python -c 'import subprocess; subprocess.run(["dist/Lili.app/Contents/MacOS/Lili", "--smoke-test-ms", "2000"], timeout=60, check=True)'
+          echo "Signed Lili bundle, cross-version identity and startup passed."
