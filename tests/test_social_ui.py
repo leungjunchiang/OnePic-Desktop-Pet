@@ -428,7 +428,7 @@ def test_social_sync_requests_one_bounded_recent_focus_reconciliation_page() -> 
                 }
             if name == "lili_focus_recent_segments_v1":
                 return {
-                    "segments": [], "next_cursor": None, "has_more": False,
+                    "segments": [], "next_cursor": None, "has_more": False, "window_days": 0,
                 }
             return {}
 
@@ -440,9 +440,10 @@ def test_social_sync_requests_one_bounded_recent_focus_reconciliation_page() -> 
             "personal_state": {
                 "focus_segments": [],
                 "focus_segments_sync_cursor": "delta-before",
+                "focus_segments_all_history": True,
                 "focus_history": [],
                 "focus_segment_recent_reconciliation_request": {
-                    "p_cursor": None, "p_days": 60, "p_limit": 500,
+                    "p_cursor": None, "p_days": 0, "p_limit": 500,
                 },
             },
         },
@@ -450,11 +451,14 @@ def test_social_sync_requests_one_bounded_recent_focus_reconciliation_page() -> 
     thread.completed.connect(completed.append)
     thread.run()
 
+    assert ("lili_sync_focus_segments_delta_v2", {
+        "p_segments": [], "p_since": "delta-before", "p_all_history": True,
+    }) in client.calls
     assert ("lili_focus_recent_segments_v1", {
-        "p_cursor": None, "p_days": 60, "p_limit": 500,
+        "p_cursor": None, "p_days": 0, "p_limit": 500,
     }) in client.calls
     assert completed[-1]["_focus_segment_recent_reconciliation"] == {
-        "segments": [], "next_cursor": None, "has_more": False,
+        "segments": [], "next_cursor": None, "has_more": False, "window_days": 0,
     }
 
 

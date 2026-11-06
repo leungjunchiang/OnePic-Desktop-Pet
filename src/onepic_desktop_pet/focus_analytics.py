@@ -1,4 +1,4 @@
-"""计时只投影日历累计；隔离冲突聚合与迟到桥接，不改写已封存区间。
+"""保留全部专注明细，按北京时间统计并分批核对跨设备历史。
 
 Local focus continuity, quality and lightweight review data.
 
@@ -67,18 +67,13 @@ FOCUS_SEGMENT_INTEGRITY_AUDIT_INTERVAL = timedelta(hours=24)
 # dashboard tick.  Missing facts are still repaired through the normal
 # targeted segment-id backfill once an audit succeeds.
 FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS = 24 * 60 * 60
-# A versioned, account-local repair for clients that advanced a delta cursor
-# while an older release retained only a partial sealed-fact ledger. Bumping
-# this version intentionally re-runs one bounded recent pull for existing
-# installs; it is not a replacement for delta sync and never changes the
-# delta cursor or server facts.
-FOCUS_SEGMENT_RECENT_RECONCILIATION_VERSION = 2
-FOCUS_SEGMENT_RECENT_RECONCILIATION_DAYS = 60
+# Existing clients may have already passed cloud rows their capped ledger lost.
+# Replay all dates once through a separate, paged cursor.
+FOCUS_SEGMENT_RECENT_RECONCILIATION_VERSION = 3
+FOCUS_SEGMENT_RECENT_RECONCILIATION_DAYS = 0  # The server's all-history mode.
 FOCUS_SEGMENT_RECENT_RECONCILIATION_PAGE_SIZE = 500
-# A busy account can legitimately produce more than 500 sealed intervals in
-# two months. Retaining 2,000 keeps the bounded recovery useful without
-# turning the local account ledger into an unbounded history archive.
-FOCUS_SEGMENT_LOCAL_RECORD_LIMIT = 2_000
+FOCUS_SEGMENT_HISTORY_UPLOAD_AUDIT_VERSION = 1
+FOCUS_SEGMENT_INTEGRITY_BATCH_SIZE = 500
 # A malformed/partial acknowledgement must remain retryable, but retrying a
 # bounded batch on every 30-second social tick can create an egress storm when
 # a relay is unhealthy.  The normal delta read continues during this cooldown;
@@ -711,13 +706,9 @@ class FocusAnalyticsStore:
         }
         max_rows = max(1, min(500, int(limit)))
         source_entries: list[dict[str, str]] = []
-        for segment in self.focus_segments():
-            if segment.end_at is None:
-                # Active intervals are projected locally and sealed on pause;
-                # never make a remote device guess an end timestamp.
-                continue
+        for segment in self._syncable_focus_segments():
             # A one-time repair is deliberately allowed to include the
-            # account's bounded local ledger. It is needed for upgrades from
+            # account's retained local ledger. It is needed for upgrades from
             # the release that could persist an acknowledgement before the
             # server transaction actually inserted the row. Existing rows are
             # idempotent and unchanged rows do not refresh updated_at. Once
@@ -751,6 +742,17 @@ class FocusAnalyticsStore:
             "input_count": len(rows),
             "retry_cooldown": False,
         }
+
+    def _syncable_focus_segments(self) -> list[FocusSegment]:
+        """Return valid sealed facts across all dates; live time stays local."""
+        now = self.current_time()
+        return [
+            segment for segment in self.focus_segments()
+            if segment.end_at is not None
+            and segment.start_at < segment.end_at
+            and segment.start_at.date() <= now.date()
+            and not segment.validation_error(now)
+        ]
 
     def note_focus_segment_upload_result(
         self,
@@ -852,9 +854,7 @@ class FocusAnalyticsStore:
             FOCUS_SEGMENT_RECENT_RECONCILIATION_VERSION
         ):
             return None
-        cursor = str(
-            state.get("focus_recent_reconciliation_cursor") or ""
-        ).strip()[:320]
+        cursor = str(state.get("focus_full_history_download_cursor") or "").strip()[:320]
         return {
             "p_cursor": cursor or None,
             "p_days": FOCUS_SEGMENT_RECENT_RECONCILIATION_DAYS,
@@ -872,7 +872,8 @@ class FocusAnalyticsStore:
         written here.
         """
 
-        if not isinstance(payload, dict) or payload.get("_error"):
+        if not isinstance(payload, dict) or payload.get("_error") or payload.get("window_days") != 0:
+            # Old servers clamp zero to one day. Never mark that partial response complete.
             return False, False, 0, False
         entries = payload.get("segments")
         has_more = payload.get("has_more")
@@ -880,6 +881,10 @@ class FocusAnalyticsStore:
             return False, False, 0, False
         next_cursor = str(payload.get("next_cursor") or "").strip()[:320]
         if has_more and not next_cursor:
+            return False, False, 0, False
+        state = self._state.get("account_state", {})
+        cursor = state.get("focus_full_history_download_cursor") if isinstance(state, dict) else None
+        if has_more and (not entries or next_cursor == cursor):
             return False, False, 0, False
         success, changed, recovered_count = self.merge_remote_segments_checked(
             {"segments": entries}
@@ -892,7 +897,7 @@ class FocusAnalyticsStore:
             self._state = previous
             return False, False, 0, False
         if has_more:
-            state["focus_recent_reconciliation_cursor"] = next_cursor
+            state["focus_full_history_download_cursor"] = next_cursor
         else:
             state["focus_recent_reconciliation_version"] = (
                 FOCUS_SEGMENT_RECENT_RECONCILIATION_VERSION
@@ -900,6 +905,7 @@ class FocusAnalyticsStore:
             state["focus_recent_reconciliation_completed_at"] = (
                 self.current_time().isoformat()
             )
+            state.pop("focus_full_history_download_cursor", None)
             state.pop("focus_recent_reconciliation_cursor", None)
         try:
             self._save()
@@ -986,8 +992,7 @@ class FocusAnalyticsStore:
         }
         updated = dict(existing)
         updated.update(acknowledgements)
-        # The local ledger is bounded to 500 facts. Keep acknowledgement state
-        # bounded as well, retaining only ids still represented in the ledger.
+        # Keep acknowledgements only for ids represented in the ledger.
         valid_ids = {segment.segment_id for segment in self.focus_segments()}
         updated = {
             segment_id: fingerprint
@@ -1010,14 +1015,10 @@ class FocusAnalyticsStore:
         if handoff_acked:
             state.pop("focus_handoff_segment_id", None)
         if state.get("focus_segment_upload_repair_pending"):
-            closed_count = sum(
-                1 for segment in self.focus_segments() if segment.end_at is not None
+            state["focus_segment_upload_repair_pending"] = any(
+                updated.get(segment.segment_id) != self._focus_segment_upload_fingerprint(segment.to_dict())
+                for segment in self._syncable_focus_segments()
             )
-            # The store is bounded to 500 rows and the transport batch is
-            # bounded to the same size. If every closed local fact was in the
-            # successful transaction, the one-time recovery is complete.
-            if len(payload) >= closed_count:
-                state["focus_segment_upload_repair_pending"] = False
         if targeted_repair_ids:
             state["focus_segment_repair_segment_ids"] = sorted(remaining_repair_ids)
         try:
@@ -1073,6 +1074,30 @@ class FocusAnalyticsStore:
             self._focus_integrity_next_attempt_monotonic = (
                 monotonic() + FOCUS_SEGMENT_INTEGRITY_RETRY_SECONDS
             )
+        return manifest
+
+    def focus_history_upload_audit_pending(self) -> bool:
+        state = self._state.get("account_state", {})
+        return (
+            not isinstance(state, dict)
+            or state.get("focus_history_upload_audit_version") != FOCUS_SEGMENT_HISTORY_UPLOAD_AUDIT_VERSION
+        )
+
+    def _focus_history_audit_ids(self, after: str) -> list[str]:
+        return sorted({
+            segment.segment_id for segment in self._syncable_focus_segments()
+            if segment.segment_id > after
+        })
+
+    def focus_history_upload_manifest(self) -> list[str]:
+        """Page all retained IDs once after upgrade, including older device IDs."""
+        if monotonic() < self._focus_integrity_next_attempt_monotonic:
+            return []
+        state = self._state.get("account_state", {})
+        after = str(state.get("focus_history_upload_audit_after") or "") if isinstance(state, dict) else ""
+        manifest = self._focus_history_audit_ids(after)[:FOCUS_SEGMENT_INTEGRITY_BATCH_SIZE]
+        if manifest:
+            self._focus_integrity_next_attempt_monotonic = monotonic() + FOCUS_SEGMENT_UPLOAD_RETRY_SECONDS
         return manifest
 
     def focus_segment_reconciliation_manifest(self, limit: int = 500) -> list[str]:
@@ -1260,6 +1285,11 @@ class FocusAnalyticsStore:
         state = self._state.setdefault("account_state", {})
         if not isinstance(state, dict):
             return False, 0
+        history_upgrade = payload.get("_manifest_kind") == "history_upgrade"
+        if history_upgrade:
+            after = str(state.get("focus_history_upload_audit_after") or "")
+            if not self.focus_history_upload_audit_pending() or min(requested) <= after:
+                return False, 0
         existing = state.get("focus_segment_upload_fingerprints")
         if not isinstance(existing, dict):
             existing = {}
@@ -1280,11 +1310,23 @@ class FocusAnalyticsStore:
         state["focus_segment_integrity_last_checked_count"] = checked_count
         state["focus_segment_integrity_last_present_count"] = present_count
         state["focus_segment_integrity_last_missing_count"] = missing_count
+        if history_upgrade:
+            pending = set(state.get("focus_segment_repair_segment_ids") or [])
+            state["focus_segment_repair_segment_ids"] = sorted(pending | missing)
+            last_checked = max(requested)
+            if self._focus_history_audit_ids(last_checked):
+                state["focus_history_upload_audit_after"] = last_checked
+            else:
+                state.pop("focus_history_upload_audit_after", None)
+                state["focus_history_upload_audit_version"] = FOCUS_SEGMENT_HISTORY_UPLOAD_AUDIT_VERSION
+            requeued = len(missing)
         try:
             self._save()
         except Exception:
             self._state = previous
             raise
+        if history_upgrade:
+            self._focus_integrity_next_attempt_monotonic = 0.0
         return True, requeued
 
     def focus_segments_sync_cursor(self) -> str | None:
@@ -1336,14 +1378,13 @@ class FocusAnalyticsStore:
         if not isinstance(entries, list):
             return False, False, 0
         today = _as_beijing(self._now()).date()
-        cutoff = today - timedelta(days=400)
         for index, item in enumerate(entries):
             if not isinstance(item, dict):
                 return False, False, 0
             segment = segment_from_record(item, index)
             if segment is None or segment.end_at is None:
                 return False, False, 0
-            if segment.start_at.date() < cutoff or segment.start_at.date() > today:
+            if segment.start_at.date() > today:
                 return False, False, 0
             if int((segment.end_at - segment.start_at).total_seconds()) <= 0:
                 return False, False, 0
@@ -1367,7 +1408,6 @@ class FocusAnalyticsStore:
         if not isinstance(entries, list):
             return False, 0
         today = _as_beijing(self._now()).date()
-        cutoff = today - timedelta(days=400)
         records = self._state.setdefault("records", [])
         by_id = {
             str(raw.get("record_id") or raw.get("segment_id")): index
@@ -1383,7 +1423,7 @@ class FocusAnalyticsStore:
             segment = segment_from_record(item, index)
             if segment is None or segment.end_at is None:
                 continue
-            if segment.start_at.date() < cutoff or segment.start_at.date() > today:
+            if segment.start_at.date() > today:
                 continue
             duration = max(0, int((segment.end_at - segment.start_at).total_seconds()))
             if duration <= 0:
@@ -1419,13 +1459,6 @@ class FocusAnalyticsStore:
                 merged_count += 1
             if row_changed:
                 affected_dates.update(self._segment_dates(segment))
-        if len(records) > FOCUS_SEGMENT_LOCAL_RECORD_LIMIT:
-            for removed in records[:-FOCUS_SEGMENT_LOCAL_RECORD_LIMIT]:
-                removed_segment = segment_from_record(removed, 0)
-                if removed_segment is not None:
-                    affected_dates.update(self._segment_dates(removed_segment))
-            del records[:-FOCUS_SEGMENT_LOCAL_RECORD_LIMIT]
-            changed = True
         if changed:
             # Only dates touched by the inserted/replaced fact are rebuilt.
             # The durable account cache is still one ledger; this avoids
@@ -1576,18 +1609,7 @@ class FocusAnalyticsStore:
             records = self._state.setdefault("records", [])
             records.append(record)
             self._focus_segment_source_by_id[value.segment_id] = str(source or "canonical_focus_store")[:80]
-            removed_records = (
-                records[:-FOCUS_SEGMENT_LOCAL_RECORD_LIMIT]
-                if len(records) > FOCUS_SEGMENT_LOCAL_RECORD_LIMIT
-                else []
-            )
-            self._state["records"] = records[-FOCUS_SEGMENT_LOCAL_RECORD_LIMIT:]
-            affected_record_dates = self._segment_dates(value)
-            for removed in removed_records:
-                removed_segment = segment_from_record(removed, 0)
-                if removed_segment is not None:
-                    affected_record_dates.update(self._segment_dates(removed_segment))
-            self._rebuild_daily_focus_projection(affected_record_dates)
+            self._rebuild_daily_focus_projection(self._segment_dates(value))
             self._trim_days()
             self._save()
         except Exception:

@@ -1,4 +1,5 @@
 """QQ 点歌缺地址定位设置；歌单在六毛与快捷坞上方手动打开，后台播放由真实状态触发。
+主窗口协调专注补传核对、全历史下载以及日常增量同步。
 
 先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
 
@@ -9366,6 +9367,11 @@ class PetWindow(QWidget):
         else:
             focus_segments = self.focus_analytics.focus_segments_payload()
             focus_segments_diagnostics = {}
+        history_audit = self.focus_analytics.focus_history_upload_audit_pending()
+        integrity_manifest = (
+            self.focus_analytics.focus_history_upload_manifest() if history_audit
+            else self.focus_analytics.focus_segment_reconciliation_manifest()
+        )
         return {
             "focus_date": today_key,
             # Duration scalars are retained only for old wire signatures.
@@ -9385,11 +9391,10 @@ class PetWindow(QWidget):
                 "source_entries", []
             ),
             "focus_segments_sync_cursor": self.focus_analytics.focus_segments_sync_cursor(),
+            "focus_segments_all_history": True,
             "focus_segments_sync_mode": self.focus_analytics.focus_segments_sync_mode(),
-            "focus_segment_integrity_manifest": (
-                self.focus_analytics.focus_segment_reconciliation_manifest()
-            ),
-            "focus_segment_integrity_manifest_kind": "reconciliation",
+            "focus_segment_integrity_manifest": integrity_manifest,
+            "focus_segment_integrity_manifest_kind": "history_upgrade" if history_audit else "reconciliation",
             "focus_segment_recent_reconciliation_request": (
                 self.focus_analytics.focus_segment_recent_reconciliation_request()
             ),
@@ -10194,7 +10199,6 @@ class PetWindow(QWidget):
         if (
             transaction_ok
             and isinstance(focus_segments_payload, dict)
-            and focus_segments_payload.get("_sync_mode") == "delta"
             and isinstance(focus_segments_payload.get("segments"), list)
             and focus_segments_payload.get("next_cursor")
         ):
@@ -10207,6 +10211,11 @@ class PetWindow(QWidget):
             except Exception as exc:
                 merge_error = "cursor_persist_failed"
                 LOGGER.warning("focus segment cursor persistence failed: %s", exc)
+        if transaction_ok and (
+            (cursor_advanced and focus_segments_payload.get("has_more") is True)
+            or (isinstance(uploaded_segments, list) and len(uploaded_segments) >= FOCUS_SEGMENT_UPLOAD_BATCH_SIZE)
+        ):
+            self._schedule_social_tick(immediate=True)
         sync_diagnostics = (
             focus_segments_payload.get("_sync_diagnostics")
             if isinstance(focus_segments_payload, dict)
@@ -10328,7 +10337,12 @@ class PetWindow(QWidget):
                         "apply_focus_segment_reconciliation_audit",
                         None,
                     )
-                    if callable(reconcile) and "missing_local_segments" in integrity_payload:
+                    if (
+                        callable(reconcile)
+                        and "missing_local_segments" in integrity_payload
+                        and integrity_payload.get("server_manifest_complete") is not False
+                        and integrity_payload.get("_manifest_kind") != "history_upgrade"
+                    ):
                         audit_ok, requeued_count, recovered_count = reconcile(
                             integrity_payload
                         )
@@ -10389,8 +10403,11 @@ class PetWindow(QWidget):
                 error=audit_error,
                 success=bool(audit_ok),
             )
-            if audit_ok and (requeued_count or recovered_count):
-                self._schedule_social_tick()
+            if audit_ok and (requeued_count or recovered_count or (
+                integrity_payload.get("_manifest_kind") == "history_upgrade"
+                and self.focus_analytics.focus_history_upload_audit_pending()
+            )):
+                self._schedule_social_tick(immediate=True)
         live_projection_payload = data.get("_focus_live_projection") if isinstance(data, dict) else None
         live_projection_changed = False
         if live_projection_payload is not None:

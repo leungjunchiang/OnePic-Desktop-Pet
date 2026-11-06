@@ -35,6 +35,24 @@ jobs:
         run: ./scripts/apply_supabase_discipline.ps1 -MigrationPath supabase/migrations/20260930180000_lili_study_plan_semantics.sql
 
 
+  deploy-focus-full-history:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: lili-deploy-focus-history
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy full focus history sync
+        if: github.ref_name == 'release/v0.23.361' || github.ref_name == 'v0.23.361'
+        shell: pwsh
+        run: ./scripts/apply_supabase_focus_history.ps1 -MigrationPath supabase/migrations/20261106123000_lili_focus_full_history_sync.sql
+      - name: Verify old and new focus sync with synthetic accounts
+        if: github.ref_name == 'release/v0.23.361' || github.ref_name == 'v0.23.361'
+        shell: pwsh
+        run: ./scripts/apply_supabase_focus_history.ps1 -MigrationPath scripts/verify_focus_full_history.sql
+
   windows-build:
     runs-on: windows-latest
     steps:
@@ -209,6 +227,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')
     needs:
       - deploy-buddy-reminders
+      - deploy-focus-full-history
       - windows-build
       - macos-build
     runs-on: ubuntu-latest

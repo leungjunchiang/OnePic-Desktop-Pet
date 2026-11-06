@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；UTC 事实和持续时长不作手工偏移。
+"""从本机可验证来源恢复所有日期的专注明细，供跨设备补传。
 
 Recovery of verifiable historical focus intervals.
 
@@ -33,7 +33,7 @@ from .local_data import platform_app_data_root, read_json, write_json_atomic
 # Re-scan exact local interval sources after upgrading. This is a bounded,
 # idempotent one-time pass that can recover sealed facts absent from the
 # server, while scalar-only timer counters remain ineligible.
-FOCUS_HISTORY_RECOVERY_VERSION = 3
+FOCUS_HISTORY_RECOVERY_VERSION = 4
 MAX_RECOVERY_LOG_RUNS = 20
 
 
@@ -133,8 +133,8 @@ class FocusHistoryRecovery:
         duplicates = 0
         for source, candidate in candidates:
             today = self._now().astimezone(candidate.start_at.tzinfo).date()
-            if candidate.start_at.date() < today - timedelta(days=400) or candidate.start_at.date() > today:
-                reasons["outside_server_retention"] += 1
+            if candidate.start_at.date() > today:
+                reasons["future_interval"] += 1
                 continue
             if self._equivalent_interval(candidate, existing):
                 duplicates += 1
@@ -248,7 +248,7 @@ class FocusHistoryRecovery:
             return [], 0, Counter({"work_session_invalid_file": 1})
         candidates: list[FocusSegment] = []
         reasons: Counter[str] = Counter()
-        for row in raw[-500:]:
+        for row in raw:
             if not isinstance(row, dict):
                 reasons["work_session_invalid_row"] += 1
                 continue
@@ -259,7 +259,11 @@ class FocusHistoryRecovery:
                 reasons["work_session_missing_interval"] += 1
                 continue
             seconds = int((end - start).total_seconds())
-            claimed = max(0, int(row.get("seconds", 0) or 0))
+            try:
+                claimed = max(0, int(row.get("seconds", 0) or 0))
+            except (TypeError, ValueError, OverflowError):
+                reasons["work_session_inconsistent_interval"] += 1
+                continue
             if seconds <= 0 or seconds > 24 * 60 * 60 or abs(seconds - claimed) > 5:
                 reasons["work_session_inconsistent_interval"] += 1
                 continue
@@ -277,7 +281,7 @@ class FocusHistoryRecovery:
                     task=str(row.get("task_id") or "")[:120],
                 )
             )
-        return candidates, len(raw[-500:]), reasons
+        return candidates, len(raw), reasons
 
     def _lifecycle_candidates(self) -> tuple[list[FocusSegment], int, Counter[str]]:
         candidates: list[FocusSegment] = []

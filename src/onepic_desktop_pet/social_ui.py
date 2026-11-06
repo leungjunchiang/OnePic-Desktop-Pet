@@ -1,4 +1,5 @@
 """密码恢复限流后保护有效验证码；重发心跳时按实际经过时间更新输入证明。
+同步工作线程通过带完整历史标记的接口分批收发专注明细。
 
 进程在线独立于学习状态；非学习显示休息，退出按顺序发送最终离线状态。
 
@@ -1434,6 +1435,8 @@ class SocialSyncThread(QThread):
                             "p_segments": canonical_segments,
                             "p_since": focus_segments_cursor_before or None,
                         }
+                        if personal_state.get("focus_segments_all_history") is True:
+                            focus_segments_request_body["p_all_history"] = True
                         if focus_upload_gate_blocked:
                             # A duplicate/conflicting local batch is a local
                             # protocol failure.  Do not call Supabase and do
@@ -1667,6 +1670,8 @@ class SocialSyncThread(QThread):
                                 focus_segment_integrity_result[
                                     "_requested_segment_ids"
                                 ] = list(integrity_manifest)
+                                if integrity_manifest_kind == "history_upgrade":
+                                    focus_segment_integrity_result["_manifest_kind"] = integrity_manifest_kind
                         except (SocialError, AttributeError, TypeError) as exc:
                             LOGGER.info("focus segment integrity audit deferred: %s", exc)
                             focus_segment_integrity_result = {
@@ -1687,11 +1692,8 @@ class SocialSyncThread(QThread):
                             focus_segment_integrity_result["_device_id"] = (
                                 focus_segments_device_id
                             )
-                    # Older clients could retain only 500 rows and therefore
-                    # miss a report window even after their ordinary delta
-                    # cursor had advanced. This one-time paged read is a
-                    # bounded account-local repair; it neither uploads facts
-                    # nor resets/advances the normal delta cursor.
+                    # Replay history in bounded pages for clients whose local
+                    # ledger discarded rows after advancing their delta cursor.
                     recent_reconciliation_request = personal_state.get(
                         "focus_segment_recent_reconciliation_request"
                     )
