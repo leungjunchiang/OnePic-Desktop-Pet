@@ -1,8 +1,8 @@
-"""Windows 会话结束桥：查询立即同意，确认后本地落盘并限时退出。
+"""系统会话结束支持：Windows 原生桥与跨平台限时退出。
 
-只处理操作系统的 WM_QUERYENDSESSION / WM_ENDSESSION，不改变普通关窗、
-托盘或手动退出。查询取消不停止计时；确认后不等待网络或析构运行中的 Qt
-线程，避免阻止系统更新重启。硬退出仅在系统已确认结束会话时启用。
+Windows 原生桥只处理 WM_QUERYENDSESSION / WM_ENDSESSION，不改变普通关窗、
+托盘或手动退出；macOS 应用级退出事件由 app.py 接入同一条本地保存路径。
+系统确认退出后不等待网络或析构运行中的 Qt 线程，避免阻止系统关机或重启。
 """
 
 from __future__ import annotations
@@ -24,9 +24,11 @@ WM_ENDSESSION = 0x0016
 class ConfirmedShutdownDeadline:
     """Independent deadline survives a blocked GUI; never run Qt teardown here."""
 
-    def __init__(self, *, seconds: float = 3.0, exit_process: Callable = os._exit):
+    def __init__(self, *, seconds: float = 3.0, exit_grace_seconds: float = 0.05,
+                 exit_process: Callable = os._exit):
         self._saved = threading.Event()
         self._seconds = seconds
+        self._exit_grace_seconds = max(0.0, float(exit_grace_seconds))
         self._exit_process = exit_process
         self._thread = threading.Thread(
             target=self._run, name="lili-confirmed-system-exit", daemon=True
@@ -35,9 +37,9 @@ class ConfirmedShutdownDeadline:
 
     def _run(self) -> None:
         saved = self._saved.wait(self._seconds)
-        # Give the native ENDSESSION handler a chance to return its reply.
+        # Give the native OS event handler time to return before forcing exit.
         if saved:
-            threading.Event().wait(0.05)
+            threading.Event().wait(self._exit_grace_seconds)
         # os._exit deliberately avoids Python/Qt destructors with live TLS or
         # QThreads. The OS has already committed to ending this process.
         self._exit_process(0)

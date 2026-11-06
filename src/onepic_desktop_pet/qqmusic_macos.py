@@ -37,6 +37,7 @@ class AXNode:
     native: object = None
     subrole: str = ''
     hidden: bool = False
+    value_settable: bool = False
 
     def descendants(self):
         if self.hidden and self.role not in {'AXApplication', 'AXWindow'}:
@@ -98,9 +99,19 @@ def text_fields(node):
 
 
 def search_fields(tree):
-    return [n for n in tree.descendants() if n.role in {'AXSearchField', 'AXTextField', 'AXComboBox'}
-            and (n.role == 'AXSearchField' or n.subrole == 'AXSearchField'
-                 or re.search(r'搜索|search', n.text + n.identifier, re.I))]
+    nodes = list(tree.descendants())
+    explicit = [n for n in nodes if n.role in {'AXSearchField', 'AXTextField', 'AXComboBox'}
+                and (n.role == 'AXSearchField' or n.subrole == 'AXSearchField'
+                     or re.search(r'搜索|search', n.text + n.identifier, re.I))]
+    if explicit:
+        return explicit
+    # Some QQ Music builds expose the search input as an unlabeled AXTextField.
+    # Accept it only when it is the sole editable, unlabeled text field in the
+    # QQ accessibility tree. This avoids typing into login/profile controls.
+    editable = [n for n in nodes if n.role == 'AXTextField' and n.value_settable]
+    if len(editable) == 1 and not editable[0].text.strip() and not editable[0].identifier.strip():
+        return editable
+    return []
 
 
 def startup_state(tree):
@@ -221,8 +232,16 @@ class NativeAX:
             if role in MODE_ROLES:
                 text = next((value for value in (string('AXValue'), string('AXDescription'), text)
                              if value in MODE_LABELS | PLAY | PAUSE), text)
+            value_settable = False
+            if role == 'AXTextField':
+                try:
+                    error, settable = self.ax.AXUIElementIsAttributeSettable(
+                        element, 'AXValue', None)
+                    value_settable = error == 0 and bool(settable)
+                except (AttributeError, TypeError):
+                    pass
             node = AXNode(role, text[:600], string('AXIdentifier'), native=element, subrole=string('AXSubrole'),
-                          hidden=attrs.get('AXHidden') is True)
+                          hidden=attrs.get('AXHidden') is True, value_settable=value_settable)
             if parent is None:
                 result = node
             else:

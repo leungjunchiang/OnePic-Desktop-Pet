@@ -14,7 +14,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ONEPIC_USE_DEMO_ASSETS", "1")
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, QTimer, QEvent
 from onepic_desktop_pet.system_shutdown import (
     WindowsSessionShutdownBridge, ConfirmedShutdownDeadline,
     WM_QUERYENDSESSION, WM_ENDSESSION,
@@ -74,17 +74,44 @@ def test_os_exit_never_closes_windows_or_waits_workers(monkeypatch):
         shutdown_work_timer=lambda **kwargs: calls.append(kwargs),
         close=lambda: pytest.fail("normal window close must not run"),
     )
-    monkeypatch.setattr(module, "ConfirmedShutdownDeadline", lambda: SimpleNamespace(
-        local_save_finished=lambda: calls.append("ready")))
+    monkeypatch.setattr(module, "sys", SimpleNamespace(platform="darwin"))
+    deadline_options = {}
+    monkeypatch.setattr(module, "ConfirmedShutdownDeadline", lambda **kwargs: (
+        deadline_options.update(kwargs) or SimpleNamespace(
+            local_save_finished=lambda: calls.append("ready"))))
     monkeypatch.setattr(module, "save_settings", lambda settings: calls.append("settings"))
     monkeypatch.setattr(module, "wait_for_thread", lambda *a: pytest.fail("no worker wait"))
     controller._confirm_system_shutdown()
     controller._confirm_system_shutdown()
     controller._continue_quit()
     assert calls == ["stop", {"system_shutdown": True}, "settings", "ready"]
+    assert deadline_options == {"exit_grace_seconds": 0.75}
     assert not timer.isActive()
     assert controller._quit_started and controller.window.application_exit_requested
     assert controller.window._system_shutdown_confirmed
+
+
+def test_macos_native_quit_is_routed_to_local_shutdown_without_veto(monkeypatch):
+    from onepic_desktop_pet import app as module
+    controller = module.DesktopPetApplication.__new__(module.DesktopPetApplication)
+    QObject.__init__(controller)
+    controller.qt_app = object()
+    controller._quit_started = False
+    controller._system_shutdown_confirmed = False
+    calls = []
+    controller._confirm_system_shutdown = lambda: calls.append("save-and-bound-exit")
+    monkeypatch.setattr(module, "sys", SimpleNamespace(platform="darwin"))
+
+    event = QEvent(QEvent.Type.Quit)
+    assert controller.eventFilter(controller.qt_app, event) is False
+    assert calls == ["save-and-bound-exit"]
+
+    # Other Qt events and an already-started manual quit must pass through
+    # without arming a second system-shutdown path.
+    assert controller.eventFilter(controller.qt_app, QEvent(QEvent.Type.Timer)) is False
+    controller._quit_started = True
+    assert controller.eventFilter(controller.qt_app, QEvent(QEvent.Type.Quit)) is False
+    assert calls == ["save-and-bound-exit"]
 
 
 def test_manual_exit_waits_asynchronously_so_os_queries_can_be_delivered(monkeypatch):

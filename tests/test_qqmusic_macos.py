@@ -6,6 +6,7 @@ import pytest
 
 from onepic_desktop_pet.qqmusic_macos import (
     AXNode, BUNDLE_ID, QQMusicMacBridge, clock_ms, parse_track, player_region, matching_song_buttons,
+    search_fields,
 )
 from onepic_desktop_pet.qqmusic_online import candidate_matches
 from onepic_desktop_pet.music_control import MusicProviderManager, TrackInfo
@@ -50,6 +51,33 @@ def test_search_results_do_not_become_playback_proof():
     ambiguous = region()
     ambiguous.children.append(static('其他文本'))
     assert parse_track(ambiguous) is None
+
+
+def test_search_fallback_accepts_only_one_unlabelled_editable_text_field():
+    field = AXNode('AXTextField', value_settable=True)
+    assert search_fields(AXNode('AXWindow', children=[field])) == [field]
+
+    # A labeled non-search input (for example a phone number field) is never a fallback.
+    labeled = AXNode('AXTextField', '手机号', value_settable=True)
+    assert search_fields(AXNode('AXWindow', children=[labeled])) == []
+
+    # Ambiguous editable fields remain refused, even if only one is unlabelled.
+    other = AXNode('AXTextField', '昵称', value_settable=True)
+    assert search_fields(AXNode('AXWindow', children=[field, other])) == []
+    assert search_fields(AXNode('AXWindow', children=[AXNode('AXTextField')])) == []
+
+
+def test_mac_play_uses_unique_unlabelled_editable_search_field(tmp_path):
+    app = tmp_path/'QQMusic.app'
+    (app/'Contents').mkdir(parents=True)
+    (app/'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': BUNDLE_ID}))
+    field = AXNode('AXTextField', value_settable=True)
+    row = AXNode('AXRow', children=[static('光'), static('陈楚生'), static('专辑'),
+                                    AXNode('AXButton', '播放歌曲')])
+    backend = Backend(AXNode('AXWindow', children=[field, row]))
+    bridge = QQMusicMacBridge(backend=backend)
+    bridge.play_candidate(app, SongCandidate('qq', '光', '陈楚生', native={'album': '专辑'}))
+    assert backend.actions == [('search', '陈楚生 光'), ('', 'AXConfirm'), ('播放歌曲', 'AXPress')]
 
 
 def test_two_separate_player_bars_cannot_prove_unique_playback():

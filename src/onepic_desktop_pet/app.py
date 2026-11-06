@@ -382,6 +382,11 @@ class DesktopPetApplication(QObject):
         # those callbacks back to the main thread before they touch windows,
         # message boxes, or speech bubbles.
         super().__init__()
+        if sys.platform == "darwin":
+            # macOS shutdown / Dock termination arrives as an application-level
+            # QEvent.Quit. Route it through the bounded local-save path before
+            # the normal window close-to-tray policy can reject termination.
+            self.qt_app.installEventFilter(self)
         self.qt_app.aboutToQuit.connect(self._on_about_to_quit)
         lifecycle_log("application.controller.created", self.qt_app)
         self._instance_lock = instance_lock
@@ -442,6 +447,20 @@ class DesktopPetApplication(QObject):
             quit_started=self._quit_started,
         )
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt API
+        """Let macOS native termination bypass the close-to-tray window path."""
+
+        if (watched is self.qt_app
+                and sys.platform == "darwin"
+                and event.type() == QEvent.Type.Quit
+                and not self._quit_started
+                and not self._system_shutdown_confirmed):
+            lifecycle_log("application.macos_termination.request", self.qt_app)
+            # This path saves local timer/settings state and avoids waiting for
+            # network or media workers while macOS is waiting for termination.
+            self._confirm_system_shutdown()
+        return False
+
     def _confirm_system_shutdown(self) -> None:
         """Save local facts without waiting for TLS, audio or Qt worker teardown."""
 
@@ -453,7 +472,9 @@ class DesktopPetApplication(QObject):
         self.window.application_exit_requested = True
         self.window._close_in_progress = True
         # Arm before disk I/O: even a stuck filesystem must not veto reboot.
-        self._system_shutdown_deadline = ConfirmedShutdownDeadline()
+        self._system_shutdown_deadline = ConfirmedShutdownDeadline(
+            exit_grace_seconds=0.75 if sys.platform == "darwin" else 0.05
+        )
         try:
             for timer in self.window.findChildren(QTimer):
                 timer.stop()

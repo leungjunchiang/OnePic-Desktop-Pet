@@ -66,16 +66,19 @@ def test_native_tree_keeps_search_placeholder_and_shallow_player_despite_deep_we
         {'AXRole': 'AXButton', 'AXDescription': '暂停(P)'},
         {'AXRole': 'AXPopUpButton', 'AXTitle': '播放模式', 'AXValue': '随机播放'}]}
     root = {'AXRole': 'AXApplication', 'AXWindows': [{'AXRole': 'AXWindow', 'AXChildren': [deep, toolbar,
-        {'AXRole': 'AXTextField', 'AXSubrole': 'AXSearchField', 'AXPlaceholderValue': '搜索音乐'}]}]}
+        {'AXRole': 'AXTextField', 'AXSubrole': 'AXSearchField', 'AXPlaceholderValue': '搜索音乐'},
+        {'AXRole': 'AXTextField', 'settable': True}]}]}
     backend = NativeAX.__new__(NativeAX)
     backend.cancelled = lambda: False
     backend.ax = SimpleNamespace(
         AXUIElementCopyMultipleAttributeValues=lambda element, names, *_: (0, [element.get(name) for name in names]),
-        AXUIElementCopyAttributeValue=lambda element, name, *_: (0, element.get(name)))
+        AXUIElementCopyAttributeValue=lambda element, name, *_: (0, element.get(name)),
+        AXUIElementIsAttributeSettable=lambda element, name, *_: (0, bool(element.get('settable'))))
     tree = backend.tree(root)
     assert parse_track(tree).title == '光' and parse_track(tree).playback_status == 'playing'
     assert backend.truncated
     assert any(n.text == '搜索音乐' and n.subrole == 'AXSearchField' for n in tree.descendants())
+    assert any(n.role == 'AXTextField' and n.value_settable for n in tree.descendants())
     assert any(n.role == 'AXPopUpButton' and n.text == '随机播放' for n in tree.descendants())
 
 
