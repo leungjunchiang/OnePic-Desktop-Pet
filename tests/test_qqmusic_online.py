@@ -1,4 +1,4 @@
-"""验证在线目录、单次投递、取消及真实播放确认，未确认诊断不误报登录或会员。"""
+"""验证在线目录、单次投递、取消及真实播放确认，含 Mac 仅手动切歌时的回退。"""
 
 from pathlib import Path
 from threading import Event
@@ -60,6 +60,16 @@ def test_matched_playing_title_artist_and_album_is_confirmed():
     result = service.play()
     assert result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED
     assert result.current_title == '山楂花'
+    assert sent == [(Path('QQMusic.exe'), '123')]
+
+
+def test_compact_mac_player_confirms_song_without_queue_mode():
+    service, _, sent = player(TrackInfo('山楂花', '陈楚生', '', 'playing',
+                                        metadata_scope='mac-qq-compact'))
+    selected = service.catalog.search('山楂花', '陈楚生')[0]
+    result = service.play_candidate(selected, prepare_queue=lambda: pytest.fail('No usable timeline'))
+    assert result.success and result.manual_playlist_only
+    assert result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED
     assert sent == [(Path('QQMusic.exe'), '123')]
 
 

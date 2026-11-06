@@ -1,6 +1,7 @@
 """管理 QQ 后台连续轮播；Windows 会话和实验性 macOS 已授权 AX 均只核对目标客户端。
 
 Windows 通过 QQ 原生临时队列顺序衔接，六毛跟随实际曲目；其他适配保留单曲隔离。
+Mac 简化播放栏可以验证播放和暂停，但不恢复无时间轴的自动续播。
 不再为点歌、确认或曲终隐藏已有 QQ，客户端冷启动由各平台自身启动配置处理。
 恢复歌单选曲先锁定 QQ，暂停恢复原模式；普通 Windows 曲终不由六毛暂停或重发歌曲。
 
@@ -1228,11 +1229,12 @@ class MusicProviderManager:
             return session, status
 
         before, status = snapshot()
+        manual_only = before is not None and getattr(before.track, 'metadata_scope', '') == 'mac-qq-compact'
         def result(ok, message):
             if action in {'pause', 'toggle'}:
                 self.qq_playlist.auto_advance = False
             if ok and status.track and status.track.playback_status == 'playing' and action in {'play', 'toggle'}:
-                self.qq_playlist.auto_advance = self.qq_playlist.matches(status.track)
+                self.qq_playlist.auto_advance = not manual_only and self.qq_playlist.matches(status.track)
             if action == 'pause' or (action == 'toggle' and status.track
                                     and status.track.playback_status.casefold() == 'paused'):
                 if not self.qq_queue_mode.release():
@@ -1253,7 +1255,7 @@ class MusicProviderManager:
         if action not in WindowsGSMTCBridge._METHODS:
             return result(False, 'QQ 音乐当前未开放这项控制，请检查客户端。')
         desired = {'play': 'playing', 'pause': 'paused'}.get(action)
-        if desired == 'playing' and self.qq_playlist.entries and self.qq_playlist.matches(before.track):
+        if desired == 'playing' and not manual_only and self.qq_playlist.entries and self.qq_playlist.matches(before.track):
             if not self.qq_queue_mode.acquire():
                 self.qq_playlist.auto_advance = False
                 paused = self._control_qq_online('pause')
@@ -1269,7 +1271,7 @@ class MusicProviderManager:
             if state not in {'playing', 'paused'}:
                 return result(False, 'QQ 音乐正在切换状态，请稍后重试。')
             desired = 'paused' if state == 'playing' else 'playing'
-        if action == 'toggle' and desired == 'playing' and self.qq_playlist.entries and self.qq_playlist.matches(before.track):
+        if action == 'toggle' and desired == 'playing' and not manual_only and self.qq_playlist.entries and self.qq_playlist.matches(before.track):
             if not self.qq_queue_mode.acquire():
                 self.qq_playlist.auto_advance = False
                 paused = self._control_qq_online('pause')

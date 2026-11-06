@@ -5,6 +5,7 @@
 Windows 歌曲 ID 临时队列由 QQ 解析当前账号权益并顺序衔接，投递前先确认顺序模式。
 六毛同步实际曲目，不再曲终抢切；手动选曲仅投递该位置至轮末的剩余队列。
 其他适配保留单曲隔离和保守曲终判断。
+Mac 客户端只公开简化播放栏时保留手动歌单，不会为了无法确认的自动续播而暂停成功播放。
 每轮热门前五十对应歌曲随机十五首、完整曲库随机十五首，按歌名和 ID 去重并混合打乱。
 随机完全排除现场版，仅收公开元数据明确有播放/付费授权的歌曲，会员曲同等随机。
 现场、无版权或无法确认授权的候选在同名归并前排除，避免覆盖可用的录音室版本。
@@ -200,7 +201,7 @@ class QQPlaylist:
             return self.decorate(result, created=True)
         if not self._acquire_mode(result):
             return self.decorate(self._unready_result(result), created=True)
-        self.auto_advance = (not self.player.cancelled()
+        self.auto_advance = (not self.player.cancelled() and not result.manual_playlist_only
                              and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
         self._near_end = False
         self._reset_completion()
@@ -226,9 +227,10 @@ class QQPlaylist:
         prefix = f'六毛歌单 第 {self.round_number} 轮 {self.index + 1}/{len(self.entries)} · '
         if self._popular_snapshot:
             prefix += '使用随包热歌快照 · '
+        suffix = ' 当前 QQ 版本支持手动切歌；六毛未启用自动续播。' if result.manual_playlist_only else ''
         return replace(result, playlist_size=len(self.entries), playlist_index=self.index,
                        playlist_created=created, playlist_round=self.round_number,
-                       message=prefix + result.message)
+                       message=prefix + result.message + suffix)
 
     def move(self, step):
         if step == 1 and self.entries and self.index == len(self.entries) - 1:
@@ -247,7 +249,7 @@ class QQPlaylist:
             if not self._acquire_mode(result):
                 return self.decorate(self._unready_result(result))
             self.index = target
-            self.auto_advance = (not self.player.cancelled()
+            self.auto_advance = (not self.player.cancelled() and not result.manual_playlist_only
                                  and result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
             self._near_end = False
             self._reset_completion()
@@ -304,6 +306,10 @@ class QQPlaylist:
                 and self.clock() <= self._end_not_before + 2 else 1000)
 
     def _acquire_mode(self, result):
+        if result.manual_playlist_only:
+            if self.queue_mode is not None and getattr(self.queue_mode, 'isolated', False):
+                self.queue_mode.release()
+            return True
         if self.queue_mode is None:
             return True
         if result.outcome is MusicPlaybackOutcome.PLAYBACK_CONFIRMED:

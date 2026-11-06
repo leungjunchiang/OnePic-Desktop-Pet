@@ -7,6 +7,7 @@ Adapter 使用 UI Automation 定位“歌曲”结果；网易云 3.x 不公开 
 并在需要时使用已授权的 Accessibility。严格点歌返回明确失败码；随机歌手播放在播放
 动作已执行但媒体 Session 暂不可读时标记为未验证启动；结果携带六毛歌单位置及轮次。
 客户端未就绪单独标记，尚未投递的请求不应暂停或修改登录中的 QQ。
+已确认起播但客户端未公开时间轴时，可标记为只支持手动切歌。
 """
 
 from __future__ import annotations
@@ -89,6 +90,7 @@ class SongPlaybackResult:
     playlist_index: int = -1
     playlist_created: bool = False
     playlist_round: int = 0
+    manual_playlist_only: bool = False
 
 
 class ProviderSearchError(RuntimeError):

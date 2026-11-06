@@ -1,4 +1,4 @@
-"""验证 Mac 真正登录控件不搜索、AX 回退、只读诊断、启动归属和设置线程安全关闭。"""
+"""验证 Mac 登录保护、QQ 单曲 ID 入口、AX 回退、只读诊断及安全关闭。"""
 import plistlib
 from pathlib import Path
 import sys
@@ -20,6 +20,32 @@ def app_bundle(tmp_path):
     (path / 'Contents' / 'Info.plist').write_bytes(plistlib.dumps({
         'CFBundleIdentifier': BUNDLE_ID, 'CFBundleExecutable': 'QQMusic', 'CFBundleShortVersionString': '11.test'}))
     return path
+
+
+def test_qq_11105_dispatches_exact_id_and_reads_compact_player(tmp_path):
+    path = app_bundle(tmp_path)
+    plist = path / 'Contents/Info.plist'
+    info = plistlib.loads(plist.read_bytes())
+    info.update(CFBundleShortVersionString='11.10.5',
+                CFBundleURLTypes=[{'CFBundleURLSchemes': ['qqmusicmac']}])
+    plist.write_bytes(plistlib.dumps(info))
+    bar = AXNode('AXGroup', children=[AXNode('AXUnknown', label) for label in (
+        '上一首', '暂停播放', '下一首', '播放模式（顺序播放）', '歌曲名：光 - 歌手名：陈楚生')])
+    root = AXNode('AXWindow', children=[AXNode('AXUnknown', '搜索'), bar])
+    backend = Backend(root)
+    backend.dispatch_song_id = lambda app, song_id: backend.actions.append((app, song_id))
+    bridge = QQMusicMacBridge(backend=backend)
+    candidate = SongCandidate('qq', '光', '陈楚生', identifier='123')
+    bridge.play_candidate(path, candidate)
+    assert backend.actions == [(path, '123')]
+    track = bridge.session().track
+    assert (track.title, track.artist, track.playback_status) == ('光', '陈楚生', 'playing')
+    assert track.duration_ms == 0 and track.metadata_scope == 'mac-qq-compact'
+
+    root.children.append(AXNode('AXButton', '点击登录'))
+    with pytest.raises(OSError, match='未输入搜索'):
+        bridge.play_candidate(path, candidate)
+    assert backend.actions == [(path, '123')]
 
 
 @pytest.mark.parametrize('label', ['点击登录', '登录', '安全验证'])

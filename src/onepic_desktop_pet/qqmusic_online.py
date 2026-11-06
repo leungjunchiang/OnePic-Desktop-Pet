@@ -13,6 +13,7 @@
 QQ 加载歌曲的状态确认默认等待二十五秒，避免慢网络十秒后才起播被提前判失败；取消仍优先。
 未确认时区分媒体缺失、暂停和版本不匹配，记录歌曲元数据以便排查，不据此推断掉号或会员失效。
 公开歌手目录在本机缓存十分钟，跨重启复用同一热门排序和完整资料；过期或损坏重新查询。
+Mac 简化播放栏确认起播后保留手动切歌；缺少时间轴时不强制接管播放模式。
 """
 
 from __future__ import annotations
@@ -66,7 +67,7 @@ def candidate_matches(selected: SongCandidate, track) -> bool:
     artists_match = expected <= actual if native.get('primary_artist_only') else expected == actual
     return (canonical(track.title) == canonical(selected.title) and artists_match
             and (not native.get('album') or canonical(track.album) == canonical(native['album'])
-                 or (getattr(track, 'metadata_scope', '') in {'mac-accessibility', 'windows-gsmtc'} and not track.album)))
+                 or (getattr(track, 'metadata_scope', '') in {'mac-accessibility', 'mac-qq-compact', 'windows-gsmtc'} and not track.album)))
 
 
 def _fetch_json(url: str) -> dict:
@@ -439,7 +440,8 @@ class QQMusicOnlinePlayer:
                 last_observed = latest
             if (not self.cancelled() and latest and str(latest.playback_status).casefold() == 'playing'
                     and candidate_matches(selected, latest)):
-                if prepare_queue is not None:
+                manual_only = getattr(latest, 'metadata_scope', '') == 'mac-qq-compact'
+                if prepare_queue is not None and not manual_only:
                     ready = prepare_queue()
                     if self.cancelled():
                         return failed('音乐操作已取消，正在执行暂停。', MusicPlaybackError.PLAY_ACTION_FAILED)
@@ -453,7 +455,8 @@ class QQMusicOnlinePlayer:
                     True, 'qq', title, artist,
                     f'QQ 音乐正在播放：{latest.artist}《{latest.title}》，六毛陪你一起听♪',
                     selected=selected, current_title=latest.title, current_artist=latest.artist,
-                    play_attempts=attempts, outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED)
+                    play_attempts=attempts, outcome=MusicPlaybackOutcome.PLAYBACK_CONFIRMED,
+                    manual_playlist_only=manual_only)
             remaining = deadline - self.clock()
             if remaining <= 0:
                 break
