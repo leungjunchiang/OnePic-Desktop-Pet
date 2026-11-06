@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
 from onepic_desktop_pet.diary import DailyCompanionStats
 from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore
@@ -456,6 +456,36 @@ def test_month_navigation_lands_on_complete_september() -> None:
     assert tuple(day.isoformat() for day in september) == ("2026-09-01", "2026-10-01")
     assert report_range_title("month", *september, today)[0] == "2026年9月"
     assert move_report_range("month", *september, 1) == october
+
+
+def test_monthly_device_details_start_collapsed_and_survive_refresh() -> None:
+    app = QApplication.instance() or QApplication([])
+    report = {"month": {"device_focus_totals": [
+        {"label": "设备 TEST01", "is_local": True, "seconds": 3600},
+    ]}}
+    dialog = WorkReportDialog(lambda: report)
+    dialog.tabs.setCurrentIndex(2)
+    dialog.apply_report(report)
+    app.processEvents()
+
+    toggle = dialog.findChild(QPushButton, "reportDevicesToggle")
+    details = dialog.findChild(QWidget, "reportDeviceDetails")
+    assert toggle.text() == "按设备查看"
+    assert details.isHidden()
+    toggle.click()
+    assert toggle.text() == "收起设备明细"
+    assert not details.isHidden()
+
+    refreshed = {"month": {**report["month"], "total_seconds": 3600}}
+    dialog.apply_report(refreshed)
+    app.processEvents()
+    toggles = dialog.findChildren(QPushButton, "reportDevicesToggle")
+    assert toggles[-1].isChecked()
+    toggles[-1].click()
+    assert dialog.findChildren(QWidget, "reportDeviceDetails")[-1].isHidden()
+    dialog.close()
+    dialog.deleteLater()
+    app.processEvents()
 
 
 def test_bad_local_rows_do_not_hide_a_synced_month_and_sources_explain_its_total(tmp_path) -> None:

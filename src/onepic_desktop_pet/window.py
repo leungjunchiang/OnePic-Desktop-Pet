@@ -1,5 +1,5 @@
 """QQ 点歌缺地址定位设置；歌单在六毛与快捷坞上方手动打开，后台播放由真实状态触发。
-主窗口协调专注补传核对、全历史下载以及日常增量同步。
+主窗口协调专注补传核对、原始区间全历史下载及服务器日累计全历史分页同步。
 
 先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
 
@@ -9372,6 +9372,7 @@ class PetWindow(QWidget):
             self.focus_analytics.focus_history_upload_manifest() if history_audit
             else self.focus_analytics.focus_segment_reconciliation_manifest()
         )
+        legacy_history_request = self.focus_analytics.legacy_focus_history_sync_request()
         return {
             "focus_date": today_key,
             # Duration scalars are retained only for old wire signatures.
@@ -9392,6 +9393,7 @@ class PetWindow(QWidget):
             ),
             "focus_segments_sync_cursor": self.focus_analytics.focus_segments_sync_cursor(),
             "focus_segments_all_history": True,
+            "focus_legacy_history_request": legacy_history_request,
             "focus_segments_sync_mode": self.focus_analytics.focus_segments_sync_mode(),
             "focus_segment_integrity_manifest": integrity_manifest,
             "focus_segment_integrity_manifest_kind": "history_upgrade" if history_audit else "reconciliation",
@@ -10102,6 +10104,54 @@ class PetWindow(QWidget):
         )
         analytics_changed = bool(analytics_changed or effective_projection_changed)
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
+        legacy_history_payload = data.get("_focus_legacy_history")
+        if isinstance(legacy_history_payload, dict):
+            legacy_request = legacy_history_payload.get("_request")
+            apply_legacy_page = getattr(
+                self.focus_analytics,
+                "apply_legacy_focus_history_page",
+                None,
+            )
+            legacy_ok = False
+            legacy_changed = False
+            legacy_count = 0
+            legacy_has_more = False
+            legacy_owner = str(legacy_history_payload.get("account_id") or "")
+            if (
+                callable(apply_legacy_page)
+                and user_id
+                and legacy_owner == user_id == str(self._active_focus_account_id or "")
+            ):
+                try:
+                    (
+                        legacy_ok,
+                        legacy_changed,
+                        legacy_count,
+                        legacy_has_more,
+                    ) = apply_legacy_page(legacy_history_payload, legacy_request)
+                except Exception as exc:
+                    LOGGER.warning("legacy daily history page was rejected: %s", exc)
+            note_legacy_result = getattr(
+                self.focus_analytics,
+                "note_legacy_focus_history_sync_result",
+                None,
+            )
+            if callable(note_legacy_result):
+                note_legacy_result(bool(legacy_ok))
+            lifecycle_log(
+                "focus.legacy_history_sync",
+                self,
+                mode=str(legacy_request.get("p_mode") or "") if isinstance(legacy_request, dict) else "",
+                row_count=max(0, int(legacy_count or 0)),
+                changed=bool(legacy_changed),
+                has_more=bool(legacy_has_more),
+                success=bool(legacy_ok),
+                error=str(legacy_history_payload.get("_error") or "")[:120],
+            )
+            history_changed = bool(history_changed or legacy_changed)
+            if legacy_ok and legacy_has_more:
+                # Continue only after this validated page was persisted.
+                self._schedule_social_tick(immediate=True)
         focus_segments_payload = data.get("_focus_segments")
         merge_checked = getattr(self.focus_analytics, "merge_remote_segments_checked", None)
         merge_ok = False

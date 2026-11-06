@@ -1,4 +1,4 @@
-"""保留全部专注明细，按北京时间统计并分批核对跨设备历史。
+"""保留全部专注区间及服务器日级兼容值，按北京时间统一计算跨设备历史。
 
 Local focus continuity, quality and lightweight review data.
 
@@ -7,10 +7,11 @@ application *categories*.  Window titles, document names, keystrokes and
 mouse coordinates never enter this file.  The module is intentionally
 transport-free so the desktop pet remains useful when the social backend is
 offline.  Period summaries are calculated on demand from the account-scoped
-history; no report images or extra server-side report rows are created.  Raw
-focus intervals are the canonical source for a timeline; legacy daily
-counters are explicit compatibility evidence for calendar totals and never
-become synthetic intervals or override a canonical timeline.
+history; no report images or extra server-side report rows are created. Raw
+focus intervals are the canonical source for a timeline. Explicit server
+legacy daily counters remain calendar-total compatibility evidence, are
+combined per date with the raw interval union, and never become synthetic
+intervals or override a canonical timeline.
 Successful sealed-fact uploads are remembered only as compact local digests,
 so unchanged rows and facts downloaded from other devices are not re-uploaded.
 """
@@ -29,6 +30,7 @@ from typing import Any, Callable
 from .focus_segments import (
     BEIJING_TIMEZONE as FOCUS_BEIJING_TIMEZONE,
     FOCUS_SEGMENT_CHECKPOINT_SECONDS,
+    MAX_FOCUS_SEGMENT_SECONDS,
     FocusAggregate,
     FocusSegment,
     aggregate_focus_time,
@@ -50,6 +52,9 @@ from .local_data import account_local_data_path, adopt_legacy_account_file
 # upper bound is an impossible full 24-hour day; older releases incorrectly
 # treated anything above eight hours as anomalous.
 MAX_ANALYTICS_DAY_SECONDS = 24 * 60 * 60 - 1
+# The server compatibility ledger permits exactly 24 hours. Preserve that
+# daily scalar as stored; it is not an interval and never enters the timeline.
+MAX_LEGACY_DAILY_SECONDS = 24 * 60 * 60
 INTERRUPTION_GRACE_SECONDS = 10 * 60
 BEIJING_TIMEZONE = FOCUS_BEIJING_TIMEZONE
 # Version 2 still trusted an RPC-wide success response.  The production RPC
@@ -73,6 +78,11 @@ FOCUS_SEGMENT_RECENT_RECONCILIATION_VERSION = 3
 FOCUS_SEGMENT_RECENT_RECONCILIATION_DAYS = 0  # The server's all-history mode.
 FOCUS_SEGMENT_RECENT_RECONCILIATION_PAGE_SIZE = 500
 FOCUS_SEGMENT_HISTORY_UPLOAD_AUDIT_VERSION = 1
+FOCUS_LEGACY_HISTORY_SYNC_VERSION = 1
+FOCUS_LEGACY_HISTORY_SYNC_PAGE_SIZE = 500
+FOCUS_LEGACY_HISTORY_SYNC_INTERVAL = timedelta(minutes=15)
+FOCUS_LEGACY_HISTORY_DELTA_OVERLAP = timedelta(days=1)
+FOCUS_LEGACY_HISTORY_SYNC_RETRY_SECONDS = 300
 FOCUS_SEGMENT_INTEGRITY_BATCH_SIZE = 500
 # A malformed/partial acknowledgement must remain retryable, but retrying a
 # bounded batch on every 30-second social tick can create an egress storm when
@@ -264,6 +274,7 @@ class FocusAnalyticsStore:
         self._remote_effective_projection: dict[str, Any] | None = None
         self._focus_integrity_next_attempt_monotonic = 0.0
         self._focus_upload_retry_not_before_monotonic = 0.0
+        self._focus_legacy_history_retry_not_before_monotonic = 0.0
         self._focus_sync_metrics_date = ""
         self._focus_sync_metrics: dict[str, int] = {}
         self._live: dict[str, Any] = {
@@ -369,6 +380,7 @@ class FocusAnalyticsStore:
         upload_state_changed = self._ensure_focus_segment_upload_state()
         self._focus_integrity_next_attempt_monotonic = 0.0
         self._focus_upload_retry_not_before_monotonic = 0.0
+        self._focus_legacy_history_retry_not_before_monotonic = 0.0
         self._focus_sync_metrics_date = ""
         self._focus_sync_metrics = {}
         projection_changed = self._ensure_daily_focus_projection()
@@ -599,7 +611,7 @@ class FocusAnalyticsStore:
         self._set_quarantined_effective_date("")
         return True
 
-    def merge_remote_history(self, payload: Any) -> bool:
+    def merge_remote_history(self, payload: Any, *, persist: bool = True) -> bool:
         """Merge explicit server legacy evidence without creating intervals.
 
         ``seconds`` alone is intentionally not imported.  Only the new RPC's
@@ -624,7 +636,7 @@ class FocusAnalyticsStore:
                 legacy_seconds = max(
                     0,
                     min(
-                        MAX_ANALYTICS_DAY_SECONDS,
+                        MAX_LEGACY_DAILY_SECONDS,
                         int(item.get("legacy_seconds", item.get("legacy_daily_seconds", 0)) or 0),
                     ),
                 )
@@ -658,9 +670,190 @@ class FocusAnalyticsStore:
             if entry != previous:
                 ledger[key] = entry
                 changed = True
-        if changed:
+        if changed and persist:
             self._save()
         return changed
+
+    def legacy_focus_history_sync_request(self) -> dict[str, Any] | None:
+        """Return one bounded request for the account's old daily history.
+
+        The first pass pages every frozen/server legacy day. Later passes ask
+        only for daily rows touched since the last completed snapshot. This
+        cursor is independent of raw interval upload and download state.
+        """
+
+        if monotonic() < self._focus_legacy_history_retry_not_before_monotonic:
+            return None
+        state = self._state.setdefault("account_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            self._state["account_state"] = state
+        if int(state.get("focus_legacy_history_sync_version") or 0) < FOCUS_LEGACY_HISTORY_SYNC_VERSION:
+            return {
+                "p_mode": "full",
+                "p_after_date": state.get("focus_legacy_history_full_after_date"),
+                "p_scan_anchor": state.get("focus_legacy_history_full_scan_anchor"),
+                "p_since": None,
+                "p_after_updated_at": None,
+                "p_after_updated_date": None,
+                "p_limit": FOCUS_LEGACY_HISTORY_SYNC_PAGE_SIZE,
+            }
+
+        scan_anchor = state.get("focus_legacy_history_delta_scan_anchor")
+        if scan_anchor:
+            return {
+                "p_mode": "delta",
+                "p_after_date": None,
+                "p_scan_anchor": scan_anchor,
+                "p_since": state.get("focus_legacy_history_updated_after"),
+                "p_after_updated_at": state.get("focus_legacy_history_delta_after_updated_at"),
+                "p_after_updated_date": state.get("focus_legacy_history_delta_after_date"),
+                "p_limit": FOCUS_LEGACY_HISTORY_SYNC_PAGE_SIZE,
+            }
+
+        completed = parse_focus_timestamp(state.get("focus_legacy_history_last_sync_at"))
+        now = _as_beijing(self._now())
+        if completed is not None and now - completed < FOCUS_LEGACY_HISTORY_SYNC_INTERVAL:
+            return None
+        return {
+            "p_mode": "delta",
+            "p_after_date": None,
+            "p_scan_anchor": None,
+            "p_since": state.get("focus_legacy_history_updated_after"),
+            "p_after_updated_at": None,
+            "p_after_updated_date": None,
+            "p_limit": FOCUS_LEGACY_HISTORY_SYNC_PAGE_SIZE,
+        }
+
+    def note_legacy_focus_history_sync_result(self, success: bool) -> None:
+        """Rate-limit a failed optional server-history page without moving cursors."""
+
+        self._focus_legacy_history_retry_not_before_monotonic = (
+            0.0 if success else monotonic() + FOCUS_LEGACY_HISTORY_SYNC_RETRY_SECONDS
+        )
+
+    def apply_legacy_focus_history_page(
+        self, payload: Any, request: Any,
+    ) -> tuple[bool, bool, int, bool]:
+        """Validate and persist one page without converting it to intervals.
+
+        Returns ``(success, changed, row_count, has_more)``. A rejected page
+        never advances its cursor, so the same page is safe to retry.
+        """
+
+        if not isinstance(payload, dict) or not isinstance(request, dict) or payload.get("_error"):
+            return False, False, 0, False
+        mode = str(request.get("p_mode") or "")
+        if mode not in {"full", "delta"} or payload.get("sync_mode") != mode:
+            return False, False, 0, False
+        rows = payload.get("days")
+        has_more = payload.get("has_more")
+        anchor = str(payload.get("scan_anchor") or "").strip()
+        anchor_at = parse_focus_timestamp(anchor)
+        request_anchor = request.get("p_scan_anchor")
+        if (
+            not isinstance(rows, list)
+            or len(rows) > FOCUS_LEGACY_HISTORY_SYNC_PAGE_SIZE
+            or not isinstance(has_more, bool)
+            or anchor_at is None
+            or (request_anchor is not None and parse_focus_timestamp(request_anchor) != anchor_at)
+        ):
+            return False, False, 0, False
+        since = parse_focus_timestamp(request.get("p_since"))
+        after_at = parse_focus_timestamp(request.get("p_after_updated_at"))
+        after_date = str(request.get("p_after_updated_date") or "")
+
+        normalized_rows: list[dict[str, Any]] = []
+        seen_dates: set[str] = set()
+        previous_key: tuple[Any, ...] | None = None
+        for item in rows:
+            if not isinstance(item, dict):
+                return False, False, 0, False
+            try:
+                focus_day = date.fromisoformat(str(item.get("focus_date") or "")[:10])
+                legacy_seconds = int(item.get("legacy_seconds", item.get("legacy_daily_seconds", 0)) or 0)
+                canonical_seconds = max(0, int(item.get("canonical_seconds", 0) or 0))
+            except (TypeError, ValueError, OverflowError):
+                return False, False, 0, False
+            date_key = focus_day.isoformat()
+            if focus_day > self.current_time().date() or not 0 <= legacy_seconds <= MAX_LEGACY_DAILY_SECONDS:
+                return False, False, 0, False
+            if date_key in seen_dates:
+                return False, False, 0, False
+            seen_dates.add(date_key)
+            if mode == "full":
+                if request.get("p_after_date") and date_key <= str(request["p_after_date"])[:10]:
+                    return False, False, 0, False
+                key: tuple[Any, ...] = (date_key,)
+            else:
+                updated_at = parse_focus_timestamp(item.get("updated_at"))
+                if updated_at is None or updated_at > anchor_at or (since is not None and updated_at < since):
+                    return False, False, 0, False
+                key = (updated_at, date_key)
+                if after_at is not None and key <= (after_at, after_date):
+                    return False, False, 0, False
+            if previous_key is not None and key <= previous_key:
+                return False, False, 0, False
+            previous_key = key
+            if legacy_seconds > 0:
+                normalized_rows.append({
+                    "focus_date": date_key,
+                    "legacy_seconds": legacy_seconds,
+                    "canonical_seconds": min(MAX_ANALYTICS_DAY_SECONDS, canonical_seconds),
+                    "legacy_source": str(item.get("legacy_source") or "server_legacy_compatibility")[:80],
+                })
+
+        next_after_date = str(payload.get("next_after_date") or "")[:10]
+        next_updated_at = str(payload.get("next_updated_at") or "").strip()
+        next_updated_date = str(payload.get("next_updated_date") or "")[:10]
+        if has_more:
+            if not rows:
+                return False, False, 0, False
+            if mode == "full":
+                if not next_after_date or next_after_date != str(rows[-1].get("focus_date") or "")[:10]:
+                    return False, False, 0, False
+            elif previous_key != (parse_focus_timestamp(next_updated_at), next_updated_date):
+                return False, False, 0, False
+
+        # Persist the page and cursor together, keeping the sealed interval
+        # history out of the copy and save rollback.
+        previous_ledger = self._state.get("legacy_daily")
+        previous_account = self._state.get("account_state")
+        self._state["legacy_daily"] = dict(previous_ledger) if isinstance(previous_ledger, dict) else {}
+        self._state["account_state"] = dict(previous_account) if isinstance(previous_account, dict) else {}
+        try:
+            changed = self.merge_remote_history({"days": normalized_rows}, persist=False)
+            state = self._state["account_state"]
+            if mode == "full":
+                if has_more:
+                    state["focus_legacy_history_full_after_date"] = next_after_date
+                    state["focus_legacy_history_full_scan_anchor"] = anchor
+                else:
+                    state["focus_legacy_history_sync_version"] = FOCUS_LEGACY_HISTORY_SYNC_VERSION
+                    state["focus_legacy_history_updated_after"] = (anchor_at - FOCUS_LEGACY_HISTORY_DELTA_OVERLAP).isoformat()
+                    state["focus_legacy_history_last_sync_at"] = _as_beijing(self._now()).isoformat()
+                    state.pop("focus_legacy_history_full_after_date", None)
+                    state.pop("focus_legacy_history_full_scan_anchor", None)
+            elif has_more:
+                state["focus_legacy_history_delta_scan_anchor"] = anchor
+                state["focus_legacy_history_delta_after_updated_at"] = next_updated_at
+                state["focus_legacy_history_delta_after_date"] = next_updated_date
+            else:
+                # A one-day overlap also catches a row whose database
+                # transaction began before the previous watermark but became
+                # visible only after that page completed. Monotonic merge
+                # makes these repeated values safe and idempotent.
+                state["focus_legacy_history_updated_after"] = (anchor_at - FOCUS_LEGACY_HISTORY_DELTA_OVERLAP).isoformat()
+                state["focus_legacy_history_last_sync_at"] = _as_beijing(self._now()).isoformat()
+                state.pop("focus_legacy_history_delta_scan_anchor", None)
+                state.pop("focus_legacy_history_delta_after_updated_at", None)
+                state.pop("focus_legacy_history_delta_after_date", None)
+            self._save()
+        except Exception:
+            self._state["legacy_daily"] = previous_ledger
+            self._state["account_state"] = previous_account
+            return False, False, 0, False
+        return True, changed, len(normalized_rows), has_more
 
     def focus_segments_payload(self, limit: int = 500) -> list[dict[str, Any]]:
         """Serialize only closed local facts not acknowledged by the server."""
@@ -747,7 +940,7 @@ class FocusAnalyticsStore:
         """Return valid sealed facts across all dates; live time stays local."""
         now = self.current_time()
         return [
-            segment for segment in self.focus_segments()
+            segment for segment in self.focus_segments(exclude_legacy_checkpoints=True)
             if segment.end_at is not None
             and segment.start_at < segment.end_at
             and segment.start_at.date() <= now.date()
@@ -1485,7 +1678,7 @@ class FocusAnalyticsStore:
         a source of focus time.
         """
 
-        segments = self.focus_segments()
+        segments = self.focus_segments(exclude_legacy_checkpoints=True)
         if not segments:
             state = self._state.setdefault("account_state", {})
             if not isinstance(state, dict):
@@ -1521,9 +1714,6 @@ class FocusAnalyticsStore:
             seconds = max(0, int(aggregate.total_seconds))
             if int(raw.get("seconds", 0) or 0) != seconds:
                 raw["seconds"] = seconds
-                changed = True
-            if raw.get("seconds_untrusted"):
-                raw["seconds_untrusted"] = False
                 changed = True
 
         today = moment.date()
@@ -1858,13 +2048,11 @@ class FocusAnalyticsStore:
 
         def day_seconds(day: date) -> int | None:
             raw = days.get(day.isoformat(), {})
-            legacy_seconds = self._legacy_day_seconds(day)
-            if isinstance(raw, dict) and bool(raw.get("seconds_untrusted")):
-                # A quarantined local checkpoint cannot contribute, but a
-                # server-confirmed legacy daily evidence row still can.
-                return legacy_seconds or None
-            canonical_seconds = continuity_daily.get(day.isoformat(), 0) if has_raw_facts else 0
-            return max(canonical_seconds, legacy_seconds)
+            return self._effective_daily_measure(
+                day,
+                continuity_daily.get(day.isoformat(), 0),
+                untrusted=isinstance(raw, dict) and bool(raw.get("seconds_untrusted")),
+            )["seconds"]
 
         weekly_total = sum(
             seconds or 0
@@ -1970,10 +2158,10 @@ class FocusAnalyticsStore:
             raw = stored.get(key, {})
             if not isinstance(raw, dict):
                 raw = {}
-            if bool(raw.get("seconds_untrusted")) and legacy_seconds <= 0:
-                continue
             try:
                 canonical_seconds = self._raw_day_seconds(focus_date) if has_raw_facts else 0
+                if raw.get("seconds_untrusted") and not (canonical_seconds or legacy_seconds):
+                    continue
                 seconds = max(canonical_seconds, legacy_seconds)
             except (TypeError, ValueError, OverflowError):
                 continue
@@ -1987,7 +2175,7 @@ class FocusAnalyticsStore:
             })
         return result
 
-    def focus_segments(self) -> list[FocusSegment]:
+    def focus_segments(self, *, exclude_legacy_checkpoints: bool = False) -> list[FocusSegment]:
         """Return the durable interval facts represented by local records.
 
         ``days`` and the scalar account snapshot are deliberately excluded:
@@ -1995,10 +2183,17 @@ class FocusAnalyticsStore:
         """
 
         result: list[FocusSegment] = []
+        days = self._state.get("days", {})
+        days = days if isinstance(days, dict) else {}
         for index, raw in enumerate(self._state.get("records", [])):
             segment = segment_from_record(raw, index)
-            if segment is not None:
-                result.append(segment)
+            if segment is None:
+                continue
+            if exclude_legacy_checkpoints and self._is_quarantined_focus_record(
+                raw, days.get(segment.start_at.date().isoformat()),
+            ):
+                continue
+            result.append(segment)
         return result
 
     def set_live_projection_segments(self, segments: Any, *, renew_ttl: bool = True) -> bool:
@@ -2057,7 +2252,7 @@ class FocusAnalyticsStore:
     ) -> list[FocusSegment]:
         """Return sealed account facts plus transient live intervals."""
 
-        segments = self.focus_segments()
+        segments = self.focus_segments(exclude_legacy_checkpoints=True)
         segments.extend(self.live_projection_segments())
         if extra_segments:
             segments.extend(extra_segments)
@@ -2068,16 +2263,7 @@ class FocusAnalyticsStore:
 
         start = datetime.combine(focus_date, time.min, tzinfo=BEIJING_TIMEZONE)
         end = start + timedelta(days=1)
-        untrusted_dates = {
-            str(key)
-            for key, value in (self._state.get("days", {}) or {}).items()
-            if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
-        }
-        segments = [
-            segment
-            for segment in self._projection_segments()
-            if segment.start_at.date().isoformat() not in untrusted_dates
-        ]
+        segments = self._projection_segments()
         return max(
             0,
             int(
@@ -2103,9 +2289,59 @@ class FocusAnalyticsStore:
         if not isinstance(raw, dict):
             return 0
         try:
-            return max(0, min(MAX_ANALYTICS_DAY_SECONDS, int(raw.get("seconds", 0) or 0)))
+            return max(0, min(MAX_LEGACY_DAILY_SECONDS, int(raw.get("seconds", 0) or 0)))
         except (TypeError, ValueError, OverflowError):
             return 0
+
+    def _effective_daily_measure(
+        self,
+        focus_date: date,
+        canonical_seconds: int,
+        *,
+        is_future: bool = False,
+        untrusted: bool = False,
+        include_legacy: bool = True,
+    ) -> dict[str, Any]:
+        """Combine one day's interval union and explicit daily compatibility.
+
+        The legacy value remains a daily scalar. It affects only this date's
+        calendar total and never creates hourly buckets, sessions or interval
+        marks. Partial-day windows cannot allocate a daily scalar safely.
+        """
+
+        canonical = max(0, min(MAX_FOCUS_SEGMENT_SECONDS, int(canonical_seconds or 0)))
+        legacy = self._legacy_day_seconds(focus_date) if include_legacy else 0
+        if is_future:
+            return {
+                "seconds": None,
+                "canonical_seconds": 0,
+                "legacy_seconds": 0,
+                "time_source": "none",
+                "status": "future",
+                "trusted": False,
+            }
+        seconds = max(canonical, legacy)
+        if untrusted and not seconds:
+            seconds = None
+        source = (
+            "legacy_compatibility" if legacy > canonical
+            else "canonical_interval_union" if canonical > 0 or legacy > 0
+            else "none"
+        )
+        return {
+            "seconds": seconds,
+            "canonical_seconds": canonical,
+            "legacy_seconds": legacy,
+            "time_source": source,
+            "status": (
+                "legacy_compatibility" if legacy > canonical
+                else "untrusted" if untrusted and not seconds
+                else "observed"
+            ),
+            # A zero-activity day is still a valid, observed calendar day.
+            # Only quarantined intervals and future dates are untrusted.
+            "trusted": bool(not untrusted),
+        }
 
     def focus_aggregate(
         self,
@@ -2121,16 +2357,6 @@ class FocusAnalyticsStore:
         validation_moment = _as_beijing(self._now())
         range_start, range_end, _ = calendar_window(period, moment)
         segments = self._projection_segments(extra_segments) if _segments is None else _segments
-        # Legacy cumulative checkpoint rows are retained for diagnostics but
-        # are marked untrusted by ``_rebuild_days_from_records``.  Exclude all
-        # records on those dates from user-visible aggregates.
-        untrusted_dates = {
-            str(key)
-            for key, value in (self._state.get("days", {}) or {}).items()
-            if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
-        }
-        if untrusted_dates:
-            segments = [item for item in segments if item.start_at.date().isoformat() not in untrusted_dates]
         return aggregate_focus_time(
             segments,
             range_start,
@@ -2159,15 +2385,8 @@ class FocusAnalyticsStore:
         if window_end <= window_start:
             return []
         validation_moment = _as_beijing(self._now())
-        untrusted_dates = {
-            str(key)
-            for key, value in (self._state.get("days", {}) or {}).items()
-            if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
-        }
         result: list[FocusSegment] = []
         for segment in self._projection_segments(extra_segments):
-            if segment.start_at.date().isoformat() in untrusted_dates:
-                continue
             try:
                 if segment.validation_error(validation_moment):
                     continue
@@ -2191,16 +2410,7 @@ class FocusAnalyticsStore:
         if window_end <= window_start:
             raise ValueError("end_at must be after start_at")
         validation_moment = _as_beijing(self._now())
-        untrusted_dates = {
-            str(key)
-            for key, value in (self._state.get("days", {}) or {}).items()
-            if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
-        }
-        segments = [
-            item
-            for item in self._projection_segments(extra_segments)
-            if item.start_at.date().isoformat() not in untrusted_dates
-        ]
+        segments = self._projection_segments(extra_segments)
         return aggregate_focus_time(
             segments,
             window_start,
@@ -2218,15 +2428,14 @@ class FocusAnalyticsStore:
         period: str = "custom",
         extra_segments: list[FocusSegment] | None = None,
     ) -> dict[str, Any]:
-        """Summarize any half-open Beijing interval from the canonical union.
+        """Summarize a half-open Beijing range with one effective daily rule.
 
         The standard day/week/month/year report predates movable windows and
-        has a few compatibility fields for the old UI.  This method is the
-        deliberately small common path for arbitrary report windows.  It
-        never adds daily counters or timer checkpoints as evidence: every
-        duration is produced by :func:`aggregate_focus_time`, so overlapping
-        devices are counted once and a session crossing midnight is clipped
-        correctly at both ends.
+        has a few compatibility fields for the old UI. Every user-visible
+        calendar total now uses the same per-day maximum of the clipped raw
+        interval union and explicit server legacy daily evidence. Legacy
+        seconds remain daily-only: the interval list, hourly buckets, round
+        counts and session metrics contain raw interval evidence only.
         """
 
         window_start = _as_beijing(start_at)
@@ -2234,17 +2443,12 @@ class FocusAnalyticsStore:
         if window_end <= window_start:
             raise ValueError("end_at must be after start_at")
         validation_moment = _as_beijing(self._now())
-        raw_segments = self._projection_segments(extra_segments)
+        segments = self._projection_segments(extra_segments)
         untrusted_dates = {
             str(key)
             for key, value in (self._state.get("days", {}) or {}).items()
             if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
         }
-        segments = [
-            item
-            for item in raw_segments
-            if item.start_at.date().isoformat() not in untrusted_dates
-        ]
         # The daily projection is an incremental cache, not a second source
         # of truth.  In particular, never let an old checkpoint overwrite a
         # selected historical day's clipped union.
@@ -2270,10 +2474,12 @@ class FocusAnalyticsStore:
             except (TypeError, ValueError, OverflowError):
                 continue
 
-        # Build full daily rows from the same clipped union.  A future day is
-        # intentionally represented as ``None`` just like the standard
-        # reports; a current day contains the live value available right now.
+        # Calendar totals use the shared per-day effective-value rule. A
+        # legacy scalar is included only when its entire Beijing day is inside
+        # this selected window; partial days cannot be reconstructed from an
+        # aggregate with no time boundaries.
         daily: list[dict[str, Any]] = []
+        partial_legacy_days: list[str] = []
         cursor = window_start.date()
         last_date = (window_end - timedelta(microseconds=1)).date()
         while cursor <= last_date:
@@ -2281,15 +2487,23 @@ class FocusAnalyticsStore:
             day_end = day_start + timedelta(days=1)
             is_future = cursor > validation_moment.date()
             untrusted = cursor.isoformat() in untrusted_dates
-            seconds: int | None
-            if is_future or untrusted:
-                seconds = None
-            else:
-                # Always use the clipped interval-union bucket.  The
-                # incremental daily projection is maintained for lightweight
-                # consumers, but it must never be allowed to resurrect a
-                # stale/corrupt historical counter in a report.
-                seconds = max(0, int(aggregate.daily.get(cursor.isoformat(), 0) or 0))
+            full_day_selected = day_start >= window_start and day_end <= window_end
+            raw_legacy_seconds = self._legacy_day_seconds(cursor)
+            if not full_day_selected and raw_legacy_seconds and not is_future:
+                partial_legacy_days.append(cursor.isoformat())
+            canonical_seconds = (
+                max(0, int(aggregate.daily.get(cursor.isoformat(), 0) or 0))
+                if not is_future
+                else 0
+            )
+            measure = self._effective_daily_measure(
+                cursor,
+                canonical_seconds,
+                is_future=is_future,
+                untrusted=untrusted,
+                include_legacy=full_day_selected,
+            )
+            seconds = measure["seconds"]
             weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[cursor.weekday()]
             daily.append({
                 "date": cursor.isoformat(),
@@ -2297,16 +2511,19 @@ class FocusAnalyticsStore:
                 "weekday": weekday,
                 "display_label": f"{cursor.month}/{cursor.day} {weekday}",
                 "seconds": seconds,
+                "canonical_seconds": int(measure["canonical_seconds"] or 0),
+                "legacy_seconds": int(measure["legacy_seconds"] or 0),
+                "time_source": str(measure["time_source"]),
                 "rounds": daily_rounds.get(cursor.isoformat(), 0) if seconds is not None else None,
-                "trusted": not is_future and not untrusted,
+                "trusted": bool(measure["trusted"]),
                 "is_today": cursor == validation_moment.date(),
                 "is_future": is_future,
-                "status": "future" if is_future else "untrusted" if untrusted else "observed",
+                "status": str(measure["status"]),
             })
             cursor += timedelta(days=1)
 
-        # Quality and completion are descriptive metadata only.  Totals and
-        # all chart values remain the unioned interval metrics above.
+        # Session and rhythm metadata remain interval-only even when a
+        # calendar total includes an old daily compatibility value.
         quality_values = [max(0, min(100, int(value))) for value in aggregate.quality_values]
         valid_source_count = 0
         completed_source_count = 0
@@ -2325,7 +2542,13 @@ class FocusAnalyticsStore:
                 continue
 
         observed_daily = [row for row in daily if row.get("seconds") is not None]
-        total_seconds = max(0, int(aggregate.total_seconds))
+        total_seconds = sum(max(0, int(row.get("seconds", 0) or 0)) for row in observed_daily)
+        legacy_compatibility_days = [
+            str(row.get("date") or "")
+            for row in daily
+            if row.get("time_source") == "legacy_compatibility"
+        ]
+        has_legacy_compatibility = bool(legacy_compatibility_days)
         active_days = sum(1 for row in observed_daily if int(row.get("seconds", 0) or 0) > 0)
         monthly: list[dict[str, Any]] = []
         month_keys = sorted({str(row.get("date") or "")[:7] for row in daily if row.get("date")})
@@ -2365,6 +2588,7 @@ class FocusAnalyticsStore:
             "start": window_start.date().isoformat(),
             "end": end_date.isoformat(),
             "total_seconds": total_seconds,
+            "canonical_interval_seconds": max(0, int(aggregate.total_seconds)),
             "completed_rounds": completed_source_count,
             "longest_focus_seconds": max(0, int(aggregate.longest_seconds)),
             "interruptions": max(0, int(aggregate.interruption_count)),
@@ -2373,8 +2597,8 @@ class FocusAnalyticsStore:
             "started_rounds": max(0, int(aggregate.segment_count)),
             "completion_rate": round(completed_source_count / valid_source_count * 100, 1) if valid_source_count else 0.0,
             "average_session_seconds": max(0, int(aggregate.average_seconds)),
-            "high_quality_seconds": total_seconds if aggregate.longest_seconds >= 25 * 60 else 0,
-            "deep_focus_seconds": total_seconds if aggregate.longest_seconds >= 25 * 60 else 0,
+            "high_quality_seconds": max(0, int(aggregate.total_seconds)) if aggregate.longest_seconds >= 25 * 60 else 0,
+            "deep_focus_seconds": max(0, int(aggregate.total_seconds)) if aggregate.longest_seconds >= 25 * 60 else 0,
             "first_started_at": first_started_text,
             "last_ended_at": last_ended_text,
             "strongest_window": self._best_window(end_date, start=window_start.date()),
@@ -2386,12 +2610,23 @@ class FocusAnalyticsStore:
             "data_quality": {
                 "trusted": not bool(untrusted_dates.intersection({str(row.get("date")) for row in daily}) or aggregate.errors),
                 "untrusted_days": sorted(untrusted_dates.intersection({str(row.get("date")) for row in daily})),
+                "legacy_compatibility_days": legacy_compatibility_days,
+                "partial_window_legacy_days": partial_legacy_days,
                 "consistency_errors": list(aggregate.errors),
                 "message": (
-                    "本区间发现旧版重复检查点；这些日期未作为可信区间证据。"
+                    "本区间有旧版重复检查点已排除，同日其他原始区间仍计入。"
                     if untrusted_dates.intersection({str(row.get("date")) for row in daily})
                     else "本区间统计存在一致性异常，异常区间已剔除。"
                     if aggregate.errors
+                    else (
+                        f"本区间含 {len(legacy_compatibility_days)} 天历史日累计兼容值；"
+                        f"时间轴和时段图只显示原始区间；另有 {len(partial_legacy_days)} 个非整日边缘日期的旧累计未计入。"
+                    )
+                    if has_legacy_compatibility and partial_legacy_days
+                    else f"本区间含 {len(legacy_compatibility_days)} 天历史日累计兼容值；时间轴和时段图只显示原始区间。"
+                    if has_legacy_compatibility
+                    else "部分日期只有日累计兼容值，无法按小时裁切，未计入这个非整日区间。"
+                    if partial_legacy_days
                     else "本区间数据口径正常。"
                 ),
             },
@@ -2401,7 +2636,7 @@ class FocusAnalyticsStore:
                 and self._record_date(raw) is not None
                 and window_start.date() <= self._record_date(raw) <= end_date
             ),
-            "local_evidence": bool(valid_source_count),
+            "local_evidence": bool(valid_source_count or has_legacy_compatibility),
             "raw_segment_count": len(segments),
             "raw_period_evidence": bool(valid_source_count),
             "raw_source_active": bool(valid_source_count),
@@ -2423,16 +2658,7 @@ class FocusAnalyticsStore:
         moment = _as_beijing(at or self._now())
         validation_moment = _as_beijing(self._now())
         range_start, range_end, _ = calendar_window(period, moment)
-        untrusted_dates = {
-            str(key)
-            for key, value in (self._state.get("days", {}) or {}).items()
-            if isinstance(value, dict) and bool(value.get("seconds_untrusted"))
-        }
-        segments = [
-            segment
-            for segment in self.focus_segments()
-            if segment.start_at.date().isoformat() not in untrusted_dates
-        ]
+        segments = self.focus_segments(exclude_legacy_checkpoints=True)
         grouped: dict[str, list[FocusSegment]] = {}
         for segment in segments:
             key = str(segment.device_id or "").strip() or "unattributed"
@@ -2498,7 +2724,7 @@ class FocusAnalyticsStore:
         if not isinstance(projection, dict):
             projection = {}
             state["daily_focus_projection"] = projection
-        sealed = self.focus_segments()
+        sealed = self.focus_segments(exclude_legacy_checkpoints=True)
         now = _as_beijing(self._now())
         changed = False
         days = self._state.setdefault("days", {})
@@ -2541,9 +2767,6 @@ class FocusAnalyticsStore:
                 if int(day.get(field, 0) or 0) != value:
                     day[field] = value
                     changed = True
-            if day.get("seconds_untrusted"):
-                day["seconds_untrusted"] = False
-                changed = True
         return changed
 
     def _ensure_daily_focus_projection(self) -> bool:
@@ -2562,7 +2785,12 @@ class FocusAnalyticsStore:
         return self._rebuild_daily_focus_projection(dates)
 
     def period_summary(
-        self, period: str = "day", at: datetime | None = None, *, include_details: bool = True,
+        self,
+        period: str = "day",
+        at: datetime | None = None,
+        *,
+        include_details: bool = True,
+        extra_segments: list[FocusSegment] | None = None,
     ) -> dict[str, Any]:
         """Calculate a day/week/month/year report from account-local history.
 
@@ -2601,7 +2829,7 @@ class FocusAnalyticsStore:
             period_end = start.replace(year=start.year + 1) - timedelta(days=1)
         range_start = datetime.combine(start, time.min, tzinfo=BEIJING_TIMEZONE)
         range_end = datetime.combine(today + timedelta(days=1), time.min, tzinfo=BEIJING_TIMEZONE)
-        raw_segments = self._projection_segments()
+        raw_segments = self._projection_segments(extra_segments)
         aggregate = self.focus_aggregate(key, moment, _segments=raw_segments)
         # ``source_segment_count`` also includes facts outside the requested
         # window.  A positive projection (or an explicit invalid-interval
@@ -2637,32 +2865,34 @@ class FocusAnalyticsStore:
             raw = raw if isinstance(raw, dict) else {}
             is_future = cursor > today
             untrusted = bool(raw.get("seconds_untrusted"))
-            legacy_seconds = self._legacy_day_seconds(cursor)
+            canonical_seconds = (
+                max(0, int(aggregate.daily.get(date_key, 0) or 0))
+                if not is_future and has_raw_facts
+                else 0
+            )
+            measure = self._effective_daily_measure(
+                cursor,
+                canonical_seconds,
+                is_future=is_future,
+                untrusted=untrusted,
+            )
+            seconds = measure["seconds"]
+            legacy_seconds = int(measure["legacy_seconds"] or 0)
             rounds = 0
             longest = 0
             day_interruptions = 0
             if is_future:
-                seconds = None
                 rounds = None
                 longest = 0
                 day_interruptions = 0
             elif untrusted:
                 # A local raw checkpoint may be quarantined while the server
-                # still has a valid legacy daily aggregate from another
-                # device. Preserve that calendar evidence without reviving
-                # the untrusted local interval history.
-                seconds = legacy_seconds or None
+                # Retain other devices' interval evidence and the server's
+                # daily compatibility value while flagging the excluded rows.
                 rounds = None if seconds is None else 0
                 longest = 0
                 day_interruptions = 0
                 untrusted_days.append(date_key)
-            else:
-                canonical_seconds = (
-                    max(0, int(aggregate.daily.get(date_key, 0) or 0))
-                    if has_raw_facts
-                    else 0
-                )
-                seconds = max(canonical_seconds, legacy_seconds)
             if not is_future and not untrusted and has_raw_facts:
                 try:
                     rounds = max(0, int(raw.get("rounds", 0) or 0))
@@ -2681,33 +2911,14 @@ class FocusAnalyticsStore:
                 "weekday": weekday,
                 "display_label": f"{cursor.month}/{cursor.day} {weekday}",
                 "seconds": seconds,
-                "canonical_seconds": (
-                    max(0, int(aggregate.daily.get(date_key, 0) or 0))
-                    if not is_future and has_raw_facts
-                    else 0
-                ),
-                "legacy_seconds": legacy_seconds if not is_future else 0,
-                "time_source": (
-                    "legacy_compatibility"
-                    if not is_future and legacy_seconds > max(
-                        0,
-                        int(aggregate.daily.get(date_key, 0) or 0) if has_raw_facts else 0,
-                    )
-                    else "canonical_interval_union"
-                    if not is_future and (has_raw_facts or legacy_seconds > 0)
-                    else "none"
-                ),
+                "canonical_seconds": int(measure["canonical_seconds"] or 0),
+                "legacy_seconds": legacy_seconds,
+                "time_source": str(measure["time_source"]),
                 "rounds": rounds,
-                "trusted": (has_raw_facts or legacy_seconds > 0) and not untrusted and not is_future,
+                "trusted": bool(measure["trusted"]),
                 "is_today": cursor == today,
                 "is_future": is_future,
-                "status": (
-                    "future" if is_future
-                    else "untrusted" if untrusted and not legacy_seconds
-                    else "legacy_compatibility"
-                    if legacy_seconds > 0 and (untrusted or not has_raw_facts)
-                    else "observed"
-                ),
+                "status": str(measure["status"]),
             })
             cursor += timedelta(days=1)
 
@@ -2716,6 +2927,11 @@ class FocusAnalyticsStore:
         # hourly buckets, and session metrics remain canonical-only.
         local_period_evidence = raw_period_evidence or period_has_legacy
         total_seconds = sum(int(item.get("seconds") or 0) for item in daily)
+        canonical_interval_seconds = sum(
+            int(item.get("canonical_seconds") or 0)
+            for item in daily
+            if not item.get("is_future")
+        )
 
         if not include_details:
             # The clock does not need quality, session groups, strongest
@@ -2723,6 +2939,7 @@ class FocusAnalyticsStore:
             # and legacy/quarantine rules as the full report above.
             return {
                 "total_seconds": total_seconds,
+                "canonical_interval_seconds": canonical_interval_seconds,
                 "local_record_count": sum(
                     1 for raw in self._state.get("records", [])
                     if isinstance(raw, dict)
@@ -2735,14 +2952,8 @@ class FocusAnalyticsStore:
                 "legacy_compatibility_active": period_has_legacy,
             }
 
-        trusted_days = {
-            str(item.get("date") or "")
-            for item in daily
-            if bool(item.get("trusted"))
-        }
-
-        def trusted_record_date(value: datetime) -> bool:
-            return value.date().isoformat() in trusted_days
+        def trusted_record(raw: dict[str, Any], value: datetime) -> bool:
+            return not self._is_quarantined_focus_record(raw, stored.get(value.date().isoformat()))
 
         quality_values: list[int] = []
         for raw in self._state.get("records", []):
@@ -2755,7 +2966,7 @@ class FocusAnalyticsStore:
                 value = int(raw.get("quality", 0) or 0)
             except (TypeError, ValueError, OverflowError):
                 continue
-            if start <= started.date() <= today and trusted_record_date(started) and value > 0:
+            if start <= started.date() <= today and trusted_record(raw, started) and value > 0:
                 quality_values.append(max(0, min(100, value)))
 
         # Derive report-only metrics from the raw account-scoped records. A
@@ -2775,7 +2986,7 @@ class FocusAnalyticsStore:
                 seconds = max(0, int(raw.get("seconds", 0) or 0))
             except (TypeError, ValueError, OverflowError):
                 continue
-            if not (start <= started.date() <= today) or not trusted_record_date(started):
+            if not (start <= started.date() <= today) or not trusted_record(raw, started):
                 continue
             record_id = str(raw.get("record_id") or "").strip()
             session_key = record_id.split(":", 1)[0] if record_id else f"record:{index}"
@@ -2869,24 +3080,31 @@ class FocusAnalyticsStore:
             for item in session_records.values()
             if continuous_seconds(item["intervals"]) >= 25 * 60
         )
-        high_quality_seconds = min(high_quality_seconds, total_seconds)
+        high_quality_seconds = min(high_quality_seconds, canonical_interval_seconds)
         if first_started is not None:
             first_started_text = first_started.strftime("%H:%M")
             last_ended_text = last_ended.strftime("%H:%M") if last_ended is not None else "--:--"
         else:
             first_started_text = last_ended_text = "暂无记录"
 
+        report_longest = aggregate.longest_seconds
+        report_average = aggregate.average_seconds
+        if not extra_segments:
+            if longest_session_seconds <= canonical_interval_seconds:
+                report_longest = max(report_longest, longest_session_seconds)
+            if not interval_evidence and longest_focus_seconds <= canonical_interval_seconds:
+                report_longest = max(report_longest, longest_focus_seconds)
+            if session_durations:
+                report_average = round(sum(session_durations) / len(session_durations))
+
         return {
             "period": key,
             "start": start.isoformat(),
             "end": today.isoformat(),
             "total_seconds": total_seconds,
+            "canonical_interval_seconds": canonical_interval_seconds,
             "completed_rounds": completed_rounds,
-            "longest_focus_seconds": (
-                max(aggregate.longest_seconds, longest_session_seconds)
-                if interval_evidence
-                else max(aggregate.longest_seconds, longest_focus_seconds, longest_session_seconds)
-            ),
+            "longest_focus_seconds": report_longest,
             "interruptions": (
                 aggregate.interruption_count
                 if interval_evidence
@@ -2894,15 +3112,12 @@ class FocusAnalyticsStore:
             ),
             "average_quality": round(sum(quality_values) / len(quality_values)) if quality_values else 0,
             "active_days": sum(1 for item in daily if int(item.get("seconds") or 0) > 0),
-            "started_rounds": started_rounds,
+            "started_rounds": max(started_rounds, aggregate.segment_count) if extra_segments else started_rounds,
             "completion_rate": completion_rate,
             # Average and maximum now use the same session grain.  Previously
             # average used unioned segment time while maximum used continuous
             # session time, which could make the average larger than the max.
-            "average_session_seconds": (
-                round(sum(session_durations) / len(session_durations))
-                if session_durations else aggregate.average_seconds
-            ),
+            "average_session_seconds": min(report_average, report_longest),
             "high_quality_seconds": high_quality_seconds,
             "deep_focus_seconds": high_quality_seconds,
             "first_started_at": first_started_text,
@@ -2961,7 +3176,7 @@ class FocusAnalyticsStore:
                 continue
             if window_start <= started.date() <= today:
                 day = self._state.get("days", {}).get(started.date().isoformat(), {})
-                if isinstance(day, dict) and bool(day.get("seconds_untrusted")):
+                if self._is_quarantined_focus_record(raw, day):
                     continue
                 buckets.setdefault(started.hour, []).append(seconds)
         if not buckets:
@@ -3097,6 +3312,16 @@ class FocusAnalyticsStore:
             return False
         return True
 
+    @classmethod
+    def _is_quarantined_focus_record(cls, raw: dict[str, Any], day: Any) -> bool:
+        """Limit an old checkpoint flag to the legacy rows that triggered it."""
+
+        return (
+            isinstance(day, dict)
+            and bool(day.get("seconds_untrusted"))
+            and cls._is_legacy_checkpoint_record(raw)
+        )
+
     @staticmethod
     def _record_date(raw: dict[str, Any]) -> date | None:
         try:
@@ -3197,25 +3422,23 @@ class FocusAnalyticsStore:
     def _trim_days(self) -> bool:
         days = self._state.setdefault("days", {})
         cutoff = _as_beijing(self._now()).date() - timedelta(days=400)
-        trimmed = {key: value for key, value in days.items() if key >= cutoff.isoformat()}
+        trimmed = {
+            key: value for key, value in days.items()
+            if key >= cutoff.isoformat()
+            or (isinstance(value, dict) and bool(value.get("seconds_untrusted")))
+        }
         changed = len(trimmed) != len(days)
         self._state["days"] = trimmed
         return changed
 
     def _trim_legacy_daily(self) -> bool:
+        """Keep the complete server compatibility history for calendar reports."""
+
         ledger = self._state.setdefault("legacy_daily", {})
         if not isinstance(ledger, dict):
             self._state["legacy_daily"] = {}
             return True
-        cutoff = _as_beijing(self._now()).date() - timedelta(days=400)
-        trimmed = {
-            key: value
-            for key, value in ledger.items()
-            if str(key)[:10] >= cutoff.isoformat()
-        }
-        changed = len(trimmed) != len(ledger)
-        self._state["legacy_daily"] = trimmed
-        return changed
+        return False
 
     def _load(self) -> None:
         try:

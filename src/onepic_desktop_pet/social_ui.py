@@ -1,5 +1,5 @@
 """密码恢复限流后保护有效验证码；重发心跳时按实际经过时间更新输入证明。
-同步工作线程通过带完整历史标记的接口分批收发专注明细。
+同步工作线程通过带完整历史标记的接口分批收发专注区间，并分页拉取服务器旧版日累计。
 
 进程在线独立于学习状态；非学习显示休息，退出按顺序发送最终离线状态。
 
@@ -1282,6 +1282,7 @@ class SocialSyncThread(QThread):
             work_event_acked: list[str] = []
             reminder_snapshot: dict[str, Any] | None = None
             focus_history_result = None
+            focus_legacy_history_result = None
             focus_segments_result = None
             focus_segment_integrity_result = None
             focus_segment_recent_reconciliation_result = None
@@ -1405,6 +1406,33 @@ class SocialSyncThread(QThread):
                             )
                         except (SocialError, AttributeError, TypeError) as exc:
                             LOGGER.info("daily focus history sync deferred: %s", exc)
+                    legacy_history_request = personal_state.get("focus_legacy_history_request")
+                    if isinstance(legacy_history_request, dict):
+                        try:
+                            legacy_page = sync_rpc(
+                                "lili_focus_legacy_history_page",
+                                dict(legacy_history_request),
+                            )
+                            if isinstance(legacy_page, dict):
+                                focus_legacy_history_result = dict(legacy_page)
+                                focus_legacy_history_result["_request"] = dict(legacy_history_request)
+                            else:
+                                focus_legacy_history_result = {
+                                    "_error": "invalid_legacy_history_page",
+                                    "_request": dict(legacy_history_request),
+                                }
+                        except (SocialError, AttributeError, TypeError) as exc:
+                            LOGGER.info("server legacy focus history sync deferred: %s", exc)
+                            focus_legacy_history_result = {
+                                "_error": str(exc)[:240],
+                                "_request": dict(legacy_history_request),
+                            }
+                        except Exception as exc:
+                            LOGGER.exception("server legacy focus history sync crashed")
+                            focus_legacy_history_result = {
+                                "_error": str(exc)[:240],
+                                "_request": dict(legacy_history_request),
+                            }
                     try:
                         focus_segments = personal_state.get("focus_segments") or []
                         focus_segments_sources = personal_state.get(
@@ -1813,6 +1841,9 @@ class SocialSyncThread(QThread):
             if isinstance(focus_history_result, dict):
                 data = dict(data or {})
                 data["_focus_history"] = focus_history_result
+            if isinstance(focus_legacy_history_result, dict):
+                data = dict(data or {})
+                data["_focus_legacy_history"] = focus_legacy_history_result
             if isinstance(focus_segments_result, dict):
                 data = dict(data or {})
                 data["_focus_segments"] = focus_segments_result

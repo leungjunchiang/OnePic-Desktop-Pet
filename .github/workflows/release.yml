@@ -52,6 +52,18 @@ jobs:
         if: github.ref_name == 'release/v0.23.361' || github.ref_name == 'v0.23.361'
         shell: pwsh
         run: ./scripts/apply_supabase_focus_history.ps1 -MigrationPath scripts/verify_focus_full_history.sql
+      - name: Deploy account-scoped legacy focus history
+        if: github.ref_name == 'release/v0.23.363' || github.ref_name == 'v0.23.363'
+        shell: pwsh
+        run: |
+          $config = Get-Content -Raw config/social_backend.json | ConvertFrom-Json
+          $targetProject = ([Uri]$config.supabase_url).Host.Split('.')[0]
+          if ($env:SUPABASE_PROJECT_REF -and $env:SUPABASE_PROJECT_REF.Trim() -ne $targetProject) {
+            throw 'SUPABASE_PROJECT_REF does not match the project shipped with Lili.'
+          }
+          ./scripts/apply_supabase_focus_history.ps1 -MigrationPath supabase/migrations/20261106152431_lili_focus_legacy_history_pages.sql
+          ./scripts/apply_supabase_focus_history.ps1 -MigrationPath scripts/verify_focus_full_history.sql
+          ./scripts/apply_supabase_focus_history.ps1 -MigrationPath scripts/verify_focus_legacy_history.sql
 
   windows-build:
     runs-on: windows-latest

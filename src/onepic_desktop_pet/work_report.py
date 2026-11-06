@@ -1,10 +1,11 @@
-"""按自然月和自定义日期展示专注区间，独立显示设备来源与异常明细。
+"""按自然月和自定义日期展示专注区间及日级兼容时长，按需展开设备明细。
 
 实际开工复用时间轴背后的原始 FocusSession 和北京时间 06:00 口径，专注分析仍从自然日区间派生。
 按需计算并展示六毛工作报告，不生成或保存报告图片。
 
-报告只读取当前登录账号的本地专注历史、当前计时器和最近一次自习室同步
-快照。日度、本周、月度和年度页签在窗口打开时计算，并在窗口保持打开时定时刷新；
+报告只读取当前登录账号的本地区间账本、已同步的服务器日级兼容值、当前计时器和最近一次自习室同步
+快照。日报、周报、月报和年报统一按日取原始区间并集与服务器可信日累计值的较大值；
+旧日累计不会伪装成有起止时间的区间。各页签在窗口打开时计算，并在窗口保持打开时定时刷新；
 正在工作的当前专注段会按真实开始时间实时叠加到小时节奏图；
 不会为每一天创建 PNG，也不会因为打开报告额外请求 Supabase。
 """
@@ -136,6 +137,8 @@ QPushButton#reportClose:hover { background: #bce3dc; }
 QPushButton#reportFinish { background: #fff0d7; color: #8a5b25; border: 1px solid #edcf9c; border-radius: 10px; padding: 8px 16px; }
 QPushButton#reportFinish:hover { background: #ffe4b4; }
 QPushButton#reportFinish:disabled { background: #edf1f2; color: #91a0a6; border-color: #dbe3e5; }
+QPushButton#reportDevicesToggle { background: #eef5f7; color: #43616f; border: 1px solid #d6e4e8; border-radius: 8px; padding: 4px 9px; }
+QPushButton#reportDevicesToggle:hover, QPushButton#reportDevicesToggle:focus { background: #e0eeef; border-color: #91b9ba; }
 """
 
 
@@ -173,9 +176,9 @@ def _period_consistency_errors(
 ) -> list[str]:
     """Validate one report payload before it reaches the UI.
 
-    The report must be a projection of one interval union.  These checks are
-    intentionally independent of legacy counters so a bad cache cannot make
-    an impossible day look plausible.
+    Calendar totals include explicit daily compatibility evidence, while
+    hourly and session metrics remain raw-interval-only. Check each against
+    the matching source instead of requiring those different grains to match.
     """
 
     errors: list[str] = []
@@ -212,8 +215,14 @@ def _period_consistency_errors(
         )
     except (TypeError, ValueError, OverflowError):
         hourly_sum = daily_sum = -1
-    if hourly_sum != total:
-        errors.append(f"hourly_sum:{hourly_sum}!={total}")
+    try:
+        canonical_interval_total = max(
+            0, int(data.get("canonical_interval_seconds", total) or 0)
+        )
+    except (TypeError, ValueError, OverflowError):
+        canonical_interval_total = -1
+    if hourly_sum != canonical_interval_total:
+        errors.append(f"hourly_sum:{hourly_sum}!={canonical_interval_total}")
     if daily_sum != total:
         errors.append(f"daily_sum:{daily_sum}!={total}")
 
@@ -224,8 +233,8 @@ def _period_consistency_errors(
         average = longest = -1
     if average > longest:
         errors.append(f"average_above_longest:{average}>{longest}")
-    if longest > total:
-        errors.append(f"longest_above_total:{longest}>{total}")
+    if longest > canonical_interval_total:
+        errors.append(f"longest_above_interval_total:{longest}>{canonical_interval_total}")
     return errors
 
 
@@ -247,9 +256,38 @@ def _mark_consistency_error(
     data["consistency_error"] = True
     data["consistency_errors"] = quality["consistency_errors"]
     data["raw_total_seconds"] = max(0, int(data.get("total_seconds", 0) or 0))
-    data["total_seconds"] = 0
+    # A contradiction in interval-derived metrics does not invalidate a
+    # separate, server-confirmed daily compatibility value. Preserve only
+    # those daily values while withholding the inconsistent interval total.
+    daily = [row for row in data.get("daily") or [] if isinstance(row, dict)]
+    if "day_window_not_one_calendar_day" not in errors and any("legacy_seconds" in row for row in daily):
+        fallback_total = 0
+        for row in daily:
+            if row.get("is_future"):
+                row["seconds"] = None
+                continue
+            try:
+                legacy = max(0, min(24 * 60 * 60, int(row.get("legacy_seconds", 0) or 0)))
+            except (TypeError, ValueError, OverflowError):
+                legacy = 0
+            row["seconds"] = legacy
+            row["canonical_seconds"] = 0
+            row["time_source"] = "legacy_compatibility" if legacy else "none"
+            row["status"] = "legacy_compatibility" if legacy else "untrusted"
+            row["trusted"] = bool(legacy)
+            fallback_total += legacy
+        data["total_seconds"] = fallback_total
+        data["canonical_interval_seconds"] = 0
+        data["active_days"] = sum(1 for row in daily if (row.get("seconds") or 0) > 0)
+        data["workday_average_seconds"] = fallback_total // max(1, data["active_days"])
+        quality["legacy_compatibility_days"] = [
+            str(row.get("date") or "") for row in daily if int(row.get("seconds") or 0) > 0
+        ]
+    else:
+        data["total_seconds"] = 0
     data["longest_focus_seconds"] = 0
     data["average_session_seconds"] = 0
+    data["high_quality_seconds"] = 0
     data["deep_focus_seconds"] = 0
 
 
@@ -374,11 +412,11 @@ def report_range_title(period: str, start: date, end: date, today: date) -> tupl
 
 
 def _populate_annual_overview(item: dict[str, Any]) -> None:
-    """Derive annual trend and milestones from the report's canonical daily rows.
+    """Derive annual trend and milestones from effective daily totals.
 
-    This intentionally runs after the live/canonical-today overlay: annual
-    totals, monthly bars and milestones then all describe the exact same
-    visible interval union instead of a stale copy captured before refresh.
+    This intentionally runs after the live-today overlay so annual totals,
+    monthly bars and milestones share the same interval-union-plus-legacy
+    daily values as the other report periods.
     """
 
     daily = [row for row in item.get("daily") or [] if isinstance(row, dict)]
@@ -492,8 +530,8 @@ def build_work_report(
     custom_range_selected = bool(selected_key and selected_range)
     daily_stats_snapshot = daily_stats.snapshot()
     # ``focus_projection`` remains an accepted compatibility argument for
-    # older callers, but report durations are never taken from its today/week
-    # summaries.  The selected account interval ledger is the sole source.
+    # older callers. Calendar totals use the selected account's per-day
+    # effective values; live intervals still enter through the raw ledger.
     snapshot_status = ""
     snapshot_session = 0
     snapshot_room = ""
@@ -506,20 +544,39 @@ def build_work_report(
             snapshot_status = str(getattr(focus_snapshot, "status", "") or "")
             snapshot_session = max(0, int(getattr(focus_snapshot, "session_seconds", 0) or 0))
             snapshot_room = str(getattr(focus_snapshot, "room_id", "") or "")
-    # FocusSession snapshots carry UI state (status/session start), not a
-    # second statistics source.  All displayed calendar totals below come
-    # from FocusAnalyticsStore's clipped raw interval union.
-    day_preview = analytics.period_summary("day", moment)
-    # An open segment is added once below as a FocusSegment.  Until then this
-    # is only a fallback for the headline while the live segment is prepared.
-    live_today = max(0, int(day_preview.get("total_seconds", 0) or 0)) + (
-        timer.current_elapsed_seconds() if timer.is_running else 0
-    )
     current_status = snapshot_status if snapshot_status in {"focus", "rest", "idle"} else (
         "focus" if bool(timer.is_running)
         else "rest" if bool(timer.has_active_session)
         else "idle"
     )
+    live_elapsed = timer.current_elapsed_seconds() if timer.is_running else 0
+    display_live_segments = list(extra_live_segments or [])
+    if live_elapsed > 0:
+        report_moment = moment.astimezone(BEIJING_TIMEZONE)
+        live_started = parse_focus_timestamp(timer.current_segment_started_at())
+        if snapshot_status == "focus" and (
+            live_started is None or live_started >= report_moment
+        ):
+            # Older timer adapters can report a frozen wall clock. Use the
+            # session anchor only when there is no usable current segment anchor.
+            snapshot_start = (
+                focus_snapshot.get("session_started_at")
+                if isinstance(focus_snapshot, dict)
+                else getattr(focus_snapshot, "session_started_at", None)
+            )
+            live_started = parse_focus_timestamp(snapshot_start)
+        if live_started is not None and live_started < report_moment:
+            task = analytics.current_task() or {}
+            session_id = timer.focus_session_id or "live"
+            display_live_segments.append(FocusSegment(
+                segment_id=f"live:{session_id}",
+                session_id=session_id,
+                device_id=str(getattr(analytics, "_device_id", "")),
+                start_at=live_started,
+                end_at=report_moment,
+                task=str(task.get("title") or ""),
+            ))
+
     report: dict[str, Any] = {
         "generated_at": moment.astimezone(BEIJING_TIMEZONE).strftime("%H:%M:%S"),
         "best_buddy": str(best_buddy or "暂无自习室排行榜数据"),
@@ -528,165 +585,44 @@ def build_work_report(
         "current_status_label": {"focus": "工作中", "rest": "休息中", "idle": "未开始工作"}[current_status],
         "rest_state": _rest_state(summary, current_status, moment.astimezone(BEIJING_TIMEZONE)),
         "current_streak_days": int(summary.current_streak_days),
-        "day": analytics.period_summary("day", moment),
-        "week": analytics.period_summary("week", moment),
-        "month": analytics.period_summary("month", moment),
-        "year": analytics.period_summary("year", moment),
     }
-    # Add the currently running FocusSession to the live chart without
-    # writing a synthetic history record. It disappears from the chart only
-    # when the normal analytics checkpoint is written.
-    live_started_value = None
-    if snapshot_status == "focus" and focus_snapshot is not None:
-        # A paused/resumed FocusSession has one session start but several
-        # working segments. Use the current segment anchor so the report does
-        # not bridge a pause into live work.
-        current_segment_started = getattr(timer, "current_segment_started_at", None)
-        live_started_value = current_segment_started() if callable(current_segment_started) else None
-        snapshot_started_value = (
-            focus_snapshot.get("session_started_at")
-            if isinstance(focus_snapshot, dict)
-            else getattr(focus_snapshot, "session_started_at", None)
+    for period in REPORT_PERIODS:
+        report[period] = analytics.period_summary(
+            period, moment, extra_segments=display_live_segments,
         )
-        # A few older lifecycle adapters expose a monotonic elapsed value
-        # while their wall-clock provider is frozen for a report snapshot.
-        # In that compatibility case the timer anchor is exactly ``now`` and
-        # the snapshot's earlier start is the only coherent display anchor.
-        try:
-            current_started = parse_focus_timestamp(live_started_value)
-            snapshot_started = parse_focus_timestamp(snapshot_started_value)
-            report_moment = moment.astimezone(BEIJING_TIMEZONE)
-            if (
-                current_started is not None
-                and snapshot_started is not None
-                and current_started >= report_moment
-                and snapshot_started < report_moment
-            ):
-                live_started_value = snapshot_started_value
-        except (TypeError, ValueError, OverflowError):
-            pass
-        if live_started_value is None:
-            live_started_value = snapshot_started_value
-    live_elapsed = timer.current_elapsed_seconds() if timer.is_running else 0
-    live_segment: FocusSegment | None = None
-    if live_started_value and snapshot_status == "focus" and live_elapsed > 0:
-        live_started = parse_focus_timestamp(live_started_value)
-        if live_started is not None:
-            live_segment = FocusSegment(
-                segment_id=f"live:{getattr(timer, 'focus_session_id', '')}",
-                session_id=getattr(timer, "focus_session_id", "") or "live",
-                device_id=str(getattr(analytics, "_device_id", "")),
-                start_at=live_started,
-                end_at=moment.astimezone(BEIJING_TIMEZONE),
-                task=str((analytics.current_task() or {}).get("title") or "") if isinstance(analytics.current_task(), dict) else "",
-            )
-            live_interval = {
-                "date": live_started.date().isoformat(),
-                "started_at": live_started.isoformat(),
-                "ended_at": moment.astimezone(BEIJING_TIMEZONE).isoformat(),
-                "seconds": live_elapsed,
-                "task": str((analytics.current_task() or {}).get("title") or "") if isinstance(analytics.current_task(), dict) else "",
-            }
-            for period in ("day", "week", "month", "year"):
-                if not any(item.get("started_at") == live_interval["started_at"] for item in report[period].get("focus_intervals") or []):
-                    report[period].setdefault("focus_intervals", []).append(dict(live_interval))
-                # ``FocusAnalyticsStore`` only writes a raw interval when a
-                # running segment is paused/checkpointed.  The report is also
-                # refreshed while the user is still working, so add this live
-                # interval to the hourly rhythm chart without creating a
-                # synthetic history row. Split at hour boundaries to keep the
-                # 00:00–24:00 chart anchored to the real start time.
-                hourly = report[period].get("hourly") or []
-                cursor = live_started
-                live_end = moment.astimezone(BEIJING_TIMEZONE)
-                while cursor < live_end:
-                    next_hour = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-                    part_end = min(live_end, next_hour)
-                    part_seconds = max(0, int((part_end - cursor).total_seconds()))
-                    if part_seconds:
-                        bucket = next(
-                            (item for item in hourly if int(item.get("hour", -1) or -1) == cursor.hour),
-                            None,
-                        )
-                        if isinstance(bucket, dict):
-                            bucket["seconds"] = max(0, int(bucket.get("seconds", 0) or 0)) + part_seconds
-                    cursor = part_end
-                # The open interval is a real segment for the live report,
-                # even though it is not persisted until pause/finish.  Keep
-                # all four cards coherent while it is running.
-                item = report[period]
-                item["started_rounds"] = max(1, int(item.get("started_rounds", 0) or 0))
-                item["longest_focus_seconds"] = max(
-                    int(item.get("longest_focus_seconds", 0) or 0), live_elapsed
-                )
-                current_average = max(0, int(item.get("average_session_seconds", 0) or 0))
-                item["average_session_seconds"] = live_elapsed if not current_average else min(current_average, int(item["longest_focus_seconds"]))
-        # Invalid live timestamps are ignored; persisted facts remain intact.
-    display_live_segments = list(extra_live_segments or [])
-    if live_segment is not None:
-        display_live_segments.append(live_segment)
-    if display_live_segments:
-        # Rebuild every live period from the same interval set.  This replaces
-        # the old path that appended one interval to a separately calculated
-        # hourly chart and could leave count/average/longest inconsistent.
-        # The closed list may be empty for a user's very first active segment;
-        # the open segment is still a complete fact for this read-only view.
-        for period in ("day", "week", "month", "year"):
-            aggregate = analytics.focus_aggregate(
-                period,
-                moment,
-                extra_segments=display_live_segments,
-            )
-            item = report[period]
-            item["total_seconds"] = aggregate.total_seconds
-            item["hourly"] = [dict(row) for row in aggregate.hourly]
-            item["focus_intervals"] = [dict(row) for row in aggregate.intervals]
-            item["started_rounds"] = max(item.get("started_rounds", 0), aggregate.segment_count)
-            item["longest_focus_seconds"] = aggregate.longest_seconds
-            item["average_session_seconds"] = aggregate.average_seconds
-            item["interruptions"] = max(item.get("interruptions", 0), aggregate.interruption_count)
-            for row in item.get("daily") or []:
-                date_key = str(row.get("date") or "")
-                if date_key in aggregate.daily and not row.get("is_future") and row.get("status") != "untrusted":
-                    row["seconds"] = max(0, int(aggregate.daily.get(date_key, 0) or 0))
+    selected_errors: list[str] = []
     selected_provenance: dict[str, Any] | None = None
     if custom_range_selected and selected_range is not None:
         _, selected_start, selected_end = selected_range
         range_start_at = datetime.combine(selected_start, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
         range_end_at = datetime.combine(selected_end, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
-        selected_extras = list(extra_live_segments or [])
-        if live_segment is not None:
-            selected_extras.append(live_segment)
         # A selected day is exactly one Beijing calendar day.  Reject a
         # widened day range before it can be mistaken for a natural week or
         # the entire ledger.
-        selected_errors: list[str] = []
         if selected_key == "day" and selected_end - selected_start != timedelta(days=1):
             selected_errors.append("day_window_not_one_calendar_day")
         selected_aggregate = analytics.range_aggregate(
             range_start_at,
             range_end_at,
-            extra_segments=selected_extras or None,
+            extra_segments=display_live_segments,
         )
-        # The selected page is rebuilt from exactly the same interval union as
-        # the natural pages.  Canonical day/week compatibility overlays below
-        # are skipped for this page so an arbitrary historical window cannot be
-        # overwritten by today's projection.
+        # Use the same effective-day rule within the selected date bounds.
         report[selected_key] = analytics.range_summary(
             range_start_at,
             range_end_at,
             at=moment,
             period=selected_key,
-            extra_segments=selected_extras or None,
+            extra_segments=display_live_segments,
         )
-        # The interval union already excludes malformed records. Only
-        # inconsistent projections can suppress an otherwise usable report.
+        # The raw union already excludes malformed records. Only contradictory
+        # metrics can suppress that interval contribution; daily server values
+        # remain available through the compatibility fallback.
         selected_errors.extend(
             error for error in selected_aggregate.errors
             if error.startswith(("hourly_mismatch:", "daily_mismatch:", "metric_invariant_violation"))
         )
         selected_segments = analytics.range_segments(
-            range_start_at, range_end_at, extra_segments=selected_extras or None,
+            range_start_at, range_end_at, extra_segments=display_live_segments,
         )
         if selected_key == "month":
             report[selected_key]["device_focus_totals"] = _device_focus_totals(
@@ -712,10 +648,6 @@ def build_work_report(
             "range_summary_total_seconds": int(report[selected_key].get("total_seconds", 0) or 0),
             "selected_errors": list(dict.fromkeys([*selected_errors, *selected_aggregate.errors])),
         }
-        _mark_consistency_error(
-            report[selected_key],
-            selected_errors,
-        )
         report["selected_range"] = {
             "period": selected_key,
             "start": selected_start.isoformat(),
@@ -731,12 +663,7 @@ def build_work_report(
             start_at, end_at, moment, current_device_id,
         )
     selected_day_page = custom_range_selected and selected_key == "day"
-    # The live aggregate above is the same interval union used by the daily
-    # rows.  Reuse its day projection instead of applying a second max/cache
-    # fallback to the report headline.
-    live_today = int(report["day"].get("total_seconds", 0) or 0)
     day = report["day"]
-    day["total_seconds"] = live_today
     if not selected_day_page:
         day["completed_rounds"] = max(
             int(day["completed_rounds"]),
@@ -747,13 +674,8 @@ def build_work_report(
     day["pet_sleeps"] = int(daily_stats_snapshot.get("sleeps", 0) or 0)
     day["current_task"] = analytics.current_task()
     day["sleep_note"] = report["sleep_note"]
-    day["week_total_seconds"] = (
-        int(day["total_seconds"])
-        if selected_day_page
-        else int(report["week"]["total_seconds"])
-    )
-    # Never reuse today's compact summary for a historical page.  Both sides
-    # of the comparison are calculated from the same account interval ledger.
+    # Never reuse today's compact summary for a historical page. Both sides
+    # use the same effective daily-value logic.
     comparison_day = (
         selected_range[1]
         if selected_day_page and selected_range is not None
@@ -766,49 +688,20 @@ def build_work_report(
     )
     comparison_previous_start = comparison_start - timedelta(days=1)
     comparison_previous_end = comparison_start
-    comparison_extras = list(extra_live_segments or [])
-    if live_segment is not None:
-        comparison_extras.append(live_segment)
     previous_day_summary = analytics.range_summary(
         comparison_previous_start,
         comparison_previous_end,
         at=moment,
         period="day",
-        extra_segments=comparison_extras or None,
+        extra_segments=display_live_segments,
     )
     day["yesterday_seconds"] = int(previous_day_summary.get("total_seconds", 0) or 0)
-    day["difference_vs_yesterday_seconds"] = int(day["total_seconds"]) - day["yesterday_seconds"]
     day["current_streak_days"] = int(summary.current_streak_days) if not selected_day_page else 0
     day["rest_state"] = report["rest_state"] if not selected_day_page else ""
     day["current_status_label"] = report["current_status_label"]
     day["current_device_status_label"] = report["current_status_label"]
     day["focus_session_seconds"] = live_elapsed if timer.is_running else snapshot_session
     day["focus_room_id"] = snapshot_room
-    if day.get("daily"):
-        today_row = next((row for row in day["daily"] if row.get("is_today")), None)
-        if isinstance(today_row, dict):
-            today_row["seconds"] = live_today
-            today_row["status"] = "observed" if live_today else today_row.get("status", "observed")
-
-    def overlay_live_today(item: dict[str, Any]) -> None:
-        """Overlay the open timer once, without double-counting a period."""
-
-        if live_segment is not None:
-            # The period was already rebuilt from the closed facts plus the
-            # open interval.  Overlaying it again would count the live segment
-            # twice and make report/rhythm totals diverge.
-            return
-
-        rows = item.get("daily") or []
-        today_row = next((row for row in rows if row.get("is_today")), None)
-        if not isinstance(today_row, dict):
-            return
-        stored_day = max(0, int(today_row.get("seconds", 0) or 0))
-        visible_today = live_today
-        if visible_today > stored_day:
-            item["total_seconds"] = int(item.get("total_seconds", 0) or 0) + visible_today - stored_day
-            today_row["seconds"] = visible_today
-
     for key in ("day", "week", "month", "year"):
         item = report[key]
         if isinstance(task_stats, dict) and isinstance(task_stats.get(key), dict):
@@ -816,21 +709,6 @@ def build_work_report(
                 0,
                 int(task_stats[key].get("completed_tasks", 0) or 0),
             )
-        if key != "day":
-            overlay_live_today(item)
-        rows_total = sum(
-            max(0, int(row.get("seconds", 0) or 0))
-            for row in item.get("daily") or []
-            if row.get("seconds") is not None
-        )
-        # Daily projections are the canonical projection of the same clipped
-        # interval union.  Never resurrect a stale snapshot with max().
-        if item.get("consistency_error"):
-            # Keep the guard's suppressed value.  A malformed daily row must
-            # not be able to restore the impossible hero on this pass.
-            item["total_seconds"] = 0
-        else:
-            item["total_seconds"] = rows_total
         longest = max(0, int(item.get("longest_focus_seconds", 0) or 0))
         item["average_session_seconds"] = min(
             max(0, int(item.get("average_session_seconds", 0) or 0)),
@@ -842,14 +720,6 @@ def build_work_report(
         )
         item["quality_label"] = _quality_label(int(item.get("average_quality", 0) or 0))
 
-    if not (custom_range_selected and selected_key == "year"):
-        _populate_annual_overview(report["year"])
-
-    day["week_total_seconds"] = (
-        int(day["total_seconds"])
-        if selected_day_page
-        else int(report["week"]["total_seconds"])
-    )
     for key in ("day", "week", "month", "year"):
         item = report[key]
         range_start_value = None
@@ -860,15 +730,19 @@ def build_work_report(
             range_end_value = date.fromisoformat(str(item.get("end") or "")) + timedelta(days=1)
         except ValueError:
             pass
-        _mark_consistency_error(
-            item,
-            _period_consistency_errors(
-                item,
-                key,
-                range_start=range_start_value,
-                range_end=range_end_value,
-            ),
+        errors = _period_consistency_errors(
+            item, key, range_start=range_start_value, range_end=range_end_value,
         )
+        if custom_range_selected and key == selected_key:
+            errors = selected_errors + errors
+        _mark_consistency_error(item, errors)
+
+    if not (custom_range_selected and selected_key == "year"):
+        _populate_annual_overview(report["year"])
+    day["week_total_seconds"] = int(
+        day["total_seconds"] if selected_day_page else report["week"]["total_seconds"]
+    )
+    day["difference_vs_yesterday_seconds"] = int(day["total_seconds"]) - day["yesterday_seconds"]
     if selected_provenance is not None:
         selected_item = report.get(selected_key) or {}
         selected_provenance["report_day_total_seconds"] = int(
@@ -1168,6 +1042,16 @@ class ReportBarChart(QWidget):
             detail = (
                 f"工作时长：{format_work_duration(seconds)}\n"
                 f"完成专注段：{int(row.get('rounds', 0) or 0)} 段"
+            )
+        try:
+            legacy_seconds = max(0, int(row.get("legacy_seconds", 0) or 0))
+            canonical_seconds = max(0, int(row.get("canonical_seconds", 0) or 0))
+        except (TypeError, ValueError, OverflowError):
+            legacy_seconds = canonical_seconds = 0
+        if legacy_seconds > canonical_seconds:
+            detail += (
+                f"\n其中服务器旧版日累计 {format_work_duration(legacy_seconds)}；"
+                "该值没有可还原的具体起止时间"
             )
         if row.get("trusted") is False:
             if row.get("seconds") is None:
@@ -1619,6 +1503,7 @@ class WorkReportDialog(QDialog):
         self._render_generation = 0
         self._render_queue: list[str] = []
         self._render_report: dict[str, Any] | None = None
+        self._device_details_expanded = False
         self._pet_name = pet_name.strip() or "六毛"
         self.setObjectName("workReportDialog")
         self.setWindowTitle(f"{self._pet_name}工作报告")
@@ -1727,6 +1612,9 @@ class WorkReportDialog(QDialog):
     def closeEvent(self, event) -> None:  # pragma: no cover - native window event
         lifecycle_log("work_report.close_event.begin", self)
         self._refresh_timer.stop()
+        self._device_details_expanded = False
+        for toggle in self.findChildren(QPushButton, "reportDevicesToggle"):
+            toggle.setChecked(False)
         self.closed.emit()
         super().closeEvent(event)
         lifecycle_log("work_report.close_event.end", self)
@@ -2098,7 +1986,7 @@ class WorkReportDialog(QDialog):
         hero_title.setObjectName("reportSection")
         hero_value = QLabel(
             "统计异常"
-            if bool(data.get("consistency_error"))
+            if bool(data.get("consistency_error")) and not total
             else format_work_duration(total)
         )
         hero_value.setObjectName("reportHeroValue")
@@ -2140,8 +2028,8 @@ class WorkReportDialog(QDialog):
         quality = data.get("data_quality") or {}
         if bool(data.get("consistency_error") or quality.get("consistency_error")):
             warning = QLabel(
-                "ⓘ 本日统计存在一致性异常，已停止展示错误累计值。请稍后重新同步或查看诊断日志。"
-                if key == "day"
+                "ⓘ 区间统计存在一致性异常。当前仅显示服务器旧版日累计。"
+                if total and quality.get("legacy_compatibility_days")
                 else "ⓘ 本区间统计存在一致性异常，已停止展示错误累计值。请查看诊断日志。"
             )
             warning.setObjectName("reportWarning")
@@ -2153,12 +2041,15 @@ class WorkReportDialog(QDialog):
         if not bool(quality.get("trusted", True)):
             days = len(quality.get("untrusted_days") or [])
             compatibility_days = len(quality.get("legacy_compatibility_days") or [])
+            partial_legacy_days = len(quality.get("partial_window_legacy_days") or [])
             excluded = len(quality.get("consistency_errors") or [])
             warnings = []
             if days:
                 warnings.append(f"{days} 天含旧版重复检查点")
             if compatibility_days:
                 warnings.append(f"{compatibility_days} 天使用服务器日级兼容数据")
+            if partial_legacy_days:
+                warnings.append(f"{partial_legacy_days} 个非整日边缘日期的旧累计未计入")
             if excluded:
                 warnings.append(f"已排除 {excluded} 条异常明细")
             if warnings:
@@ -2166,18 +2057,60 @@ class WorkReportDialog(QDialog):
                 warning.setObjectName("reportWarning")
                 warning.setWordWrap(True)
                 layout.addWidget(warning)
+        elif quality.get("legacy_compatibility_days") or quality.get("partial_window_legacy_days"):
+            compatibility_days = len(quality.get("legacy_compatibility_days") or [])
+            partial_legacy_days = len(quality.get("partial_window_legacy_days") or [])
+            message_parts = []
+            if compatibility_days:
+                message_parts.append(
+                    f"本区间有 {compatibility_days} 天保留服务器旧版日累计；"
+                    "这些时长没有具体起止时间，曲线和时段分析只展示原始专注区间"
+                )
+            if partial_legacy_days:
+                message_parts.append(
+                    f"{partial_legacy_days} 个非整日边缘日期的旧累计因无法按时段裁切未计入"
+                )
+            warning = QLabel("ⓘ " + "；".join(message_parts) + "。")
+            warning.setObjectName("reportHint")
+            warning.setWordWrap(True)
+            layout.addWidget(warning)
 
         device_totals = data.get("device_focus_totals") or []
         if key == "month" and device_totals:
-            device_note = QLabel("按设备查看 · 报表总时长合并同一账号的记录，重叠时段只计一次。")
+            details = QWidget(hero)
+            details.setObjectName("reportDeviceDetails")
+            details_layout = QVBoxLayout(details)
+            details_layout.setContentsMargins(0, 2, 0, 0)
+            device_note = QLabel(
+                "报表总时长合并同一账号的区间，重叠只计一次；另含无设备归属的旧日累计。"
+                if quality.get("legacy_compatibility_days")
+                else "报表总时长合并同一账号的区间，重叠只计一次。",
+                details,
+            )
             device_note.setObjectName("reportHint")
             device_note.setWordWrap(True)
-            hero_layout.addWidget(device_note)
+            details_layout.addWidget(device_note)
             for item in device_totals:
                 label = item["label"] + ("（本机）" if item["is_local"] else "")
-                row = QLabel(f"{label}  ·  {format_work_duration(item['seconds'])}")
+                row = QLabel(f"{label}  ·  {format_work_duration(item['seconds'])}", details)
                 row.setObjectName("reportHint")
-                hero_layout.addWidget(row)
+                details_layout.addWidget(row)
+
+            toggle = QPushButton(hero)
+            toggle.setObjectName("reportDevicesToggle")
+            toggle.setCheckable(True)
+            toggle.setAutoDefault(False)
+            toggle.setChecked(self._device_details_expanded)
+
+            def show_device_details(expanded: bool) -> None:
+                self._device_details_expanded = expanded
+                toggle.setText("收起设备明细" if expanded else "按设备查看")
+                details.setVisible(expanded)
+
+            toggle.toggled.connect(show_device_details)
+            show_device_details(toggle.isChecked())
+            hero_layout.addWidget(toggle, alignment=Qt.AlignmentFlag.AlignLeft)
+            hero_layout.addWidget(details)
 
         daily_rows = data.get("daily") or []
         try:
