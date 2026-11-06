@@ -6,12 +6,17 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   probe:
     timeout-minutes: 3
     runs-on: macos-latest
     steps:
+      - name: Cancel the earlier stalled disposable probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/42153123884/cancel" || true
       - name: Test whether two versions retain a certificate-anchored identity
         shell: bash
         run: |
@@ -46,6 +51,7 @@ jobs:
           openssl pkcs12 -export -legacy -inkey "$probe_dir/key.pem" -in "$probe_cert" -out "$probe_dir/probe.p12" -name "Lili Ephemeral Code Signing Probe" -passout "pass:$probe_password"
           security create-keychain -p "$probe_password" "$probe_keychain"
           security unlock-keychain -p "$probe_password" "$probe_keychain"
+          security list-keychains -d user -s "$probe_keychain"
           echo "Importing test identity"
           perl -e 'alarm 40; exec @ARGV' security import "$probe_dir/probe.p12" -k "$probe_keychain" -P "$probe_password" -T /usr/bin/codesign
           echo "Configuring test key access"
@@ -53,7 +59,8 @@ jobs:
           echo "Adding temporary code-signing trust"
           perl -e 'alarm 40; exec @ARGV' sudo -n security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$probe_cert"
           echo "Checking test identity"
-          perl -e 'alarm 40; exec @ARGV' security find-identity -v -p codesigning "$probe_keychain" | grep -F "Lili Ephemeral Code Signing Probe" >/dev/null
+          identity_hash="$(perl -e 'alarm 40; exec @ARGV' security find-identity -v -p codesigning "$probe_keychain" | awk '/Lili Ephemeral Code Signing Probe/ { print $2; exit }')"
+          [[ "$identity_hash" =~ ^[A-F0-9]{40}$ ]]
           for version in one two; do
             app="$probe_dir/$version.app"
             mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -65,7 +72,7 @@ jobs:
           PLIST
             printf '%s\n' "$version" > "$app/Contents/Resources/version.txt"
             echo "Signing test app $version"
-            perl -e 'alarm 40; exec @ARGV' codesign --force --timestamp=none --keychain "$probe_keychain" --sign "Lili Ephemeral Code Signing Probe" "$app"
+            perl -e 'alarm 40; exec @ARGV' codesign --force --timestamp=none --keychain "$probe_keychain" --sign "$identity_hash" "$app"
             codesign --verify --strict "$app"
           done
           requirement="$(codesign --display -r - "$probe_dir/one.app" 2>&1 | sed -n 's/^designated => //p')"
