@@ -1,5 +1,5 @@
 """密码恢复限流后保护有效验证码；重发心跳时按实际经过时间更新输入证明。
-同步工作线程通过带完整历史标记的接口分批收发专注区间，并分页拉取服务器旧版日累计。
+同步工作线程收发专注历史和账号内的设备昵称；“我的”可编辑本机昵称。
 
 进程在线独立于学习状态；非学习显示休息，退出按顺序发送最终离线状态。
 
@@ -79,7 +79,7 @@ from .social import (
     social_user_message,
 )
 from .config import PET_NAME, clean_owner_nickname, clean_social_pet_name, social_pet_label
-from .focus_analytics import MAX_ANALYTICS_DAY_SECONDS
+from .focus_analytics import FOCUS_DEVICE_NICKNAME_LIMIT, MAX_ANALYTICS_DAY_SECONDS, focus_device_label
 from .focus_sync_protocol import (
     canonicalize_focus_upload_segments,
     validate_focus_delta_response,
@@ -1283,6 +1283,7 @@ class SocialSyncThread(QThread):
             reminder_snapshot: dict[str, Any] | None = None
             focus_history_result = None
             focus_legacy_history_result = None
+            focus_device_nicknames_result = None
             focus_segments_result = None
             focus_segment_integrity_result = None
             focus_segment_recent_reconciliation_result = None
@@ -1378,6 +1379,14 @@ class SocialSyncThread(QThread):
             if isinstance(personal_state, dict):
                 sync_rpc = getattr(self.client, "rpc", None)
                 if callable(sync_rpc):
+                    nickname_request = personal_state.get("focus_device_nicknames_request")
+                    if isinstance(nickname_request, dict):
+                        try:
+                            nicknames = sync_rpc("lili_focus_device_nicknames", nickname_request)
+                            if isinstance(nicknames, dict):
+                                focus_device_nicknames_result = {**nicknames, "_request": nickname_request}
+                        except (SocialError, AttributeError, TypeError):
+                            LOGGER.info("focus device nicknames deferred")
                     if personal_state.get("sync_compatibility_profile", True):
                         try:
                             personal_state_result = sync_rpc(
@@ -1844,6 +1853,9 @@ class SocialSyncThread(QThread):
             if isinstance(focus_legacy_history_result, dict):
                 data = dict(data or {})
                 data["_focus_legacy_history"] = focus_legacy_history_result
+            if focus_device_nicknames_result is not None:
+                data = dict(data or {})
+                data["_focus_device_nicknames"] = focus_device_nicknames_result
             if isinstance(focus_segments_result, dict):
                 data = dict(data or {})
                 data["_focus_segments"] = focus_segments_result
@@ -3421,6 +3433,7 @@ class SocialHubDialog(QDialog):
     focus_pause_requested = Signal()
     focus_finish_requested = Signal()
     work_report_requested = Signal()
+    focus_device_nickname_requested = Signal(str)
     focus_task_requested = Signal(str, int)
     tomorrow_review_requested = Signal(str)
     room_changed = Signal(object)
@@ -3454,6 +3467,7 @@ class SocialHubDialog(QDialog):
         self.client = client
         self.outfit_key = outfit_key
         self.owner_nickname = clean_owner_nickname(owner_nickname)
+        self._focus_device_nickname_state = ("", "", False)
         self._owner_nickname_dirty = False
         self._pending_owner_nickname: str | object = _NO_PENDING_OWNER_NICKNAME
         self._interaction_preferences_account = _session_user_id(client)
@@ -5835,6 +5849,24 @@ class SocialHubDialog(QDialog):
         owner_name_row.addWidget(QLabel("六毛主人名"))
         owner_name_row.addWidget(self.owner_name_edit, 1)
         layout.addLayout(owner_name_row)
+        self.focus_device_nickname_hint = QLabel()
+        self.focus_device_nickname_hint.setObjectName("muted")
+        self.focus_device_nickname_hint.setWordWrap(True)
+        device_row = QHBoxLayout()
+        device_row.addWidget(QLabel("本机设备昵称"))
+        self.focus_device_nickname_edit = QLineEdit()
+        self.focus_device_nickname_edit.setMaxLength(FOCUS_DEVICE_NICKNAME_LIMIT)
+        self.focus_device_nickname_edit.setPlaceholderText("例如：家里 Mac、公司电脑")
+        self.focus_device_nickname_edit.setAccessibleName("本机设备昵称")
+        self.focus_device_nickname_save = QPushButton("保存设备昵称")
+        self.focus_device_nickname_save.setAutoDefault(False)
+        self.focus_device_nickname_save.clicked.connect(self._save_focus_device_nickname)
+        self.focus_device_nickname_edit.returnPressed.connect(self._save_focus_device_nickname)
+        device_row.addWidget(self.focus_device_nickname_edit, 1)
+        device_row.addWidget(self.focus_device_nickname_save)
+        layout.addLayout(device_row)
+        layout.addWidget(self.focus_device_nickname_hint)
+        self.set_focus_device_nickname(*self._focus_device_nickname_state)
         self.hidden = QCheckBox("隐身")
         self.exact = QCheckBox("显示准确时长")
         self.visits_allowed = QCheckBox("搭子互动始终接收")
@@ -5873,6 +5905,29 @@ class SocialHubDialog(QDialog):
             layout.addWidget(button)
         layout.addStretch()
         return card
+
+    def set_focus_device_nickname(self, device_id: str, nickname: str, pending: bool) -> None:
+        """Refresh the signed-in device without replacing text being edited."""
+
+        previous_device = self._focus_device_nickname_state[0]
+        self._focus_device_nickname_state = (device_id, nickname, pending)
+        if not hasattr(self, "focus_device_nickname_edit"):
+            return
+        edit = self.focus_device_nickname_edit
+        if device_id != previous_device or not edit.isModified():
+            edit.setText(nickname)
+        edit.setEnabled(bool(device_id))
+        self.focus_device_nickname_save.setEnabled(bool(device_id))
+        self.focus_device_nickname_hint.setText(
+            f"{focus_device_label(device_id)} · {'等待同步' if pending else '同步后显示在月报中，留空可恢复设备号。'}"
+            if device_id else "登录后可设置本机设备昵称。"
+        )
+
+    def _save_focus_device_nickname(self) -> None:
+        if self._focus_device_nickname_state[0] and self._require_login():
+            edit = self.focus_device_nickname_edit
+            edit.setModified(False)
+            self.focus_device_nickname_requested.emit(edit.text())
 
     def _interaction_preference_value(self, field: str) -> Any:
         if field == "allow_visits":

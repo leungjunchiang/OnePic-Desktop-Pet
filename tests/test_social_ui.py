@@ -1,6 +1,6 @@
 """回归密码重置限流、学习在线分层、心跳证明过期、在途退出和搭子交互。
 
-验证自习室导航、备注身份、搭子卡与榜单统计一致、直接互动及 Presence 安全退出。"""
+验证自习室导航、设备昵称同步、搭子统计、直接互动及 Presence 安全退出。"""
 
 import json
 import os
@@ -430,6 +430,8 @@ def test_social_sync_requests_one_bounded_recent_focus_reconciliation_page() -> 
                 return {
                     "segments": [], "next_cursor": None, "has_more": False, "window_days": 0,
                 }
+            if name == "lili_focus_device_nicknames":
+                return {"account_id": "account-a", "nicknames": {"mac": body["p_nickname"]}}
             return {}
 
     client = Client()
@@ -442,6 +444,9 @@ def test_social_sync_requests_one_bounded_recent_focus_reconciliation_page() -> 
                 "focus_segments_sync_cursor": "delta-before",
                 "focus_segments_all_history": True,
                 "focus_history": [],
+                "focus_device_nicknames_request": {
+                    "p_account_id": "account-a", "p_device_id": "mac", "p_nickname": "家里 Mac",
+                },
                 "focus_segment_recent_reconciliation_request": {
                     "p_cursor": None, "p_days": 0, "p_limit": 500,
                 },
@@ -450,6 +455,11 @@ def test_social_sync_requests_one_bounded_recent_focus_reconciliation_page() -> 
     )
     thread.completed.connect(completed.append)
     thread.run()
+
+    assert ("lili_focus_device_nicknames", {
+        "p_account_id": "account-a", "p_device_id": "mac", "p_nickname": "家里 Mac",
+    }) in client.calls
+    assert completed[-1]["_focus_device_nicknames"]["nicknames"] == {"mac": "家里 Mac"}
 
     assert ("lili_sync_focus_segments_delta_v2", {
         "p_segments": [], "p_since": "delta-before", "p_all_history": True,
@@ -965,6 +975,25 @@ def test_account_page_can_copy_buddy_code() -> None:
 
     assert QApplication.clipboard().text() == "AB12CD34"
     assert "已复制" in dialog.copy_buddy_code_button.text()
+    dialog.close(); dialog.deleteLater(); app.processEvents()
+
+
+def test_account_device_nickname_editor_keeps_unsaved_text_for_the_same_device() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = SocialHubDialog(SignedInClient())
+    dialog.set_focus_device_nickname("mac", "家里 Mac", False)
+    edit = dialog.focus_device_nickname_edit
+    assert edit.text() == "家里 Mac"
+    edit.setText("书房电脑")
+    edit.setModified(True)
+    dialog.set_focus_device_nickname("mac", "家里 Mac", False)
+    assert edit.text() == "书房电脑"
+
+    saves = QSignalSpy(dialog.focus_device_nickname_requested)
+    dialog.focus_device_nickname_save.click()
+    assert saves.count() == 1 and saves.at(0) == ["书房电脑"]
+    dialog.set_focus_device_nickname("", "", False)
+    assert edit.text() == "" and not dialog.focus_device_nickname_save.isEnabled()
     dialog.close(); dialog.deleteLater(); app.processEvents()
 
 

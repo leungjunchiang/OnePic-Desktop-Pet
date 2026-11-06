@@ -64,6 +64,17 @@ jobs:
           ./scripts/apply_supabase_focus_history.ps1 -MigrationPath supabase/migrations/20261106152431_lili_focus_legacy_history_pages.sql
           ./scripts/apply_supabase_focus_history.ps1 -MigrationPath scripts/verify_focus_full_history.sql
           ./scripts/apply_supabase_focus_history.ps1 -MigrationPath scripts/verify_focus_legacy_history.sql
+      - name: Deploy and verify private device nicknames
+        if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')
+        shell: pwsh
+        run: |
+          $config = Get-Content -Raw config/social_backend.json | ConvertFrom-Json
+          $targetProject = ([Uri]$config.supabase_url).Host.Split('.')[0]
+          if ($env:SUPABASE_PROJECT_REF -and $env:SUPABASE_PROJECT_REF.Trim() -ne $targetProject) {
+            throw 'SUPABASE_PROJECT_REF does not match the project shipped with Lili.'
+          }
+          ./scripts/apply_supabase_focus_history.ps1 -MigrationPath supabase/migrations/20261106181448_lili_focus_device_nicknames.sql
+          ./scripts/apply_supabase_focus_history.ps1 -MigrationPath scripts/verify_focus_device_nicknames.sql
 
   windows-build:
     runs-on: windows-latest
@@ -319,11 +330,15 @@ jobs:
           done
           release_notes="$(mktemp)"
           trap 'rm -f "$release_notes"' EXIT
+          notes_source="release-notes.md"
+          if [[ -f "release-notes/$release_tag.md" ]]; then
+            notes_source="release-notes/$release_tag.md"
+          fi
           awk -v tag="$release_tag" '
             /^# / { if (found) exit; found = ($2 == tag) }
             found { print }
             END { if (!found) exit 1 }
-          ' release-notes.md > "$release_notes"
+          ' "$notes_source" > "$release_notes"
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Uploading verified artifacts to existing release $release_tag."
             gh release upload "$release_tag" "${assets[@]}" \

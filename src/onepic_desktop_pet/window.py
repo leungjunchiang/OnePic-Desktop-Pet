@@ -1,5 +1,5 @@
 """QQ 点歌缺地址定位设置；歌单在六毛与快捷坞上方手动打开，后台播放由真实状态触发。
-主窗口协调专注补传核对、原始区间全历史下载及服务器日累计全历史分页同步。
+主窗口协调专注历史同步，并在账号范围内同步和显示本机设备昵称。
 
 先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
 
@@ -8236,6 +8236,7 @@ class PetWindow(QWidget):
             self._social_dialog.focus_pause_requested.connect(self.pause_work_timer)
             self._social_dialog.focus_finish_requested.connect(self.finish_work_timer)
             self._social_dialog.work_report_requested.connect(self.show_work_report)
+            self._social_dialog.focus_device_nickname_requested.connect(self._save_focus_device_nickname)
             self._social_dialog.focus_task_requested.connect(self._set_focus_task)
             self._social_dialog.tomorrow_review_requested.connect(self._set_tomorrow_review)
             self._social_dialog.room_ritual_due.connect(self._room_ritual_due)
@@ -8261,6 +8262,7 @@ class PetWindow(QWidget):
             # click. The first page can paint immediately; the metrics are
             # filled on the next idle turn by the coalesced updater below.
             self._schedule_social_analytics_snapshot(delay_ms=160)
+        self._show_focus_device_nickname()
         # A second click on the menu must restore a minimized study-room
         # window instead of leaving it hidden in the taskbar/Dock.
         if self._social_dialog.isMinimized():
@@ -8272,6 +8274,29 @@ class PetWindow(QWidget):
         # Queue it after the show turn so the shortcut click returns and the
         # study room can paint before the OS foreground negotiation runs.
         QTimer.singleShot(0, self._activate_social_hub_window)
+
+    def _show_focus_device_nickname(self) -> None:
+        dialog = self._social_dialog
+        if dialog is None:
+            return
+        account_id = self._current_social_user_id()
+        if not account_id or account_id != self._active_focus_account_id:
+            dialog.set_focus_device_nickname("", "", False)
+            return
+        device_id = presence_device_id(account_id)
+        request = self.focus_analytics.focus_device_nicknames_request(account_id) or {}
+        nickname = self.focus_analytics.focus_device_nicknames().get(device_id, "")
+        dialog.set_focus_device_nickname(device_id, nickname, "p_nickname" in request)
+
+    def _save_focus_device_nickname(self, nickname: str) -> None:
+        account_id = self._current_social_user_id()
+        if not account_id or account_id != self._active_focus_account_id:
+            return
+        self.focus_analytics.set_focus_device_nickname(nickname)
+        self._show_focus_device_nickname()
+        if self._work_report_dialog is not None and self._work_report_dialog.isVisible():
+            self._work_report_dialog.request_refresh(force=True)
+        self._schedule_social_tick(immediate=True)
 
     def _schedule_social_analytics_snapshot(self, *, delay_ms: int = 80) -> None:
         """Refresh non-clock analytics after the study-room paint turn.
@@ -9394,6 +9419,9 @@ class PetWindow(QWidget):
             "focus_segments_sync_cursor": self.focus_analytics.focus_segments_sync_cursor(),
             "focus_segments_all_history": True,
             "focus_legacy_history_request": legacy_history_request,
+            "focus_device_nicknames_request": self.focus_analytics.focus_device_nicknames_request(
+                self._active_focus_account_id,
+            ),
             "focus_segments_sync_mode": self.focus_analytics.focus_segments_sync_mode(),
             "focus_segment_integrity_manifest": integrity_manifest,
             "focus_segment_integrity_manifest_kind": "history_upgrade" if history_audit else "reconciliation",
@@ -10104,6 +10132,16 @@ class PetWindow(QWidget):
         )
         analytics_changed = bool(analytics_changed or effective_projection_changed)
         history_changed = self.focus_analytics.merge_remote_history(data.get("_focus_history"))
+        nicknames_changed = False
+        nickname_payload = data.get("_focus_device_nicknames")
+        if isinstance(nickname_payload, dict) and user_id == self._active_focus_account_id:
+            nickname_request = nickname_payload.get("_request")
+            if isinstance(nickname_request, dict):
+                nicknames_changed = self.focus_analytics.apply_focus_device_nicknames(
+                    nickname_payload, nickname_request, user_id,
+                )
+                if nicknames_changed:
+                    self._show_focus_device_nickname()
         legacy_history_payload = data.get("_focus_legacy_history")
         if isinstance(legacy_history_payload, dict):
             legacy_request = legacy_history_payload.get("_request")
@@ -10487,7 +10525,7 @@ class PetWindow(QWidget):
         # events that actually change the canonical projection.
         if history_changed or segment_changed or derived_changed or live_projection_changed:
             self._invalidate_focus_projection("remote_focus_reconciled")
-        if history_changed or segment_changed:
+        if history_changed or segment_changed or nicknames_changed:
             # WorkReport builds from a readonly local-ledger snapshot. If the
             # first paint races the remote reconciliation, refresh the open
             # report only after exact facts have been durably merged.
@@ -10971,6 +11009,14 @@ class PetWindow(QWidget):
             # account; keep the chat fast-action path on the new namespace.
             self.chat_manager.action_executor = self.time_memory.actions
         self._active_focus_account_id = clean
+        self._show_focus_device_nickname()
+        report_dialog = self._work_report_dialog
+        if report_dialog is not None:
+            # Drop an in-flight report belonging to the previous account.
+            self._work_report_generation += 1
+            report_dialog.apply_report({"error": "正在读取当前账号的工作报告…"})
+            if report_dialog.isVisible():
+                report_dialog.request_refresh(force=True)
         self._run_focus_history_recovery()
         self._clear_cross_device_today_display()
         self._invalidate_focus_projection("account_switched")

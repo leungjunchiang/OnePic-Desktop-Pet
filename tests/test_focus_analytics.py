@@ -1,4 +1,4 @@
-"""验证专注区间的账号合并、异常汇总隔离、跨夜处理和重启恢复。"""
+"""验证账号专注区间、设备昵称、异常隔离、跨夜处理和重启恢复。"""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,33 @@ from onepic_desktop_pet.focus_analytics import (
     FocusQualityTracker,
     score_focus_quality,
 )
+
+
+def test_device_nickname_survives_restart_and_waits_for_matching_account_ack(tmp_path) -> None:
+    path = tmp_path / "focus.json"
+    store = FocusAnalyticsStore(path=path, device_id="local")
+    store.set_focus_device_nickname("家里 Mac")
+    first_request = store.focus_device_nicknames_request("owner")
+    assert first_request == {"p_account_id": "owner", "p_device_id": "local", "p_nickname": "家里 Mac"}
+    store.set_focus_device_nickname("新 Mac")
+    store = FocusAnalyticsStore(path=path, device_id="local")
+    assert not store.apply_focus_device_nicknames(
+        {"account_id": "other", "nicknames": {"local": "别的账号"}}, first_request, "owner",
+    )
+    assert store.apply_focus_device_nicknames(
+        {"account_id": "owner", "nicknames": {"local": "家里 Mac", "pc": "公司电脑"}}, first_request, "owner",
+    )
+    assert store.focus_device_nicknames() == {"local": "新 Mac", "pc": "公司电脑"}
+    assert store.focus_device_nicknames_request("owner")["p_nickname"] == "新 Mac"
+
+    store.set_focus_device_nickname("")
+    clear_request = store.focus_device_nicknames_request("owner")
+    assert clear_request["p_nickname"] == ""
+    assert store.apply_focus_device_nicknames(
+        {"account_id": "owner", "nicknames": {"pc": "公司电脑"}}, clear_request, "owner",
+    )
+    assert store.focus_device_nicknames() == {"pc": "公司电脑"}
+    assert store.focus_device_nicknames_request("owner") == {"p_account_id": "owner"}
 
 
 def test_recent_reconciliation_is_paged_and_does_not_touch_delta_cursor(tmp_path) -> None:

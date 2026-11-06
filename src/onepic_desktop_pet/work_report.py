@@ -1,4 +1,4 @@
-"""按自然月和自定义日期展示专注区间及日级兼容时长，按需展开设备明细。
+"""按自然月和自定义日期展示专注区间，按需展开带昵称的设备明细。
 
 实际开工复用时间轴背后的原始 FocusSession 和北京时间 06:00 口径，专注分析仍从自然日区间派生。
 按需计算并展示六毛工作报告，不生成或保存报告图片。
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from hashlib import sha256
 from time import monotonic
 from typing import Any, Callable
 
@@ -39,7 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from .diary import DailyCompanionStats
-from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore
+from .focus_analytics import BEIJING_TIMEZONE, FocusAnalyticsStore, focus_device_label
 from .focus_segments import FocusSegment, aggregate_focus_time, parse_focus_timestamp
 from .work_timer import WorkTimerModel, format_work_duration
 from .lifecycle_log import lifecycle_log
@@ -487,6 +486,7 @@ def _populate_annual_overview(item: dict[str, Any]) -> None:
 
 def _device_focus_totals(
     segments: list[FocusSegment], start: datetime, end: datetime, now: datetime, current_device_id: str,
+    device_nicknames: dict[str, str],
 ) -> list[dict[str, Any]]:
     """Explain the account union with the same date bounds for each source."""
     groups: dict[str, list[FocusSegment]] = defaultdict(list)
@@ -496,9 +496,10 @@ def _device_focus_totals(
     for device_id, facts in groups.items():
         seconds = aggregate_focus_time(facts, start, end, now=now).total_seconds
         if seconds:
-            label = f"设备 {sha256(device_id.encode()).hexdigest()[:6].upper()}" if device_id else "未标记设备"
+            device_code = focus_device_label(device_id)
             rows.append({
-                "label": label,
+                "label": device_nicknames.get(device_id) or device_code,
+                "device_code": device_code,
                 "seconds": seconds,
                 "is_local": bool(device_id and device_id == current_device_id),
             })
@@ -524,6 +525,7 @@ def build_work_report(
     """Build an account-scoped report snapshot without writing a file."""
 
     moment = to_beijing(now) if now is not None else now_beijing()
+    device_nicknames = analytics.focus_device_nicknames()
     summary = analytics.summary(moment)
     selected_key = str(selected_range[0]).strip().casefold() if selected_range else ""
     selected_key = selected_key if selected_key in REPORT_PERIODS else ""
@@ -626,7 +628,7 @@ def build_work_report(
         )
         if selected_key == "month":
             report[selected_key]["device_focus_totals"] = _device_focus_totals(
-                selected_segments, range_start_at, range_end_at, moment, current_device_id,
+                selected_segments, range_start_at, range_end_at, moment, current_device_id, device_nicknames,
             )
         selected_provenance = {
             "account_id": str(account_id or ""),
@@ -660,7 +662,7 @@ def build_work_report(
         end_at = datetime.combine(month_end, datetime.min.time(), tzinfo=BEIJING_TIMEZONE)
         report["month"]["device_focus_totals"] = _device_focus_totals(
             analytics.range_segments(start_at, end_at, extra_segments=display_live_segments),
-            start_at, end_at, moment, current_device_id,
+            start_at, end_at, moment, current_device_id, device_nicknames,
         )
     selected_day_page = custom_range_selected and selected_key == "day"
     day = report["day"]
@@ -2094,6 +2096,9 @@ class WorkReportDialog(QDialog):
                 label = item["label"] + ("（本机）" if item["is_local"] else "")
                 row = QLabel(f"{label}  ·  {format_work_duration(item['seconds'])}", details)
                 row.setObjectName("reportHint")
+                row.setTextFormat(Qt.TextFormat.PlainText)
+                row.setWordWrap(True)
+                row.setToolTip(item.get("device_code", ""))
                 details_layout.addWidget(row)
 
             toggle = QPushButton(hero)

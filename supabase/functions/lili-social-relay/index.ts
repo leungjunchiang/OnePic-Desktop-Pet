@@ -35,6 +35,7 @@ const RPC_ALLOWLIST = new Set([
   "lili_sync_personal_state",
   "lili_sync_focus_history",
   "lili_focus_legacy_history_page",
+  "lili_focus_device_nicknames",
   "lili_sync_focus_segments",
   "lili_sync_focus_segments_delta",
   "lili_sync_focus_segments_delta_v2",

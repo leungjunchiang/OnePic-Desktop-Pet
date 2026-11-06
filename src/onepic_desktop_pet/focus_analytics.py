@@ -1,4 +1,4 @@
-"""保留全部专注区间及服务器日级兼容值，按北京时间统一计算跨设备历史。
+"""按北京时间计算跨设备专注历史，并缓存当前账号的设备昵称。
 
 Local focus continuity, quality and lightweight review data.
 
@@ -139,6 +139,23 @@ def focus_analytics_path(account_id: str | None = None) -> Path:
     """Return the native, account-scoped focus ledger path on every OS."""
 
     return account_local_data_path("focus_analytics.json", account_id)
+
+
+FOCUS_DEVICE_NICKNAME_LIMIT = 32
+
+
+def clean_focus_device_nickname(value: str) -> str:
+    """Normalize a single-line, user-entered device label."""
+
+    single_line = " ".join(value.split())
+    printable = "".join(char for char in single_line if char.isprintable())
+    return " ".join(printable.split())[:FOCUS_DEVICE_NICKNAME_LIMIT].rstrip()
+
+
+def focus_device_label(device_id: str) -> str:
+    """Return the short device code shared by the report and settings."""
+
+    return f"设备 {hashlib.sha256(device_id.encode()).hexdigest()[:6].upper()}" if device_id else "未标记设备"
 
 
 @dataclass(frozen=True)
@@ -399,6 +416,71 @@ class FocusAnalyticsStore:
         """Attribute only newly observed facts to this installation."""
 
         self._device_id = str(device_id or "").strip()[:120]
+
+    def focus_device_nicknames(self) -> dict[str, str]:
+        """Read cloud labels with the pending local edit applied immediately."""
+
+        state = self._state.get("account_state", {})
+        cached = state.get("focus_device_nicknames")
+        nicknames = dict(cached) if isinstance(cached, dict) else {}
+        pending = state.get("pending_focus_device_nickname")
+        if self._device_id and isinstance(pending, dict) and self._device_id in pending:
+            nickname = pending[self._device_id]
+            if nickname:
+                nicknames[self._device_id] = nickname
+            else:
+                nicknames.pop(self._device_id, None)
+        return nicknames
+
+    def set_focus_device_nickname(self, nickname: str) -> None:
+        """Queue an explicit edit for the current device until it is acknowledged."""
+
+        if not self._device_id:
+            return
+        state = self._state.setdefault("account_state", {})
+        state["pending_focus_device_nickname"] = {self._device_id: clean_focus_device_nickname(nickname)}
+        self._save()
+
+    def focus_device_nicknames_request(self, account_id: str) -> dict[str, str] | None:
+        if not account_id or not self._device_id:
+            return None
+        request = {"p_account_id": account_id}
+        pending = self._state.get("account_state", {}).get("pending_focus_device_nickname")
+        if isinstance(pending, dict) and self._device_id in pending:
+            request.update(p_device_id=self._device_id, p_nickname=pending[self._device_id])
+        return request
+
+    def apply_focus_device_nicknames(self, payload: dict, request: dict, account_id: str) -> bool:
+        """Cache one complete account snapshot and acknowledge only its own edit."""
+
+        if not account_id or payload.get("account_id") != account_id or request.get("p_account_id") != account_id:
+            return False
+        remote = payload.get("nicknames")
+        if not isinstance(remote, dict) or any(
+            not isinstance(key, str) or not 1 <= len(key) <= 120
+            or not isinstance(value, str) or not 1 <= len(value) <= FOCUS_DEVICE_NICKNAME_LIMIT
+            for key, value in remote.items()
+        ):
+            return False
+        remote = {
+            key: cleaned for key, value in remote.items()
+            if (cleaned := clean_focus_device_nickname(value))
+        }
+        state = self._state.setdefault("account_state", {})
+        requested_device = request.get("p_device_id")
+        acknowledged = (
+            requested_device == self._device_id
+            and "p_nickname" in request
+            and remote.get(requested_device, "") == request["p_nickname"]
+            and state.get("pending_focus_device_nickname") == {requested_device: request["p_nickname"]}
+        )
+        if not acknowledged and (state.get("focus_device_nicknames") or {}) == remote:
+            return False
+        state["focus_device_nicknames"] = dict(remote)
+        if acknowledged:
+            state.pop("pending_focus_device_nickname", None)
+        self._save()
+        return True
 
     def current_time(self) -> datetime:
         """Return the clock used by this store's calendar projections."""

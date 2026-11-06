@@ -1,4 +1,4 @@
-"""验证工作报告的日期范围、异常隔离和跨设备专注统计。"""
+"""验证工作报告的日期范围、异常隔离、设备昵称及专注统计。"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -506,6 +506,9 @@ def test_bad_local_rows_do_not_hide_a_synced_month_and_sources_explain_its_total
     for index, (device, records) in enumerate((("mac", canonical), ("pc", [*canonical, *bad]))):
         analytics = FocusAnalyticsStore(path=tmp_path / f"device-{index}.json", now_provider=lambda: now, persist=False)
         analytics._state["records"] = records
+        analytics.apply_focus_device_nicknames(
+            {"account_id": "owner", "nicknames": {"mac": "家里 Mac"}}, {"p_account_id": "owner"}, "owner",
+        )
         report = build_work_report(
             analytics, timer, daily, selected_range=("month", start, end), now=now, current_device_id=device,
         )
@@ -515,6 +518,8 @@ def test_bad_local_rows_do_not_hide_a_synced_month_and_sources_explain_its_total
         sources = report["month"]["device_focus_totals"]
         assert len(sources) == 2 and all(row["seconds"] == 3600 for row in sources)
         assert sum(row["is_local"] for row in sources) == 1
+        assert any(row["label"] == "家里 Mac" for row in sources)
+        assert any(row["label"].startswith("设备 ") for row in sources)
     assert reports[0]["data_quality"]["consistency_errors"] == []
     assert reports[1]["data_quality"]["consistency_errors"] == ["overlong_interval:bad-in-range"]
     assert [row["label"] for row in reports[0]["device_focus_totals"]] == [
