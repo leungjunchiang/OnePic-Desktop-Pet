@@ -4,11 +4,11 @@
 读取时确认播放；缺少权限或控件不匹配时明确失败，不猜测播放状态或改控其他应用。
 广度优先读取公开 AX 属性，兼容搜索子角色、占位文字与明确搜索按钮；只读自检不操作播放器。
 缺少无障碍权限时，引导用户使用六毛设置中的系统授权快捷入口。
-搜索前等待明确登录标记消失和搜索框就绪，不在登录恢复或验证界面输入歌曲。
+点播前等待 QQ 主界面稳定就绪，不在登录恢复或验证界面输入搜索或发送歌曲 ID。
 普通静态登录文字不覆盖完整播放栏证据；若客户端公开 AXHidden 则过滤隐藏子控件。
 登录、登录中与窗口未就绪分别说明，只读诊断输出阶段，不推测账户是否退出。
 搜索结果按完整标题、歌手及已知专辑筛选，按钮不唯一时不点击；播放栏公开专辑则读取核对。
-QQ 11.10.5 搜索不可用时使用已实测的单曲 ID 入口，识别其简化播放栏并通过 QQ 自身菜单控制。
+QQ 11.10.5 和 11.11.0 优先使用单曲 ID 入口；兼容简化播放栏的新旧控件角色及 QQ 自身菜单。
 """
 from __future__ import annotations
 
@@ -29,10 +29,11 @@ PLAY = frozenset(('播放', '播放音乐', 'Play', 'Play music'))
 PAUSE = frozenset(('暂停', '暂停播放', 'Pause', 'Pause playback'))
 MODE_ROLES = frozenset(('AXButton', 'AXPopUpButton', 'AXMenuButton'))
 MODE_LABELS = frozenset(('顺序播放', '列表循环', '单曲循环', '随机播放', '单曲播放'))
+SONG_ID_VERSIONS = frozenset(('11.10.5', '11.11.0'))
 
 
 def supports_song_id(info):
-    return (info.get('CFBundleShortVersionString') == '11.10.5'
+    return (info.get('CFBundleShortVersionString') in SONG_ID_VERSIONS
             and any('qqmusicmac' in item.get('CFBundleURLSchemes', ())
                     for item in info.get('CFBundleURLTypes', ())))
 
@@ -123,7 +124,7 @@ def search_fields(tree):
     return []
 
 
-def startup_state(tree):
+def startup_state(tree, *, by_song_id=False):
     """不把普通登录静态字样当作退出账号；真正登录控件、窗口或验证仍阻断。"""
     nodes = [n for n in tree.descendants() if not n.hidden]
     labels = {n.text.strip() for n in nodes}
@@ -133,8 +134,10 @@ def startup_state(tree):
         return 'login-required'
     if any(n.text.strip() in AMBIGUOUS_LOGIN_LABELS and n.role != 'AXStaticText' for n in nodes):
         return 'login-required'
-    if labels & AMBIGUOUS_LOGIN_LABELS and parse_track(tree) is None:
+    if labels & AMBIGUOUS_LOGIN_LABELS and parse_track(tree) is None and compact_track(tree) is None:
         return 'login-required'
+    if by_song_id:
+        return 'ready' if any(n.role == 'AXWindow' and n.children for n in nodes) else 'loading'
     return 'ready' if len(search_fields(tree)) == 1 else 'loading'
 
 
@@ -165,23 +168,37 @@ def parse_track(root):
                      max(0, min(position, duration)), duration, metadata_scope='mac-accessibility')
 
 
-def compact_track(root):
-    """QQ 11.10.5 同栏公开曲名、歌手和播放按钮，但没有时间轴。"""
-    from .music_control import TrackInfo
+def compact_player(root):
+    """同一栏必须有上一首、下一首、播放模式及唯一播放状态。"""
     matches = []
     for group in root.descendants():
-        labels = [n.text for n in group.children if n.role == 'AXUnknown' and not n.hidden]
-        if not {'上一首', '下一首'} <= set(labels) or not any(s.startswith('播放模式（') for s in labels):
+        controls = [n for n in group.children if n.role in MODE_ROLES | {'AXUnknown'} and not n.hidden]
+        labels = {n.text for n in controls}
+        if (not {'上一首', '下一首'} <= labels
+                or not any(s in MODE_LABELS or s.startswith(('播放模式（', '播放模式(')) for s in labels)):
             continue
-        states = [s for s in labels if s in PLAY | PAUSE]
-        songs = [m.groups() for s in labels
-                 if (m := re.fullmatch(r'歌曲名[：:]\s*(.+?)\s+-\s+歌手名[：:]\s*(.+)', s))]
-        if len(states) == len(songs) == 1:
-            title, artist = (s.strip() for s in songs[0])
-            if title and artist:
-                matches.append(TrackInfo(title, artist, '', 'playing' if states[0] in PAUSE else 'paused',
-                                         metadata_scope='mac-qq-compact'))
+        buttons = [n for n in controls if playback_label(n.text) in PLAY | PAUSE]
+        if len(buttons) == 1:
+            matches.append((group, buttons[0]))
     return matches[0] if len(matches) == 1 else None
+
+
+def compact_track(root):
+    """读取简化播放栏的曲名、歌手与状态，保留未知的真实进度。"""
+    from .music_control import TrackInfo
+    player = compact_player(root)
+    if player is None:
+        return None
+    group, button = player
+    songs = [m.groups() for n in group.children if n.role in {'AXUnknown', 'AXStaticText'} and not n.hidden
+             if (m := re.fullmatch(r'歌曲名[：:]\s*(.+?)\s+-\s+歌手名[：:]\s*(.+)', n.text))]
+    if len(songs) != 1:
+        return None
+    title, artist = (s.strip() for s in songs[0])
+    if not title or not artist:
+        return None
+    return TrackInfo(title, artist, '', 'playing' if playback_label(button.text) in PAUSE else 'paused',
+                     metadata_scope='mac-qq-compact')
 
 
 def matching_song_buttons(tree, selected):
@@ -378,25 +395,27 @@ class QQMusicMacBridge:
         try:
             _app, tree = self._read()
             region = player_region(tree)
-            if region is None or parse_track(tree) is None:
-                track = compact_track(tree)
-                menu_action = getattr(self.backend, 'player_menu_action', None)
-                if track is None or not callable(menu_action):
+            use_compact = region is None or parse_track(tree) is None
+            if use_compact:
+                player = compact_player(tree)
+                if player is None:
                     return False
-                playing = track.playback_status == 'playing'
-                return ((action == 'play' and playing) or (action == 'pause' and not playing)
-                        or (not self.cancelled() and menu_action(tree.native, playing)))
-            _node, button, _times = region
+                _node, button = player
+            else:
+                _node, button, _times = region
             playing = playback_label(button.text) in PAUSE
             if (action == 'pause' and not playing) or (action == 'play' and playing):
                 return True
-            return not self.cancelled() and self.backend.action(button)
+            if not self.cancelled() and button.role == 'AXButton' and self.backend.action(button):
+                return True
+            menu_action = getattr(self.backend, 'player_menu_action', None)
+            return use_compact and callable(menu_action) and not self.cancelled() and menu_action(tree.native, playing)
         except (OSError, ImportError, AttributeError) as exc:
             self.last_error = str(exc)
             return False
 
     def play_candidate(self, executable: Path, selected):
-        """优先使用可操作的搜索框；兼容已验证客户端的单曲 ID 入口。"""
+        """使用已适配的单曲 ID 入口，其余版本走精确搜索。"""
         try:
             info = plistlib.loads((executable/'Contents/Info.plist').read_bytes())
         except (OSError, ValueError) as exc:
@@ -410,6 +429,7 @@ class QQMusicMacBridge:
         ensure = getattr(self.backend, 'ensure_running', None)
         launched = bool(ensure(executable)) if callable(ensure) else False
         dispatch = getattr(self.backend, 'dispatch_song_id', None) if supports_song_id(info) else None
+        by_song_id = callable(dispatch)
         deadline = self.clock() + 25
         stable = blocked_reads = 0
         while True:
@@ -417,20 +437,18 @@ class QQMusicMacBridge:
                 raise OSError('音乐操作已取消。')
             try:
                 _app, tree = self._read()
-                state = startup_state(tree)
+                state = startup_state(tree, by_song_id=by_song_id)
                 blocked = state in {'login-required', 'signing-in'}
-                if not blocked and callable(dispatch) and not search_fields(tree) and not self.cancelled():
-                    dispatch(executable, selected.identifier)
-                    return
                 stable = stable + 1 if state == 'ready' else 0
                 blocked_reads = blocked_reads + 1 if state == 'login-required' else 0
                 if stable >= 2:
                     break
-                if not launched and not blocked and len(search_fields(tree)) != 1:
+                if not by_song_id and not launched and not blocked and len(search_fields(tree)) != 1:
                     break  # Preserve the precise search-control diagnostic, without waiting for login.
                 if (not launched and blocked_reads >= 2) or self.clock() >= deadline:
                     detail = ('QQ 界面持续显示登录或验证提示，请在 QQ 完成对应操作后重试。' if state == 'login-required' else
                               'QQ 界面仍显示正在登录，请等待客户端恢复完成。' if state == 'signing-in' else
+                              'QQ 主窗口尚未就绪；请打开 QQ 主窗口后重试。' if by_song_id else
                               'QQ 界面或搜索控件尚未就绪，这不表示账号未登录；请运行“检查 QQ 适配”。')
                     raise QQClientNotReady('[Mac QQ / 就绪] ' + detail + '未输入搜索或请求播放，也未操作登录窗口。')
             except PermissionError:
@@ -441,6 +459,11 @@ class QQMusicMacBridge:
                 if not launched or self.clock() >= deadline:
                     raise
             self.sleep(.25)
+        if self.cancelled():
+            raise QQClientNotReady('音乐操作已取消，未请求播放。')
+        if by_song_id:
+            dispatch(executable, selected.identifier)
+            return
         fields = search_fields(tree)
         title = re.split(r'[（(]', selected.title, maxsplit=1)[0].strip()
         if len(fields) != 1 or not self.backend.search(fields[0], f'陈楚生 {title}'):
@@ -474,13 +497,21 @@ class QQMusicMacBridge:
             _app, tree = self._read()
             region = player_region(tree)
             track = parse_track(tree)
+            compact = compact_player(tree)
+            observed = track or (compact_track(tree) if compact is not None else None)
+            by_song_id = supports_song_id(info)
             fields = search_fields(tree)
             lines.append('辅助功能：已获授权；QQ 进程：唯一且可读取')
-            if not fields and supports_song_id(info):
-                lines.append('本版 QQ 支持按歌曲 ID 点播，无需搜索框；简化播放栏不支持六毛自动续播。')
-            lines.append('就绪观察：' + {'ready': '可继续识别', 'loading': '窗口／搜索控件未就绪',
-                'signing-in': '界面显示登录中', 'login-required': '界面显示登录／验证提示'}[startup_state(tree)])
-            lines.append(f'搜索框：{len(fields)} 个；播放栏：{"可识别" if region else "未识别"}；时间轴与歌曲：{"可读取" if track else "未识别"}')
+            lines.append('点播方式：' + ('歌曲 ID（无需搜索框）' if by_song_id else 'QQ 界面搜索'))
+            lines.append('就绪观察：' + {'ready': '可请求点播',
+                'loading': 'QQ 主窗口未就绪' if by_song_id else '窗口／搜索控件未就绪',
+                'signing-in': '界面显示登录中', 'login-required': '界面显示登录／验证提示'}[
+                    startup_state(tree, by_song_id=by_song_id)])
+            player_label = '可识别' if region else '简化播放栏' if compact else '未识别'
+            lines.append(f'搜索框：{len(fields)} 个；播放栏：{player_label}')
+            lines.append(f'当前歌曲及状态：{"可读取" if observed else "未读到"}；播放进度：{"可读取" if track else "未读到"}')
+            if compact is not None and track is None:
+                lines.append('此播放栏未提供进度，支持手动切歌。')
             if track is not None:
                 lines.append('播放栏专辑：' + ('可读取并核对' if track.album else '未公开，无法仅凭播放栏确认同名专辑版本'))
             names = getattr(self.backend, 'action_names', None)

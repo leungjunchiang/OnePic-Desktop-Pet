@@ -1,4 +1,4 @@
-"""北京时间业务时间与显示统一；普通暂停保留可见累计，明确区间修正仍可校准。
+"""北京时间业务时间与显示统一；显示与保存均读取实际经过的单调时钟秒数。
 
 保存保留单调时钟的亚秒尾数，长时间运行不累积丢秒。
 
@@ -96,94 +96,6 @@ def format_elapsed_clock(seconds: int) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:02d}:{seconds:02d}"
-
-
-class SmoothDurationDisplay:
-    """Project an authoritative duration onto a monotonic live display.
-
-    The authoritative value may be a cached account projection, so it can
-    remain unchanged while the local focus session is still running.  Anchor
-    the display to monotonic time instead of allowing a stale value to freeze
-    it.  A delayed GUI callback therefore catches up in one update, while a
-    newer authoritative value is applied immediately.  Running displays are
-    monotonic across ordinary pause/resume transitions. Account/day changes
-    and an explicitly verified interval correction may reset the display.
-    The retained value is UI state only; it is never a persisted focus fact.
-    """
-
-    def __init__(
-        self,
-        monotonic_provider: Callable[[], float] | None = None,
-    ) -> None:
-        self._monotonic = monotonic_provider or time.monotonic
-        self._identity = ""
-        self._value: int | None = None
-        self._active = False
-        self._anchor_seconds = 0
-        self._anchor_monotonic = self._monotonic()
-
-    def reset(self) -> None:
-        self._identity = ""
-        self._value = None
-        self._active = False
-        self._anchor_seconds = 0
-        self._anchor_monotonic = self._monotonic()
-
-    def project(
-        self,
-        authoritative_seconds: int,
-        *,
-        active: bool,
-        identity: str,
-        allow_decrease: bool = False,
-    ) -> int:
-        authoritative = max(0, int(authoritative_seconds or 0))
-        now = self._monotonic()
-        clean_identity = str(identity or "")
-        must_snap = (
-            self._value is None
-            or clean_identity != self._identity
-            or allow_decrease
-            or now < self._anchor_monotonic
-        )
-        if must_snap:
-            self._identity = clean_identity
-            self._value = authoritative
-            self._active = bool(active)
-            self._anchor_seconds = authoritative
-            self._anchor_monotonic = now
-            return authoritative
-
-        if not active or not self._active:
-            previous_value = int(self._value or 0)
-            stable = max(previous_value, authoritative)
-            if authoritative < previous_value and bool(active) != self._active:
-                LOGGER.info(
-                    "retained cumulative duration across transition "
-                    "authoritative=%s visible=%s active=%s",
-                    authoritative, previous_value, bool(active),
-                )
-            self._value = stable
-            self._active = bool(active)
-            self._anchor_seconds = stable
-            self._anchor_monotonic = now
-            return stable
-
-        self._active = True
-        local_projection = self._anchor_seconds + max(
-            0,
-            int(now - self._anchor_monotonic),
-        )
-        if authoritative > local_projection:
-            # A server/account projection may include another device's newly
-            # sealed work.  Calibrate immediately; making it chase at 1s/s
-            # would leave the display permanently behind a clock that is also
-            # advancing at 1s/s.
-            self._anchor_seconds = authoritative
-            self._anchor_monotonic = now
-            local_projection = authoritative
-        self._value = max(int(self._value or 0), local_projection)
-        return self._value
 
 
 class WorkTimerModel:

@@ -164,8 +164,8 @@ def test_live_display_prepares_history_once_per_facts_revision(pet, monkeypatch)
     original = window.focus_analytics
     monkeypatch.setattr(window, '_current_social_user_id', lambda:'a')
     monkeypatch.setattr('onepic_desktop_pet.window.time.monotonic', lambda:clock[0])
-    window.focus_analytics = SimpleNamespace(current_time=lambda:at[0], focus_segments=history,
-        _device_id='local', remote_effective_projection=lambda _at:None)
+    window.focus_analytics = SimpleNamespace(current_time=lambda:at[0], _trusted_sealed_focus_segments=history,
+        _device_id='local', remote_effective_projection=lambda _at:None, _legacy_day_seconds=lambda _date:0)
     window._active_focus_account_id = 'a'
     window._cross_device_today_display_account_id = 'a'
     window._cross_device_today_display_date = at[0].date().isoformat()

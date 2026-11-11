@@ -11,7 +11,6 @@ import pytest
 from onepic_desktop_pet import local_data
 from onepic_desktop_pet.work_timer import (
     BEIJING_TIMEZONE,
-    SmoothDurationDisplay,
     WorkTimerModel,
     format_elapsed_clock,
     format_work_duration,
@@ -36,38 +35,6 @@ def _timer(tmp_path, clock: FakeClock) -> WorkTimerModel:
         now_provider=lambda: clock.now,
         monotonic_provider=lambda: clock.monotonic,
     )
-
-
-def test_smooth_duration_display_uses_monotonic_anchor_and_immediate_calibration() -> None:
-    clock = FakeClock()
-    display = SmoothDurationDisplay(lambda: clock.monotonic)
-
-    assert display.project(100, active=True, identity="account:day") == 100
-    # A stale network projection must not freeze the local live clock.
-    clock.advance(3)
-    assert display.project(100, active=True, identity="account:day") == 103
-    assert display.project(100, active=True, identity="account:day") == 103
-    for expected in range(104, 111):
-        clock.advance(1)
-        assert display.project(100, active=True, identity="account:day") == expected
-
-    # A server/account projection may suddenly include several minutes from
-    # another device. It must calibrate immediately rather than chase at 1s/s.
-    assert display.project(404, active=True, identity="account:day") == 404
-    clock.advance(3)
-    assert display.project(404, active=True, identity="account:day") == 407
-
-    # Ordinary pause keeps the visible total despite a stale scalar.
-    assert display.project(405, active=False, identity="account:day") == 407
-    clock.advance(90)
-    assert display.project(405, active=False, identity="account:day") == 407
-    assert display.project(405, active=True, identity="account:day") == 407
-    clock.advance(1)
-    assert display.project(405, active=True, identity="account:day") == 408
-    # Verified corrections remain possible without a reset card or data reset.
-    assert display.project(390, active=False, identity="account:day", allow_decrease=True) == 390
-    assert display.project(15, active=False, identity="other-account:day") == 15
-    assert display.project(2, active=True, identity="account:next-day") == 2
 
 
 def test_work_timer_accumulates_checkpoints_and_survives_restart(tmp_path) -> None:

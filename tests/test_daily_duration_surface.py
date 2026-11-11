@@ -1,4 +1,5 @@
-"""今日累计胶囊跨专注状态常驻；训导牌有独立定位，仍遵守隐藏与全屏门禁。"""
+"""今日累计胶囊常驻、延迟刷新按实际秒数补齐；训导牌遵守隐藏与全屏门禁。"""
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -53,6 +54,20 @@ def test_finish_real_session_keeps_daily_total(pet):
     assert window.focus_session.snapshot(include_projection=False).status == "idle"
     assert window.work_duration_bubble.isVisible()
     assert window.work_duration_bubble.text() == "今日已工作 03:00"
+
+
+def test_delayed_clock_refresh_preserves_elapsed_seconds(pet, monkeypatch):
+    _, window = pet
+    clock = [0.0]
+    start = window.work_timer._now().replace(hour=10, minute=0, second=0, microsecond=0)
+    monkeypatch.setattr(window.work_timer, "_now", lambda: start + timedelta(seconds=clock[0]))
+    monkeypatch.setattr(window.work_timer, "_monotonic", lambda: clock[0])
+    window.work_timer.start()
+    for second in (18, 19, 21, 22):
+        clock[0] = 3600 + 35 * 60 + second
+        window._work_timer_tick_impl()
+        assert window.work_duration_bubble.text() == f"今日已工作 1:35:{second:02d}"
+        assert window.work_timer.today_seconds() == int(clock[0])
 
 
 def test_reenable_after_paused_hidden_pill_clears_old_paused_style(pet):

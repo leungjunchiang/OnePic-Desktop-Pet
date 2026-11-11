@@ -1,6 +1,8 @@
 """
 验证音乐渠道顺序与置顶歌单入口；透明窗禁用阴影，累计投影省略报告细节；今日累计框结束本轮不消失。
 本模块还验证异常服务器汇总隔离、免打扰首次处理不被在途旧反应覆盖；有效离开截止时间可校准显示。
+本机在线状态回显不会触发全量统计重算，另一台设备的真实变化仍会更新自习室。
+本机实测时长与其他设备取区间并集，历史累计只作为下限。
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
 喂食、离线对话、陪伴动作、工作计时、专注导航、备注提醒和自拍成片；手动监视器用例隔离周期轮询。
 
@@ -165,16 +167,10 @@ def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
 
     app, window = _create_window()
     moment = datetime(2026, 8, 31, 15, 0, tzinfo=timezone(timedelta(hours=8)))
-    local_rows = [
-        {
-            "user_id": "account-1",
-            "segment_id": "local-new",
-            "session_id": "local-session",
-            "start_at": "2026-08-31T13:00:00+08:00",
-            "end_at": "2026-08-31T14:00:00+08:00",
-            "device_id": "device-a",
-        }
-    ]
+    local_segment = FocusSegment(
+        "local-new", "local-session", moment - timedelta(hours=2),
+        moment - timedelta(hours=1), "device-a",
+    )
     remote_rows = [
         {
             "user_id": "account-1",
@@ -193,9 +189,7 @@ def test_cross_device_display_survives_local_only_refresh(monkeypatch) -> None:
     monkeypatch.setattr(window, "_current_social_user_id", lambda: "account-1")
     monkeypatch.setattr(window, "_shared_today_focus_seconds", lambda: 2 * 60 * 60 + 30 * 60)
     monkeypatch.setattr(window.focus_analytics, "current_time", lambda: moment)
-    monkeypatch.setattr(window.focus_analytics, "focus_segments", lambda: [
-        type("Segment", (), {"to_dict": lambda self: dict(local_rows[0])})()
-    ])
+    monkeypatch.setattr(window.focus_analytics, "focus_segments", lambda: [local_segment])
 
     payload = {"_focus_segments": {"segments": remote_rows}}
     assert window._refresh_cross_device_today_display(payload, snapshot=snapshot, source="test")
@@ -343,6 +337,58 @@ def test_account_today_display_reprojects_cached_intervals_at_beijing_midnight(m
     window.close(); window.deleteLater(); app.processEvents()
 
 
+@pytest.mark.parametrize("fresh_presence", [True, False])
+def test_today_clock_counts_overlap_once_and_never_advances_daily_floor(
+    monkeypatch, fresh_presence,
+) -> None:
+    app, window = _create_window()
+    start = datetime(2026, 11, 11, 10, tzinfo=timezone(timedelta(hours=8)))
+    wall = [start]
+    monotonic = [100.0]
+    monkeypatch.setattr(window.work_timer, "_now", lambda: wall[0])
+    monkeypatch.setattr(window.work_timer, "_monotonic", lambda: monotonic[0])
+    monkeypatch.setattr(window.focus_analytics, "_now", lambda: wall[0])
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: "account")
+    window._active_focus_account_id = "account"
+    window.focus_analytics.set_device_id("local")
+    window.work_timer.start()
+    window.focus_analytics.merge_remote_segments([{
+        "segment_id": "overlapping-record",
+        "session_id": "remote-session",
+        "device_id": "remote",
+        "start_at": (start - timedelta(seconds=10)).isoformat(),
+        "end_at": (start + timedelta(seconds=5)).isoformat(),
+    }])
+    window.focus_analytics.merge_remote_history([{
+        "focus_date": start.date().isoformat(), "legacy_seconds": 20,
+    }])
+    payload = {"_focus_live_projection": {"devices": []}} if fresh_presence else {}
+    try:
+        assert window._refresh_cross_device_today_display(payload)
+        assert window._account_today_display_seconds() == 20
+
+        wall[0] += timedelta(seconds=3)
+        monotonic[0] += 3
+        assert window._account_today_display_seconds() == 20
+
+        wall[0] += timedelta(seconds=9)
+        monotonic[0] += 9
+        assert window._account_today_display_seconds() == 22
+
+        # A wall-clock adjustment does not add minutes to the local interval.
+        wall[0] += timedelta(minutes=5)
+        assert window._account_today_display_seconds() == 22
+        assert window.work_timer.session_seconds() == 12
+
+        window.pause_work_timer()
+        assert window._account_today_display_seconds() == 22
+        assert window.focus_analytics.period_summary("day", wall[0])["total_seconds"] == 22
+    finally:
+        window.close()
+        window.deleteLater()
+        app.processEvents()
+
+
 def test_failed_midnight_reprojection_cannot_show_yesterday_total(monkeypatch) -> None:
     """A bad cached interval must fall back to today's local value."""
 
@@ -382,7 +428,6 @@ def test_confirmed_remote_live_correction_replaces_nine_hour_desktop_bubble(monk
         'user_id': account, 'segment_id': 'closed', 'session_id': 'session', 'device_id': 'other',
         'start_at': '2026-10-27T00:00:00+08:00', 'end_at': '2026-10-27T00:20:42+08:00',
     }]
-    window._smooth_work_duration_display.project(32814, active=False, identity=f'{account}:2026-10-27')
     try:
         # A local transition or malformed server payload is not evidence of a
         # real correction and must keep the existing stable display.
@@ -464,7 +509,6 @@ def test_stale_server_floor_cannot_undo_confirmed_stopped_bridge_correction(monk
     window._cross_device_today_display_account_id = account
     window._cross_device_today_display_date = moment.date().isoformat()
     window._cross_device_today_display_seconds = 32814
-    window._smooth_work_duration_display.project(32814, active=False, identity=f'{account}:2026-10-27')
     try:
         payload = {'_focus_segments': {'segments': [], 'full_sync': False},
             '_focus_live_projection': {'devices': [{'device_id':'other', 'session_id':'old-session',
@@ -4619,6 +4663,67 @@ def test_paused_local_device_drops_stale_server_live_echo(monkeypatch) -> None:
     window.close()
     window.deleteLater()
     app.processEvents()
+
+
+def test_local_live_echo_does_not_rebuild_focus_analytics(monkeypatch) -> None:
+    app, window = _create_window()
+    now = datetime(2026, 11, 11, 10, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(window.work_timer, "_now", lambda: now)
+    monkeypatch.setattr(window.focus_analytics, "_now", lambda: now)
+    window._active_focus_account_id = "account"
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: "account")
+    window.focus_analytics.set_device_id("local-device")
+    window.work_timer.start()
+    window._set_local_live_focus_projection()
+    revision = window._focus_projection_revision
+    started_at = window.work_timer.current_segment_started_at()
+    devices = [{
+        "device_id": "local-device",
+        "session_id": window.work_timer.focus_session_id,
+        "start_at": started_at.isoformat(),
+        "live": True,
+    }]
+    payload = {"data_source": "server", "_focus_live_projection": {"devices": devices}}
+    summaries = []
+    window._social_dialog = SimpleNamespace(
+        set_owner_nickname=lambda _name: None,
+        set_cross_device_today_display_seconds=lambda *_args, **_kwargs: None,
+        set_focus_analytics=summaries.append,
+    )
+    monkeypatch.setattr(window.focus_analytics, "snapshot", lambda: {"summary": True})
+    period_summary = window.focus_analytics.period_summary
+    period_reads = []
+
+    def count_period_reads(*args, **kwargs):
+        period_reads.append(True)
+        return period_summary(*args, **kwargs)
+
+    monkeypatch.setattr(window.focus_analytics, "period_summary", count_period_reads)
+    try:
+        window._merge_remote_personal_state(payload)
+        window._merge_remote_personal_state(payload)
+        assert window._focus_projection_revision == revision
+        assert summaries == []
+
+        devices.append({
+            "device_id": "other-device",
+            "session_id": "other-session",
+            "start_at": (started_at - timedelta(minutes=1)).isoformat(),
+            "live": True,
+        })
+        window._merge_remote_personal_state(payload)
+        assert window._focus_projection_revision == revision + 1
+        assert summaries == [{"summary": True}]
+        assert window._cross_device_today_display_seconds >= 60
+        assert {row.device_id for row in window.focus_analytics.live_projection_segments()} == {
+            "local-device", "other-device",
+        }
+        assert period_reads == []
+    finally:
+        window._social_dialog = None
+        window.close()
+        window.deleteLater()
+        app.processEvents()
 
 
 def test_selfie_completion_shows_photo_bubble() -> None:

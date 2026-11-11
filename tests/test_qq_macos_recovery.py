@@ -1,4 +1,4 @@
-"""验证 Mac 登录保护、QQ 单曲 ID 入口、AX 回退、只读诊断及安全关闭。"""
+"""验证 Mac 登录保护、QQ 新旧简化播放栏与单曲 ID 入口、只读诊断及安全关闭。"""
 import plistlib
 from pathlib import Path
 import sys
@@ -22,16 +22,20 @@ def app_bundle(tmp_path):
     return path
 
 
-def test_qq_11105_dispatches_exact_id_and_reads_compact_player(tmp_path):
+@pytest.mark.parametrize('version', ['11.10.5', '11.11.0'])
+def test_verified_qq_dispatches_exact_id_and_reads_compact_player(tmp_path, version):
     path = app_bundle(tmp_path)
     plist = path / 'Contents/Info.plist'
     info = plistlib.loads(plist.read_bytes())
-    info.update(CFBundleShortVersionString='11.10.5',
+    info.update(CFBundleShortVersionString=version,
                 CFBundleURLTypes=[{'CFBundleURLSchemes': ['qqmusicmac']}])
     plist.write_bytes(plistlib.dumps(info))
-    bar = AXNode('AXGroup', children=[AXNode('AXUnknown', label) for label in (
-        '上一首', '暂停播放', '下一首', '播放模式（顺序播放）', '歌曲名：光 - 歌手名：陈楚生')])
-    root = AXNode('AXWindow', children=[AXNode('AXUnknown', '搜索'), bar])
+    old_roles = version == '11.10.5'
+    controls = [AXNode('AXUnknown' if old_roles else 'AXButton', label) for label in (
+        '上一首', '暂停播放', '下一首', '播放模式（顺序播放）')]
+    song = AXNode('AXUnknown' if old_roles else 'AXStaticText', '歌曲名：光 - 歌手名：陈楚生')
+    bar = AXNode('AXGroup', '播放控制栏', children=[*controls, song])
+    root = AXNode('AXWindow', children=[AXNode('AXUnknown' if old_roles else 'AXTextField', '搜索'), bar])
     backend = Backend(root)
     backend.dispatch_song_id = lambda app, song_id: backend.actions.append((app, song_id))
     bridge = QQMusicMacBridge(backend=backend)
@@ -41,10 +45,43 @@ def test_qq_11105_dispatches_exact_id_and_reads_compact_player(tmp_path):
     track = bridge.session().track
     assert (track.title, track.artist, track.playback_status) == ('光', '陈楚生', 'playing')
     assert track.duration_ms == 0 and track.metadata_scope == 'mac-qq-compact'
+    diagnostic = bridge.diagnostics(path)
+    assert '点播方式：歌曲 ID（无需搜索框）' in diagnostic
+    assert '就绪观察：可请求点播' in diagnostic
+    assert '播放栏：简化播放栏' in diagnostic
 
     root.children.append(AXNode('AXButton', '点击登录'))
     with pytest.raises(OSError, match='未输入搜索'):
         bridge.play_candidate(path, candidate)
+    assert backend.actions == [(path, '123')]
+
+    if not old_roles:
+        assert bridge.control(BUNDLE_ID, 'pause')
+        assert backend.actions[-1] == ('暂停播放', 'AXPress')
+
+
+def test_id_route_waits_for_main_window_and_does_not_retry_failed_dispatch(tmp_path):
+    path = app_bundle(tmp_path)
+    plist = path / 'Contents/Info.plist'
+    info = plistlib.loads(plist.read_bytes())
+    info.update(CFBundleShortVersionString='11.11.0',
+                CFBundleURLTypes=[{'CFBundleURLSchemes': ['qqmusicmac']}])
+    plist.write_bytes(plistlib.dumps(info))
+    blank = AXNode('AXApplication', children=[AXNode('AXWindow')])
+    main = AXNode('AXWindow', children=[AXNode('AXTextField', '搜索')])
+    states = iter((blank, main, main))
+    backend = Backend(main)
+    backend.ensure_running = lambda _: True
+    backend.tree = lambda _: next(states)
+    def dispatch(*args):
+        backend.actions.append(args)
+        raise OSError('dispatch failed')
+    backend.dispatch_song_id = dispatch
+    waited = []
+    bridge = QQMusicMacBridge(backend=backend, clock=lambda: sum(waited), sleep=waited.append)
+    with pytest.raises(OSError, match='dispatch failed'):
+        bridge.play_candidate(path, SongCandidate('qq', '光', '陈楚生', identifier='123'))
+    assert waited == [.25, .25]
     assert backend.actions == [(path, '123')]
 
 
