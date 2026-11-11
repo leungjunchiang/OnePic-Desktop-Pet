@@ -1,4 +1,4 @@
-"""透明属性先于账号恢复/原生句柄，实时区间缓存不重复扫描历史且保持事实口径。"""
+"""验证原生窗口、静止时的定时器和计时条定位，以及历史区间缓存和计时口径。"""
 import os
 import sys
 from datetime import datetime, timedelta
@@ -7,8 +7,9 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QWidget
+from onepic_desktop_pet.behavior import PetState
 from onepic_desktop_pet.focus_analytics import FocusAnalyticsStore
-from onepic_desktop_pet.focus_segments import FocusSegment
+from onepic_desktop_pet.focus_segments import FUTURE_FOCUS_GRACE_SECONDS, FocusSegment
 from onepic_desktop_pet.time_service import BEIJING_TIMEZONE
 from onepic_desktop_pet.window import PetWindow
 from onepic_desktop_pet.focus_display import (
@@ -31,6 +32,41 @@ def test_pet_and_clock_disable_shadow_across_flag_recreation(pet):
     for x, y in ((0, 0), (image.width()-1, 0), (0, image.height()-1)):
         assert image.pixelColor(x, y).alpha() == 0
     assert not window.mask().isEmpty()
+
+
+def test_movement_timer_runs_only_for_visible_walking_pet(pet):
+    app, window = pet
+    assert not window.movement_timer.isActive()
+    window.set_state(PetState.WALK)
+    assert window.movement_timer.isActive()
+    window.hide_pet()
+    assert not window.movement_timer.isActive()
+    window.show_pet()
+    app.processEvents()
+    assert window.movement_timer.isActive()
+    window.set_state(PetState.IDLE)
+    assert not window.movement_timer.isActive()
+
+
+def test_clock_moves_with_pet_without_resizing_each_time(pet, monkeypatch):
+    _, window = pet
+    bubble = window.work_duration_bubble
+    window._update_work_duration_bubble(display_seconds=59)
+    sizes = []
+    adjust_size = bubble.adjustSize
+
+    def adjust():
+        adjust_size()
+        sizes.append(bubble.size())
+
+    monkeypatch.setattr(bubble, "adjustSize", adjust)
+    for x in range(90, 110):
+        window.move(x, 90)
+        assert bubble.y() == window.y() + window.height() + 5
+    assert sizes == []
+    window._update_work_duration_bubble(display_seconds=3600)
+    assert sizes == [bubble.size()]
+    assert bubble.text().endswith("1:00:00")
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Windows native compositor')
@@ -191,3 +227,62 @@ def test_live_display_prepares_history_once_per_facts_revision(pet, monkeypatch)
         assert len(reads) == 2
     finally:
         window.focus_analytics = original
+
+
+def test_dashboard_and_clock_share_prepared_history_for_duplicate_pages(pet, monkeypatch):
+    _, window = pet
+    moment = datetime(2026, 10, 8, 12, tzinfo=BEIJING_TIMEZONE)
+    monkeypatch.setattr(window.focus_analytics, "_now", lambda: moment)
+    monkeypatch.setattr(window, "_current_social_user_id", lambda: "account")
+    window._active_focus_account_id = "account"
+    reads = []
+    monkeypatch.setattr(
+        window.focus_analytics, "_trusted_sealed_focus_segments",
+        lambda: reads.append(True) or [],
+    )
+    first = {
+        "user_id": "account", "segment_id": "first", "session_id": "remote",
+        "start_at": (moment - timedelta(minutes=6)).isoformat(),
+        "end_at": (moment - timedelta(minutes=4)).isoformat(),
+    }
+    snapshot = SimpleNamespace(status="idle")
+    for segments in ([first], [], [dict(first)], []):
+        assert window._refresh_cross_device_today_display(
+            {"_focus_segments": {"segments": segments}, "_focus_live_projection": {"devices": []}},
+            snapshot=snapshot,
+        )
+        assert window._cross_device_today_display_value(snapshot) == 120
+    assert len(reads) == 1
+    second = {
+        **first, "segment_id": "second",
+        "start_at": (moment - timedelta(minutes=2)).isoformat(),
+        "end_at": (moment - timedelta(minutes=1)).isoformat(),
+    }
+    assert window._refresh_cross_device_today_display(
+        {"_focus_segments": {"segments": [second]}}, snapshot=snapshot,
+    )
+    assert window._cross_device_today_display_value(snapshot) == 180
+    assert len(reads) == 2
+
+
+def test_rejected_history_is_not_reparsed_on_each_clock_tick(pet, monkeypatch):
+    _, window = pet
+    moment = datetime(2026, 10, 8, 12, tzinfo=BEIJING_TIMEZONE)
+    monotonic = [100.0]
+    monkeypatch.setattr("onepic_desktop_pet.window.time.monotonic", lambda: monotonic[0])
+    reads = []
+    future_start = moment + timedelta(seconds=FUTURE_FOCUS_GRACE_SECONDS + 60)
+    fact = FocusSegment(
+        "future", "remote", future_start, future_start + timedelta(minutes=1),
+    )
+    monkeypatch.setattr(
+        window.focus_analytics, "_trusted_sealed_focus_segments",
+        lambda: reads.append(True) or [fact],
+    )
+    for _ in range(8):
+        with pytest.raises(CrossDeviceDisplayDataError, match="future_start"):
+            window._prepare_focus_display_history("account", moment, None)
+    assert len(reads) == 1
+    monotonic[0] += 60
+    assert window._prepare_focus_display_history("account", future_start, None) == [fact]
+    assert len(reads) == 2

@@ -131,6 +131,12 @@ jobs:
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
           }
+      - name: Verify native Windows rendering
+        env:
+          QT_QPA_PLATFORM: windows
+        shell: powershell
+        run: |
+          .\.venv\Scripts\python.exe -m pytest tests/test_rendering_performance.py -k "native_shadow_flag or alpha_attributes or movement_timer_runs or clock_moves_with_pet"
       - name: Build public Windows package
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1

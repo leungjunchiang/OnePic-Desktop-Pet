@@ -2,7 +2,8 @@
 主窗口协调专注历史同步，并在账号范围内同步和显示本机设备昵称。
 
 先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
-同步刷新复用已解析的专注区间，同一台设备的在线回显不触发整份统计重算。
+同步与桌面计时共享当天的已校验区间，计时条随桌宠移动时复用现有尺寸。
+停在原地或隐藏时关闭高频移动定时器，相同轮廓不重复设置原生遮罩。
 
 闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
 
@@ -736,7 +737,10 @@ class PetWindow(QWidget):
         # Only validated historical intervals are cached. The visible seconds
         # are calculated from today's rows on each clock update.
         self._cross_device_today_display_prepared_key: tuple[object, ...] | None = None
-        self._cross_device_today_display_prepared_rows: list[FocusSegment] = []
+        self._cross_device_today_display_prepared_source: list[object] | None = None
+        self._cross_device_today_display_prepared_rows: list[FocusSegment] | None = None
+        self._cross_device_today_display_prepared_error = ""
+        self._cross_device_today_display_retry_at = 0.0
         # session_seconds() is cumulative across pauses/resumes.  This cursor
         # ensures each WORKING second is credited to wages and statistics once.
         self._recorded_focus_session_seconds = (
@@ -1188,7 +1192,6 @@ class PetWindow(QWidget):
         self.movement_timer = QTimer(self)
         self.movement_timer.setInterval(settings.movement_interval_ms)
         self.movement_timer.timeout.connect(self._movement_tick)
-        self.movement_timer.start()
 
         self.state_timer = QTimer(self)
         self.state_timer.setSingleShot(True)
@@ -1650,6 +1653,7 @@ class PetWindow(QWidget):
         self._movement_x = float(self.x())
         self._last_movement_at = time.monotonic()
         self.turn_timer.stop()
+        self._update_movement_timer()
         display_state = state
         frame_count = len(self._pixmaps[display_state])
         if frame_count > 1:
@@ -2091,7 +2095,8 @@ class PetWindow(QWidget):
         display_region = region.translated(self.label.x(), self.label.y())
         if hint_rect is not None:
             display_region = display_region.united(QRegion(hint_rect))
-        self.setMask(display_region)
+        if self.mask() != display_region:
+            self.setMask(display_region)
         self._last_applied_mask_key = applied_key
 
     @_guard_qt_callback
@@ -2182,6 +2187,7 @@ class PetWindow(QWidget):
         lifecycle_log("pet_window.show_event.begin", self)
         self.ensure_pet_window_policy(event="Show")
         super().showEvent(event)
+        self._update_movement_timer()
         if not self._focus_activity_bridge.active:
             self._focus_activity_bridge.start(self)
         handle = self.windowHandle()
@@ -2590,12 +2596,12 @@ class PetWindow(QWidget):
 
         super().moveEvent(event)
         self._position_accessories()
-        self._position_local_burst_effect()
 
     def hideEvent(self, event: QHideEvent) -> None:
         """隐藏宠物时同步隐藏照片和文字气泡。"""
 
         lifecycle_log("pet_window.hide_event.begin", self)
+        self._update_movement_timer()
         if getattr(self, "_applying_pet_window_policy", False):
             # setWindowFlags() may emit a transient hide while Qt recreates
             # the native handle.  This is not a user hide and must not make
@@ -2983,7 +2989,7 @@ class PetWindow(QWidget):
             screen.logicalDotsPerInchChanged.connect(self._on_dpi_changed)
         self._render_cache.clear()
         QTimer.singleShot(0, self._refresh_pixmap)
-        QTimer.singleShot(0, self._position_accessories)
+        QTimer.singleShot(0, self._reflow_screen_accessories)
         self.ensure_pet_window_policy(event="ScreenChange")
         self._sync_fullscreen_visibility()
         QTimer.singleShot(
@@ -3057,7 +3063,7 @@ class PetWindow(QWidget):
 
         self._render_cache.clear()
         QTimer.singleShot(0, self._refresh_pixmap)
-        QTimer.singleShot(0, self._position_accessories)
+        QTimer.singleShot(0, self._reflow_screen_accessories)
 
     def _schedule(self, decision: StateDecision) -> None:
         """应用状态决策并安排下一次状态切换。"""
@@ -3565,6 +3571,20 @@ class PetWindow(QWidget):
             and hasattr(self, "work_duration_bubble")
             and self.work_duration_bubble.isVisible()
         )
+
+    def _update_movement_timer(self) -> None:
+        """Poll for position changes only while the pet is visible and walking."""
+
+        timer = getattr(self, "movement_timer", None)
+        if timer is None:
+            return
+        if self.state is PetState.WALK and self.isVisible():
+            if not timer.isActive():
+                self._movement_x = float(self.x())
+                self._last_movement_at = time.monotonic()
+                timer.start()
+        else:
+            timer.stop()
 
     @_guard_qt_callback
     def _movement_tick(self) -> None:
@@ -5259,6 +5279,14 @@ class PetWindow(QWidget):
         bubble.move(x, y)
 
     @_guard_qt_callback
+    def _reflow_screen_accessories(self) -> None:
+        """Recalculate clock dimensions when the screen or its scaling changes."""
+
+        if self.work_duration_bubble.isVisible():
+            self.work_duration_bubble.adjustSize()
+        self._position_accessories()
+
+    @_guard_qt_callback
     def _position_accessories(self) -> None:
         """Reflow every pet accessory from the pet as its single anchor."""
 
@@ -6320,10 +6348,47 @@ class PetWindow(QWidget):
             dialog.set_cross_device_today_display_seconds(None, account_id="")
 
     def _invalidate_cross_device_display_projection_cache(self) -> None:
-        """Forget the derived display union after a facts/state update."""
+        """Drop the prepared history when switching account scope."""
 
         self._cross_device_today_display_prepared_key = None
-        self._cross_device_today_display_prepared_rows = []
+        self._cross_device_today_display_prepared_source = None
+        self._cross_device_today_display_prepared_rows = None
+        self._cross_device_today_display_prepared_error = ""
+        self._cross_device_today_display_retry_at = 0.0
+
+    def _prepare_focus_display_history(
+        self, account_id: str, moment: datetime, remote_rows: list[object] | None,
+    ) -> list[FocusSegment]:
+        """Validate history once per revision and share today's rows with the clock."""
+
+        key = (account_id, moment.date(), self._focus_projection_revision)
+        same_history = (
+            key == self._cross_device_today_display_prepared_key
+            and remote_rows is self._cross_device_today_display_prepared_source
+        )
+        if same_history:
+            if self._cross_device_today_display_prepared_rows is not None:
+                return self._cross_device_today_display_prepared_rows
+            if time.monotonic() < self._cross_device_today_display_retry_at:
+                raise CrossDeviceDisplayDataError(self._cross_device_today_display_prepared_error)
+
+        history = self._append_missing_display_segments(
+            remote_rows or [],
+            self.focus_analytics._trusted_sealed_focus_segments(),
+        )
+        self._cross_device_today_display_prepared_key = key
+        self._cross_device_today_display_prepared_source = remote_rows
+        self._cross_device_today_display_prepared_rows = None
+        try:
+            prepared = prepare_today_display_rows(account_id, moment, history)
+        except (CrossDeviceDisplayDataError, TypeError, ValueError, OverflowError) as exc:
+            # Clock skew can become valid later. Retry on new data immediately
+            # or after a short delay, not four times per second on the GUI.
+            self._cross_device_today_display_prepared_error = str(exc)
+            self._cross_device_today_display_retry_at = time.monotonic() + 15.0
+            raise
+        self._cross_device_today_display_prepared_rows = prepared
+        return prepared
 
     def _freeze_cached_live_display_until_refresh(self) -> None:
         """Stop old open device rows from advancing after this device pauses.
@@ -6335,7 +6400,6 @@ class PetWindow(QWidget):
         """
 
         self._cross_device_today_display_live_refresh_required = True
-        self._invalidate_cross_device_display_projection_cache()
 
     def _cached_live_display_rows_are_fresh(self) -> bool:
         """Return whether the retained remote live rows may still advance."""
@@ -6577,7 +6641,7 @@ class PetWindow(QWidget):
             else getattr(current, "today_seconds", 0)
         )
         has_remote_payload = isinstance(data, dict) and "_focus_segments" in data
-        remote_rows: list[object] | None = None
+        remote_rows = self._cross_device_today_display_remote_rows
         if has_remote_payload:
             # Validate the server response as a display input, then retain
             # local pending facts too.  Duplicate rows are harmless because
@@ -6598,23 +6662,15 @@ class PetWindow(QWidget):
                     preserved_cross_device_seconds=self._cross_device_today_display_seconds,
                 )
                 return False
-            # A delta page is additive.  Replacing the retained snapshot with
-            # an empty page was the source of the observed "7h -> 6h"
-            # regression when the next 30-second sync had no new rows.
-            remote_rows = (
-                list(candidate)
-                if is_full_snapshot or self._cross_device_today_display_remote_rows is None
-                else self._merge_cross_device_display_rows(
-                    self._cross_device_today_display_remote_rows,
-                    list(candidate),
-                )
-            )
-        elif self._cross_device_today_display_remote_rows is not None:
-            # A local lifecycle event or an ordinary dashboard response does
-            # not authorize replacing a valid account-wide snapshot with local
-            # rows.  Reuse the last validated remote facts and add any newly
-            # committed local facts; interval union keeps duplicates harmless.
-            remote_rows = list(self._cross_device_today_display_remote_rows)
+            # Keep the same snapshot object on empty or duplicate pages.
+            # A changed page is validated before becoming the retained input.
+            if is_full_snapshot or remote_rows is None:
+                if candidate != remote_rows:
+                    remote_rows = list(candidate)
+            elif candidate:
+                merged = self._merge_cross_device_display_rows(remote_rows, candidate)
+                if merged != remote_rows:
+                    remote_rows = merged
         has_live_payload = isinstance(data, dict) and "_focus_live_projection" in data
         presence_fallback_rows = self._account_presence_live_fallback(
             account_id,
@@ -6723,16 +6779,10 @@ class PetWindow(QWidget):
                     )
                     != local_device_id
                 ]
-        # The account store owns both merged sealed facts and the validated
-        # live-device projection. The old display lists remain only for
-        # compatibility with lifecycle retention and are not a second source.
-        rows = self._append_missing_display_segments(
-            list(remote_rows or []),
-            self.focus_analytics._trusted_sealed_focus_segments(),
-        )
-        rows.extend(live_rows or [])
-        active_row = self._local_clock_interval(current, moment)
         try:
+            rows = list(self._prepare_focus_display_history(account_id, moment, remote_rows))
+            rows.extend(live_rows or [])
+            active_row = self._local_clock_interval(current, moment)
             union_seconds = get_cross_device_today_display_seconds(
                 account_id,
                 moment,
@@ -6783,7 +6833,7 @@ class PetWindow(QWidget):
         if has_remote_payload:
             # Commit only after the pure projection validated successfully;
             # malformed or foreign rows can never poison the retained input.
-            self._cross_device_today_display_remote_rows = list(remote_rows or [])
+            self._cross_device_today_display_remote_rows = remote_rows
         if live_projection_confirmed:
             # Commit only after the projection has passed validation and the
             # union calculation above succeeded. A fresh empty projection or
@@ -6792,7 +6842,6 @@ class PetWindow(QWidget):
             self._cross_device_today_display_live_rows_received_at = time.monotonic()
             self._cross_device_today_display_live_refresh_required = False
         self._cross_device_today_display_seconds = candidate_seconds
-        self._invalidate_cross_device_display_projection_cache()
         self._cross_device_today_display_account_id = account_id
         self._cross_device_today_display_date = display_date
         lifecycle_log(
@@ -6833,18 +6882,9 @@ class PetWindow(QWidget):
         floor = self._today_clock_floor(moment)
         current = snapshot or self.focus_session.snapshot(include_projection=False)
         try:
-            prepared_key = (account_id, display_date, self._focus_projection_revision,
-                            id(self._cross_device_today_display_remote_rows))
-            if self._cross_device_today_display_prepared_key != prepared_key:
-                history = self._append_missing_display_segments(
-                    list(self._cross_device_today_display_remote_rows or []),
-                    self.focus_analytics._trusted_sealed_focus_segments(),
-                )
-                self._cross_device_today_display_prepared_rows = prepare_today_display_rows(
-                    account_id, moment, history,
-                )
-                self._cross_device_today_display_prepared_key = prepared_key
-            rows = list(self._cross_device_today_display_prepared_rows)
+            rows = list(self._prepare_focus_display_history(
+                account_id, moment, self._cross_device_today_display_remote_rows,
+            ))
             if fresh_live_rows:
                 local_device_id = str(self.focus_analytics._device_id or "")
                 rows.extend(
@@ -9967,8 +10007,6 @@ class PetWindow(QWidget):
                     week_seconds=int(effective_week or 0),
                 )
             )
-            if effective_projection_changed:
-                self._invalidate_cross_device_display_projection_cache()
         analytics_changed = self.focus_analytics.merge_remote_state(
             focus_date=str(remote_date or ""),
             today_seconds=int(remote_today or 0),
@@ -11947,7 +11985,6 @@ class PetWindow(QWidget):
         """
 
         bubble = self.work_duration_bubble
-        bubble.adjustSize()
         area = self._screen_geometry()
         gap = 5
         if area is not None and not self._duration_layout_reflowing:
@@ -11965,7 +12002,9 @@ class PetWindow(QWidget):
         if area is not None:
             x = min(max(x, area.left()), area.right() - bubble.width() + 1)
             y = min(max(y, area.top()), area.bottom() - bubble.height() + 1)
-        bubble.move(x, y)
+        target = QPoint(x, y)
+        if bubble.pos() != target:
+            bubble.move(target)
 
     def _update_work_duration_bubble(
         self,
