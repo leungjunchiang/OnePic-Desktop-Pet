@@ -3,6 +3,7 @@
 本模块还验证异常服务器汇总隔离、免打扰首次处理不被在途旧反应覆盖；有效离开截止时间可校准显示。
 本机在线状态回显不会触发全量统计重算，另一台设备的真实变化仍会更新自习室。
 本机实测时长与其他设备取区间并集，历史累计只作为下限。
+验证全屏恢复的同步过渡和延迟完成，避免依赖事件循环运行速度。
 本模块验证桌面宠物窗口的连续帧控制、表情符号、轮廓遮罩、DPI 渲染缓存、分区互动、
 喂食、离线对话、陪伴动作、工作计时、专注导航、备注提醒和自拍成片；手动监视器用例隔离周期轮询。
 
@@ -2562,9 +2563,11 @@ def test_fullscreen_hides_and_restores_previous_pet_surfaces(monkeypatch) -> Non
         lambda _screen_bounds, **_kwargs: "normal",
     )
     window._sync_fullscreen_visibility()
-    app.processEvents()
     assert not window._fullscreen_hidden
+    # A slow runner can process the scheduled second repair during
+    # processEvents(). Assert entry to the transition synchronously.
     assert window._fullscreen_visibility_state == FULLSCREEN_VISIBILITY_RESTORING
+    app.processEvents()
     assert window.isVisible()
     assert window.quick_panel.isVisible()
     assert window.work_duration_bubble.isVisible()
