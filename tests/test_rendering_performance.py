@@ -1,4 +1,4 @@
-"""验证原生窗口、静止时的定时器和计时条定位，以及历史区间缓存和计时口径。"""
+"""验证原生窗口层级、静止时的定时器和计时条定位，以及历史区间缓存和计时口径。"""
 import os
 import sys
 from datetime import datetime, timedelta
@@ -286,3 +286,45 @@ def test_rejected_history_is_not_reparsed_on_each_clock_tick(pet, monkeypatch):
     monotonic[0] += 60
     assert window._prepare_focus_display_history("account", future_start, None) == [fact]
     assert len(reads) == 2
+
+
+def test_native_windows_clock_recovers_from_topmost_occlusion(pet, monkeypatch):
+    """真实 HWND 层级：其他置顶窗覆盖计时框后，巡检恢复且不抢焦点。"""
+    app, window = pet
+    if sys.platform != "win32" or app.platformName() != "windows":
+        pytest.skip("requires the native Windows Qt platform")
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    u.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    u.GetWindow.restype = wintypes.HWND
+    u.GetForegroundWindow.restype = wintypes.HWND
+    monkeypatch.setattr(window, "_passive_surfaces_blocked", lambda: False)
+    window.set_always_on_top(True, persist=False)
+    window._update_work_duration_bubble(display_seconds=60)
+    bubble = window.work_duration_bubble
+    blocker = QWidget(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+                      | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus)
+    blocker.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    blocker.setGeometry(bubble.geometry())
+    blocker.show()
+    app.processEvents()
+
+    def precedes(first, second):
+        current = int(second.winId())
+        while current:
+            current = u.GetWindow(current, 3)  # GW_HWNDPREV
+            if current == int(first.winId()):
+                return True
+        return False
+
+    try:
+        assert precedes(blocker, bubble)
+        foreground = u.GetForegroundWindow()
+        window._ensure_on_top(event="TopmostWatchdog")
+        assert precedes(bubble, blocker)
+        assert u.GetForegroundWindow() == foreground
+    finally:
+        blocker.close()
+        blocker.deleteLater()
+        app.processEvents()

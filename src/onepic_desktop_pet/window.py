@@ -4,6 +4,7 @@
 先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
 同步与桌面计时共享当天的已校验区间，计时条随桌宠移动时复用现有尺寸。
 停在原地或隐藏时关闭高频移动定时器，相同轮廓不重复设置原生遮罩。
+Windows 置顶巡检同时维护今日累计框，避免独立窗口被其他置顶窗口遮挡。
 
 闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
 
@@ -2295,7 +2296,13 @@ class PetWindow(QWidget):
         # Detached passive surfaces are separate native windows. Recheck them
         # in the same lifecycle pass, but never poll or call activateWindow().
         if event == "TopmostWatchdog":
-            return  # 置顶自愈只维护六毛本体，绝不对 Toast/附属窗 reassert。
+            # The daily clock is a persistent part of the pet, not a toast.
+            # Windows can reorder its independent HWND below another topmost
+            # window while the pet itself is repeatedly restored above it.
+            duration = getattr(self, "work_duration_bubble", None)
+            if sys.platform == "win32" and duration is not None and duration.isVisible():
+                self._apply_native_window_policy_for_widget(duration, event=event)
+            return
         for accessory in self._fullscreen_surfaces():
             if accessory is self or not accessory.isVisible():
                 continue
@@ -2324,12 +2331,18 @@ class PetWindow(QWidget):
                 # changing its topmost level. The low-frequency watchdog and
                 # macOS app-switch repair force a non-activating reassertion;
                 # ordinary lifecycle checks remain verification passes.
-                force_topmost=widget is self and event
-                in {
-                    "TopmostWatchdog",
-                    "ApplicationDeactivate",
-                    "ApplicationDeactivateSettled",
-                },
+                force_topmost=(
+                    (widget is self and event in {
+                        "TopmostWatchdog",
+                        "ApplicationDeactivate",
+                        "ApplicationDeactivateSettled",
+                    })
+                    or (
+                        sys.platform == "win32"
+                        and widget is getattr(self, "work_duration_bubble", None)
+                        and event == "TopmostWatchdog"
+                    )
+                ),
             )
             lifecycle_log(
                 "pet-window.native-policy",

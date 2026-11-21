@@ -1,4 +1,5 @@
-"""消息门禁不隐藏常驻今日计时；普通通知不重播，闹钟恢复不重启音频。"""
+"""消息门禁不隐藏常驻今日计时；普通通知不重播，闹钟恢复不重启音频，常驻计时框恢复置顶。"""
+import sys
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from datetime import datetime, timedelta
@@ -147,7 +148,10 @@ def test_topmost_watchdog_only_reasserts_pet(pet, monkeypatch):
     calls = []
     monkeypatch.setattr(window, '_apply_native_window_policy_for_widget', lambda widget, **kw: calls.append(widget))
     window._ensure_on_top(event='TopmostWatchdog')
-    assert calls == [window]
+    expected = [window]
+    if sys.platform == "win32" and window.work_duration_bubble.isVisible():
+        expected.append(window.work_duration_bubble)
+    assert calls == expected
 
 
 def test_worker_notification_dispatches_display_on_owner_thread(pet):
@@ -279,3 +283,27 @@ def test_speech_and_status_geometry_is_complete_before_show(pet, monkeypatch):
     assert len(shown)==2
     assert all(point.x()!=0 or point.y()!=0 for point,size in shown)
     assert all(size.width()>100 and size.height()>10 for point,size in shown)
+
+
+def test_windows_daily_clock_reasserts_without_affecting_toasts(pet, monkeypatch):
+    app, window = pet
+    monkeypatch.setattr("onepic_desktop_pet.window.sys.platform", "win32")
+    monkeypatch.setattr(window, "_passive_surfaces_blocked", lambda: False)
+    window.settings.show_work_duration = True
+    window._update_work_duration_bubble(display_seconds=60)
+    bubble = window.work_duration_bubble
+    assert bubble.isVisible()
+    calls = []
+    monkeypatch.setattr(
+        "onepic_desktop_pet.window.apply_native_window_policy",
+        lambda widget, **kwargs: calls.append((widget, kwargs)) or {
+            "native_id": 1, "action": "verify", "available": True,
+        },
+    )
+    window._ensure_on_top(event="TopmostWatchdog")
+    assert [widget for widget, _ in calls] == [window, bubble]
+    assert all(kwargs["force_topmost"] for _, kwargs in calls)
+    bubble.hide()
+    calls.clear()
+    window._ensure_on_top(event="TopmostWatchdog")
+    assert [widget for widget, _ in calls] == [window]

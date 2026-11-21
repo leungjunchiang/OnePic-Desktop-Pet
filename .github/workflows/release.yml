@@ -27,10 +27,13 @@ jobs:
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
     steps:
       - uses: actions/checkout@v4
+      # Desktop-only v0.23.367 does not deploy backend migrations.
       - name: Apply and verify durable buddy reminder schema
+        if: github.ref_name != 'release/v0.23.367' && github.ref_name != 'v0.23.367'
         shell: pwsh
         run: ./scripts/apply_supabase_buddy_reminders.ps1
       - name: Apply study plan and policy atomically and verify real RPC authorization
+        if: github.ref_name != 'release/v0.23.367' && github.ref_name != 'v0.23.367'
         shell: pwsh
         run: ./scripts/apply_supabase_discipline.ps1 -MigrationPath supabase/migrations/20260930180000_lili_study_plan_semantics.sql
 
@@ -65,7 +68,7 @@ jobs:
           ./scripts/apply_supabase_focus_history.ps1 -MigrationPath scripts/verify_focus_full_history.sql
           ./scripts/apply_supabase_focus_history.ps1 -MigrationPath scripts/verify_focus_legacy_history.sql
       - name: Deploy and verify private device nicknames
-        if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')
+        if: (startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')) && github.ref_name != 'release/v0.23.367' && github.ref_name != 'v0.23.367'
         shell: pwsh
         run: |
           $config = Get-Content -Raw config/social_backend.json | ConvertFrom-Json
