@@ -22,6 +22,8 @@ permissions:
 
 jobs:
   configure:
+    # Desktop-only v0.23.367 must not reconfigure production Auth.
+    if: github.event_name != 'push' || github.ref_name != 'release/v0.23.367'
     runs-on: ubuntu-latest
     env:
       SUPABASE_PROJECT_REF: ${{ inputs.project_ref || vars.SUPABASE_PROJECT_REF }}

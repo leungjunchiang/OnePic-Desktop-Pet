@@ -287,7 +287,8 @@ def test_speech_and_status_geometry_is_complete_before_show(pet, monkeypatch):
 
 def test_windows_daily_clock_reasserts_without_affecting_toasts(pet, monkeypatch):
     app, window = pet
-    monkeypatch.setattr("onepic_desktop_pet.window.sys.platform", "win32")
+    if sys.platform != "win32":
+        pytest.skip("Windows-only z-order behavior")
     monkeypatch.setattr(window, "_passive_surfaces_blocked", lambda: False)
     window.settings.show_work_duration = True
     window._update_work_duration_bubble(display_seconds=60)
