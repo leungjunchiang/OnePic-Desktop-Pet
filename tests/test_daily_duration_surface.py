@@ -1,4 +1,4 @@
-"""今日累计胶囊常驻、延迟刷新按实际秒数补齐；训导牌遵守隐藏与全屏门禁。"""
+"""今日累计胶囊常驻、全屏显示意愿恢复及双平台置顶巡检。"""
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -107,6 +107,40 @@ def test_idle_daily_total_obeys_suppression_and_restores(pet, monkeypatch, mode)
     render(window, "idle")
     assert window.work_duration_bubble.isVisible()
     assert "已暂停" not in window.work_duration_bubble.text()
+
+
+def test_show_requested_during_fullscreen_restores_both(pet, monkeypatch):
+    app, window = pet
+    window.hide_pet()
+    mode = ["fullscreen"]
+    monkeypatch.setattr(window, "_foreground_display_mode", lambda: mode[0])
+    window.show_pet()
+    assert window._fullscreen_hidden and not window.isVisible()
+    mode[0] = "normal"
+    window._sync_fullscreen_visibility()
+    app.processEvents()
+    assert window.isVisible() and window.work_duration_bubble.isVisible()
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+def test_watchdog_repairs_both_surfaces_without_activation(pet, monkeypatch, platform):
+    _, window = pet
+    calls = []
+    monkeypatch.setattr("onepic_desktop_pet.window.apply_native_window_policy",
+                        lambda widget, **kw: calls.append((widget, kw)) or {})
+    with monkeypatch.context() as scoped:
+        scoped.setattr("onepic_desktop_pet.window.sys.platform", platform)
+        window._topmost_watchdog_tick()
+    repairs = {widget: args for widget, args in calls}
+    assert repairs[window]["force_topmost"]
+    assert repairs[window.work_duration_bubble]["force_topmost"]
+
+
+def test_watchdog_recovers_hidden_clock(pet):
+    _, window = pet
+    window.work_duration_bubble.hide()
+    window._topmost_watchdog_tick()
+    assert window.isVisible() and window.work_duration_bubble.isVisible()
 
 
 def test_coaching_badge_falls_back_to_pet_and_rejoins_visible_daily_pill(pet, monkeypatch):

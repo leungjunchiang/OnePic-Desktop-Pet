@@ -50,7 +50,7 @@ def apply_windows_window_policy(
     qt_stays_on_top: bool,
     force_topmost: bool = False,
 ) -> dict[str, Any]:
-    """在不移动、不改变焦点的前提下校验一个 HWND 的 topmost 状态。"""
+    """不抢焦点地修复 HWND 层级，并恢复 Qt 仍视为可见的原生窗口。"""
 
     try:
         import ctypes
@@ -64,6 +64,7 @@ def apply_windows_window_policy(
             ("SetWindowLongPtrW", [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t], ctypes.c_ssize_t),
             ("SetWindowLongW", [wintypes.HWND, ctypes.c_int, ctypes.c_long], ctypes.c_long),
             ("SetWindowPos", [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint], wintypes.BOOL),
+            ("IsWindowVisible", [wintypes.HWND], wintypes.BOOL),
         ):
             function = getattr(user32, name, None)
             if function is not None:
@@ -124,9 +125,18 @@ def apply_windows_window_policy(
         # reassert the level.  It deliberately keeps SWP_NOACTIVATE, so this
         # cannot steal keyboard focus from the foreground app.
         should_reassert_topmost = bool(topmost and force_topmost)
+        is_native_visible = getattr(user32, "IsWindowVisible", None)
+        is_qt_visible = getattr(widget, "isVisible", None)
+        restore_visibility = bool(
+            should_reassert_topmost and callable(is_native_visible)
+            and callable(is_qt_visible) and is_qt_visible()
+            and not is_native_visible(native_id)
+        )
         if hwnd_topmost != bool(topmost) or should_reassert_topmost:
             insert_after = -1 if topmost else -2  # HWND_TOPMOST/NOTOPMOST
             flags = 0x0001 | 0x0002 | 0x0010 | 0x0200  # NOMOVE/NOSIZE/NOACTIVATE/NOOWNERZORDER
+            if restore_visibility:
+                flags |= 0x0040  # SWP_SHOWWINDOW; Qt already considers it visible.
             if not bool(user32.SetWindowPos(native_id, insert_after, 0, 0, 0, 0, flags)):
                 result.update({"available": False, "action": "restore_failed"})
                 return result

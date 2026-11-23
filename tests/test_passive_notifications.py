@@ -142,14 +142,14 @@ def test_windows_style_prepared_before_first_show(pet, monkeypatch):
     surface.close(); surface.deleteLater()
 
 
-def test_topmost_watchdog_only_reasserts_pet(pet, monkeypatch):
+def test_topmost_watchdog_reasserts_pet_and_clock_but_not_transient_notices(pet, monkeypatch):
     app, window = pet
     window.show_speech('文字')
     calls = []
     monkeypatch.setattr(window, '_apply_native_window_policy_for_widget', lambda widget, **kw: calls.append(widget))
     window._ensure_on_top(event='TopmostWatchdog')
     expected = [window]
-    if sys.platform == "win32" and window.work_duration_bubble.isVisible():
+    if window.work_duration_bubble.isVisible():
         expected.append(window.work_duration_bubble)
     assert calls == expected
 

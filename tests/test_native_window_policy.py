@@ -311,3 +311,30 @@ def test_windows_watchdog_reasserts_topmost_without_activation(monkeypatch) -> N
     assert result["native_topmost"] is True
     assert user32.calls[0][1] == -1
     assert user32.calls[0][2][-1] & 0x0010  # SWP_NOACTIVATE
+
+
+def test_windows_watchdog_recovers_native_hidden_window_only_if_qt_visible(monkeypatch) -> None:
+    """修复丢失的原生可见性，不复活 Qt 明确隐藏的窗口。"""
+    class User32:
+        def __init__(self):
+            self.flags = []
+        def GetWindowLongW(self, *_args):
+            return 0x08000088
+        GetWindowLongPtrW = GetWindowLongW
+        def SetWindowLongW(self, *_args):
+            return 1
+        SetWindowLongPtrW = SetWindowLongW
+        def IsWindowVisible(self, _hwnd):
+            return False
+        def SetWindowPos(self, *_args):
+            self.flags.append(_args[-1])
+            return 1
+
+    user32 = User32()
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+    for visible in (True, False):
+        native_window_policy.apply_windows_window_policy(
+            SimpleNamespace(winId=lambda: 101, isVisible=lambda: visible),
+            topmost=True, qt_stays_on_top=True, force_topmost=True)
+    assert user32.flags[0] & 0x0040 and user32.flags[0] & 0x0010
+    assert not user32.flags[1] & 0x0040

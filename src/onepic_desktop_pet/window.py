@@ -4,7 +4,7 @@
 先设置透明再恢复账号，避免提前创建不透明 HWND；实时计时只扫描当天区间。
 同步与桌面计时共享当天的已校验区间，计时条随桌宠移动时复用现有尺寸。
 停在原地或隐藏时关闭高频移动定时器，相同轮廓不重复设置原生遮罩。
-Windows 置顶巡检同时维护今日累计框，避免独立窗口被其他置顶窗口遮挡。
+双平台置顶巡检同时维护六毛和今日累计框，全屏退出按当前显示意愿恢复。
 
 闹钟处理卡独立于普通通知门禁；全屏后恢复未处理卡，不重新开始音频。
 
@@ -2273,11 +2273,8 @@ class PetWindow(QWidget):
         if self._fullscreen_hidden or not self.isVisible():
             self._update_topmost_watchdog()
             return
-        if sys.platform == "darwin":
-            # WorkDurationBubble is a detached NSPanel. Re-derive its intended
-            # visibility from the current session each pass so an external
-            # orderOut/window recreation cannot leave the Qt surface missing.
-            self._update_work_duration_bubble()
+        # Both platforms use a detached native window for the clock.
+        self._update_work_duration_bubble()
         self._ensure_on_top(event="TopmostWatchdog")
 
     @_guard_qt_callback
@@ -2300,7 +2297,7 @@ class PetWindow(QWidget):
             # Windows can reorder its independent HWND below another topmost
             # window while the pet itself is repeatedly restored above it.
             duration = getattr(self, "work_duration_bubble", None)
-            if sys.platform == "win32" and duration is not None and duration.isVisible():
+            if duration is not None and duration.isVisible():
                 self._apply_native_window_policy_for_widget(duration, event=event)
             return
         for accessory in self._fullscreen_surfaces():
@@ -2338,9 +2335,8 @@ class PetWindow(QWidget):
                         "ApplicationDeactivateSettled",
                     })
                     or (
-                        sys.platform == "win32"
-                        and widget is getattr(self, "work_duration_bubble", None)
-                        and event == "TopmostWatchdog"
+                        widget is getattr(self, "work_duration_bubble", None)
+                        and event in {"TopmostWatchdog", "ApplicationDeactivate", "ApplicationDeactivateSettled"}
                     )
                 ),
             )
@@ -2650,6 +2646,7 @@ class PetWindow(QWidget):
 
         lifecycle_log("pet_window.hide.request", self, source="explicit")
         self._manually_hidden = True
+        self._fullscreen_show_requested = False
         # These are top-level windows, not children of PetWindow. Hide them
         # explicitly so a later focus/session refresh cannot leave the live
         # duration badge behind on the desktop.
@@ -2670,6 +2667,7 @@ class PetWindow(QWidget):
         # here and could leave the pet hidden after an explicit Show action.
         self._sync_fullscreen_visibility()
         if self._fullscreen_hidden:
+            self._fullscreen_show_requested = True
             lifecycle_log("pet_window.show.blocked_fullscreen", self)
             self._update_topmost_watchdog()
             return
@@ -2790,9 +2788,16 @@ class PetWindow(QWidget):
         restore = dict(self._fullscreen_restore_visible)
         self._fullscreen_restore_visible = {}
         self._fullscreen_hidden = False
+        show_requested = getattr(self, "_fullscreen_show_requested", False)
+        self._fullscreen_show_requested = False
         if not self._manually_hidden:
+            # A show request may have arrived during fullscreen, after the
+            # snapshot recorded an intentionally hidden pet. Current intent
+            # takes precedence over that stale snapshot.
+            if (restore.get(self, False) or show_requested) and not self.isVisible():
+                self._show_nonactivating(self)
             for widget, was_visible in restore.items():
-                if was_visible:
+                if widget is not self and was_visible:
                     self._show_nonactivating(widget)
             # Visibility can change while another app owns the display.  In
             # particular, the duration badge must be derived from the current
